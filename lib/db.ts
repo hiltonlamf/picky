@@ -42,20 +42,41 @@ export async function findExistingRestaurant(
   url: string
 ): Promise<{ id: string; status: string; lastScrapedAt: string | null } | null> {
   const normalized = normalizeUrl(url);
+  // Reconstruct candidate URL forms to match against the DB index
+  const candidates = [
+    url,
+    url.replace(/^https?:\/\//, 'https://'),
+    url.replace(/^https?:\/\//, 'http://'),
+    `https://${normalized}`,
+    `https://www.${normalized}`,
+  ];
 
-  const { data } = await db()
+  // Try each candidate directly — the DB has a unique index on lower(url)
+  for (const candidate of candidates) {
+    const { data } = await db()
+      .from('restaurants')
+      .select('id, url, canonical_url, last_scraped_at, status')
+      .ilike('url', candidate)
+      .maybeSingle();
+    if (data) {
+      const row = data as DbRestaurantRow;
+      return { id: row.id, status: row.status, lastScrapedAt: row.last_scraped_at };
+    }
+  }
+
+  // Canonical URL check (covers redirected URLs saved after first scrape)
+  const { data: byCanonical } = await db()
     .from('restaurants')
     .select('id, url, canonical_url, last_scraped_at, status')
-    .order('created_at', { ascending: false })
-    .limit(2000);
+    .ilike('canonical_url', `https://${normalized}`)
+    .maybeSingle();
 
-  const rows = (data ?? []) as DbRestaurantRow[];
-  const match = rows.find(
-    (r) => normalizeUrl(r.url) === normalized || normalizeUrl(r.canonical_url ?? '') === normalized
-  );
-  if (!match) return null;
+  if (byCanonical) {
+    const row = byCanonical as DbRestaurantRow;
+    return { id: row.id, status: row.status, lastScrapedAt: row.last_scraped_at };
+  }
 
-  return { id: match.id, status: match.status, lastScrapedAt: match.last_scraped_at };
+  return null;
 }
 
 export async function resetRestaurantForReparse(id: string): Promise<void> {

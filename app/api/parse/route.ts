@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { scrapeRestaurant } from '@/lib/scraper';
-import { classifyMenuWithAI, classifyMenuFromImages } from '@/lib/ai';
+import { classifyMenuWithAI, classifyMenuFromImages, classifyMenuFromPdf, countFoodItems } from '@/lib/ai';
 import {
   findExistingRestaurant,
   resetRestaurantForReparse,
@@ -106,32 +106,92 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        if (scrapeResult.warning && !scrapeResult.menuText) {
-          await markRestaurantError(restaurantId, scrapeResult.warning);
-          send({ type: 'error', error: scrapeResult.warning });
+        const hasAnyContent =
+          (scrapeResult.menuText && scrapeResult.menuText.length >= 100) ||
+          (scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0) ||
+          (scrapeResult.menuImages && scrapeResult.menuImages.length > 0);
+
+        if (!hasAnyContent) {
+          const msg = scrapeResult.warning ?? "We couldn't find any menu content on this page. The menu may be unavailable or require a direct menu URL.";
+          await markRestaurantError(restaurantId, msg);
+          send({ type: 'error', error: msg });
           return close();
         }
 
-        // Step 3: AI classification (text or image fallback)
+        // Step 3: AI classification — text → PDF → image fallback chain
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 3, totalSteps: 4 });
         let menu;
         let aiUsage;
         try {
           const hasText = scrapeResult.menuText && scrapeResult.menuText.length >= 100;
+          const hasPdfs = scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0;
           const hasImages = scrapeResult.menuImages && scrapeResult.menuImages.length > 0;
+          const MIN_FOOD_ITEMS = 7;
 
-          if (!hasText && hasImages) {
+          if (hasPdfs && !hasText) {
+            // Primary: PDF document
+            send({ type: 'progress', step: 'Reading menu PDF with AI...', stepNumber: 3, totalSteps: 4 });
+            const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
+            if (pdfResult && countFoodItems(pdfResult.menu) >= MIN_FOOD_ITEMS) {
+              menu = pdfResult.menu;
+              aiUsage = pdfResult.usage;
+            } else if (hasImages) {
+              // Fallback to images if PDF gave too few items
+              send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
+              const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
+              if (imgResult && countFoodItems(imgResult.menu) >= MIN_FOOD_ITEMS) {
+                menu = imgResult.menu;
+                aiUsage = imgResult.usage;
+              } else {
+                // Use whichever gave more items
+                const best = pdfResult && (!imgResult || countFoodItems(pdfResult.menu) >= countFoodItems(imgResult?.menu ?? { sections: [] })) ? pdfResult : imgResult;
+                if (!best) throw new Error("The menu on this page couldn't be read. It may be unavailable or behind a login.");
+                menu = best.menu;
+                aiUsage = best.usage;
+              }
+            } else {
+              if (!pdfResult) throw new Error("The menu PDF couldn't be read. It may be password-protected or corrupted.");
+              menu = pdfResult.menu;
+              aiUsage = pdfResult.usage;
+            }
+          } else if (!hasText && hasImages) {
+            // Primary: image vision
             send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
             const imageResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
             if (!imageResult) throw new Error("Couldn't extract menu dishes from the images on this page.");
             menu = imageResult.menu;
             aiUsage = imageResult.usage;
           } else if (hasText) {
+            // Primary: HTML text
             const result = await classifyMenuWithAI(scrapeResult.menuText, scrapeResult.title);
             menu = result.menu;
             aiUsage = result.usage;
+
+            // If text gave too few items, try PDF or image fallback
+            if (countFoodItems(menu) < MIN_FOOD_ITEMS) {
+              if (hasPdfs) {
+                send({ type: 'progress', step: 'Checking menu PDF for more dishes...', stepNumber: 3, totalSteps: 4 });
+                const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
+                if (pdfResult && countFoodItems(pdfResult.menu) > countFoodItems(menu)) {
+                  menu = pdfResult.menu;
+                  aiUsage = pdfResult.usage;
+                }
+              } else if (hasImages && countFoodItems(menu) < MIN_FOOD_ITEMS) {
+                send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
+                const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
+                if (imgResult && countFoodItems(imgResult.menu) > countFoodItems(menu)) {
+                  menu = imgResult.menu;
+                  aiUsage = imgResult.usage;
+                }
+              }
+            }
           } else {
-            throw new Error("We couldn't find any menu content on this page. Try pasting the restaurant's direct menu URL.");
+            throw new Error("We couldn't find any menu content on this page. The menu may be unavailable or require a direct menu URL.");
+          }
+
+          // Final guard: if we still have very few items, it's likely a parsing failure
+          if (countFoodItems(menu) < MIN_FOOD_ITEMS && countFoodItems(menu) === 0) {
+            throw new Error("No menu dishes could be found on this page. The menu may be unavailable or only accessible to guests.");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';

@@ -83,10 +83,33 @@ export default function RestaurantPage() {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <div className="text-5xl mb-4">⚠️</div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">Couldn't analyse this menu</h1>
-        <p className="text-gray-500 mb-6">{restaurant.errorMessage ?? 'An error occurred while parsing this restaurant.'}</p>
+        <h1 className="text-xl font-bold text-gray-900 mb-2">Couldn&apos;t analyse this menu</h1>
+        <p className="text-gray-500 mb-2">
+          {restaurant.errorMessage ?? 'An error occurred while parsing this restaurant.'}
+        </p>
+        <p className="text-sm text-gray-400 mb-6">
+          The menu may be temporarily unavailable, or this website may require JavaScript to load.
+        </p>
         <Link href="/" className="btn-primary text-sm">
           ← Try a different link
+        </Link>
+      </div>
+    );
+  }
+
+  if (restaurant.status === 'pending' || restaurant.status === 'processing') {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="text-5xl mb-4 animate-pulse">🌱</div>
+        <h1 className="text-xl font-bold text-gray-900 mb-2">
+          Analysing {restaurant.name ?? 'this menu'}&hellip;
+        </h1>
+        <p className="text-gray-500 mb-6">
+          Our AI is reading and classifying the menu right now. This usually takes under a minute.
+          Refresh the page to see results.
+        </p>
+        <Link href="/dublin" className="btn-primary text-sm">
+          ← Back to Dublin Guide
         </Link>
       </div>
     );
