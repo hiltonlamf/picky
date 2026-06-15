@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-inter: 'Inter', system-ui, sans-serif;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl shadow-sm border border-gray-100;
+  }
+
+  .btn-primary {
+    @apply bg-picky-600 hover:bg-picky-700 active:bg-picky-800
+           text-white font-semibold rounded-xl px-6 py-3
+           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-100
+           rounded-xl px-4 py-2 transition-colors duration-150;
+  }
+
+  .input-url {
+    @apply w-full rounded-xl border border-gray-200 bg-white
+           px-4 py-3 text-gray-900 placeholder-gray-400
+           focus:border-picky-500 focus:ring-2 focus:ring-picky-200
+           focus:outline-none transition-all duration-150;
+  }
+
+  .badge-vegan {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
+           text-xs font-semibold bg-picky-600 text-white;
+  }
+
+  .badge-vegetarian {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
+           text-xs font-semibold bg-picky-400 text-white;
+  }
+
+  .badge-neither {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
+           text-xs font-semibold bg-gray-200 text-gray-700;
+  }
+
+  .badge-unknown {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
+           text-xs font-semibold bg-amber-100 text-amber-800;
+  }
+}
+
+/* Progress bar animation */
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.progress-active {
+  animation: progress-pulse 1.5s ease-in-out infinite;
+}

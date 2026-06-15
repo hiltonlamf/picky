@@ -1,0 +1,391 @@
+import * as cheerio from 'cheerio';
+
+export interface ScrapeResult {
+  url: string;
+  canonicalUrl: string;
+  title: string;
+  menuText: string;
+  menuUrl: string | null;
+  menuImages?: string[];
+  urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
+  warning?: string;
+}
+
+const MENU_LINK_KEYWORDS = [
+  'menu', 'food', 'eat', 'dishes', 'cuisine', 'carte',
+  'speisekarte', 'kaart', 'menukaart',
+];
+
+const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
+
+const MENU_IMAGE_KEYWORDS = ['menu', 'food', 'carte', 'speise', 'dish', 'notions'];
+const SKIP_IMAGE_KEYWORDS = ['logo', 'icon', 'favicon', 'avatar', 'banner', 'social', 'twitter', 'facebook', 'instagram'];
+
+function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
+  const candidates: Array<{ url: string; score: number }> = [];
+
+  $('img[src], img[data-src]').each((_, el) => {
+    const src = $(el).attr('src') ?? $(el).attr('data-src') ?? '';
+    const alt = ($(el).attr('alt') ?? '').toLowerCase();
+    const resolved = resolveUrl(src, baseUrl);
+    if (!resolved?.startsWith('http')) return;
+
+    const srcLower = resolved.toLowerCase();
+    if (SKIP_IMAGE_KEYWORDS.some((k) => srcLower.includes(k) || alt.includes(k))) return;
+    if (srcLower.includes('.gif') || srcLower.includes('.svg')) return;
+
+    let score = 1;
+    for (const kw of MENU_IMAGE_KEYWORDS) {
+      if (srcLower.includes(kw)) score += 10;
+      if (alt.includes(kw)) score += 5;
+    }
+    const w = parseInt($(el).attr('width') ?? '0', 10);
+    const h = parseInt($(el).attr('height') ?? '0', 10);
+    if (w > 400 || h > 400) score += 2;
+
+    candidates.push({ url: resolved, score });
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  return candidates
+    .filter((c) => {
+      const key = c.url.split('?')[0];
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3)
+    .map((c) => {
+      // Request a reasonable resolution from Squarespace CDN
+      if (c.url.includes('squarespace-cdn.com') || c.url.includes('squarespace.com')) {
+        return c.url.split('?')[0] + '?format=1500w';
+      }
+      return c.url.split('?')[0];
+    });
+}
+
+// Looks like a real browser — avoid bot detection
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+function detectUrlType(url: string): ScrapeResult['urlType'] {
+  const lower = url.toLowerCase();
+  if (lower.endsWith('.pdf') || lower.includes('/pdf/') || lower.includes('menu.pdf')) return 'pdf';
+  if (lower.includes('maps.google') || lower.includes('maps.app.goo') || lower.includes('goo.gl/maps')) return 'google_maps';
+  if (lower.includes('instagram.com') || lower.includes('facebook.com') || lower.includes('twitter.com') || lower.includes('tiktok.com')) return 'social';
+  return 'html';
+}
+
+function isReviewSite(url: string): boolean {
+  const lower = url.toLowerCase();
+  return (
+    lower.includes('yelp.com') ||
+    lower.includes('tripadvisor.com') ||
+    lower.includes('zomato.com') ||
+    lower.includes('opentable.com') ||
+    lower.includes('thefork.com')
+  );
+}
+
+function resolveUrl(href: string, base: string): string {
+  try {
+    return new URL(href, base).href;
+  } catch {
+    return '';
+  }
+}
+
+// Does NOT mutate the cheerio DOM — only reads text
+function extractText($: cheerio.CheerioAPI): string {
+  const $clone = cheerio.load($.html());
+  $clone('script, style, nav, footer, header, noscript, iframe, [aria-hidden="true"]').remove();
+  return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
+}
+
+function findMenuLinks($: cheerio.CheerioAPI, baseUrl: string): string[] {
+  const candidates: Array<{ url: string; score: number }> = [];
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
+
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const text = ($(el).text() + ' ' + ($(el).attr('title') ?? '')).toLowerCase();
+    const resolvedHref = resolveUrl(href, baseUrl);
+
+    if (!resolvedHref) return;
+    if (!resolvedHref.startsWith(baseOrigin)) return;
+    if (EXCLUDED_EXTENSIONS.some((ext) => resolvedHref.toLowerCase().endsWith(ext))) return;
+    if (resolvedHref === baseUrl) return;
+
+    let score = 0;
+    for (const keyword of MENU_LINK_KEYWORDS) {
+      if (text.includes(keyword)) score += 2;
+      if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
+    }
+    if (score > 0) candidates.push({ url: resolvedHref, score });
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  return candidates
+    .filter((c) => {
+      if (seen.has(c.url)) return false;
+      seen.add(c.url);
+      return true;
+    })
+    .slice(0, 3)
+    .map((c) => c.url);
+}
+
+// Extract a restaurant's own website from a review site page (Yelp, TripAdvisor, etc.)
+function findExternalWebsite($: cheerio.CheerioAPI, reviewSiteOrigin: string): string | null {
+  const candidates: string[] = [];
+
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const resolved = resolveUrl(href, reviewSiteOrigin);
+    if (
+      resolved.startsWith('http') &&
+      !resolved.includes(new URL(reviewSiteOrigin).hostname) &&
+      !resolved.includes('google.com') &&
+      !resolved.includes('facebook.com') &&
+      !resolved.includes('instagram.com') &&
+      !resolved.includes('twitter.com') &&
+      !resolved.includes('yelp.com') &&
+      !resolved.includes('tripadvisor.com')
+    ) {
+      candidates.push(resolved);
+    }
+  });
+
+  return candidates[0] ?? null;
+}
+
+async function fetchWithRetry(url: string, retries = 2): Promise<Response> {
+  const headers = {
+    'User-Agent': BROWSER_UA,
+    Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+    'Accept-Language': 'en-IE,en;q=0.9,fr;q=0.8,de;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+      return res;
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw new Error('Failed to fetch');
+}
+
+async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
+  try {
+    const res = await fetchWithRetry(url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    const websiteLink = $('a[href*="http"]').filter((_, el) => {
+      const href = $(el).attr('href') ?? '';
+      return (
+        !href.includes('google.com') &&
+        !href.includes('maps.app') &&
+        !href.includes('goo.gl') &&
+        href.startsWith('http')
+      );
+    }).first().attr('href');
+
+    return websiteLink ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeMenu(text: string): boolean {
+  const lower = text.toLowerCase();
+  const priceMatches =
+    (text.match(/€\s*\d+/g) ?? []).length +
+    (text.match(/£\s*\d+/g) ?? []).length;
+
+  return (
+    lower.includes('starter') ||
+    lower.includes('starters') ||
+    lower.includes('main course') ||
+    lower.includes('mains') ||
+    lower.includes('dessert') ||
+    lower.includes('entrée') ||
+    lower.includes('appetizer') ||
+    lower.includes('para picar') ||
+    lower.includes('à la carte') ||
+    lower.includes('a la carte') ||
+    priceMatches > 3
+  );
+}
+
+async function scrapeHtmlPage(
+  url: string,
+  depth = 0
+): Promise<{ text: string; menuUrl: string | null; finalUrl: string; title: string; menuImages: string[] }> {
+  const res = await fetchWithRetry(url);
+  const finalUrl = res.url || url;
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  // Find links and images BEFORE extractText
+  const menuLinks = depth === 0 ? findMenuLinks($, finalUrl) : [];
+  const menuImages = findMenuImages($, finalUrl);
+
+  const text = extractText($);
+
+  // "Menu | Uno Mas" → take last part if first is a generic section name
+  const GENERIC_PAGE_WORDS = new Set([
+    'menu', 'home', 'food', 'about', 'contact', 'welcome',
+    'index', 'start', 'page', 'sample menu', 'our menu',
+  ]);
+  const rawTitle = $('title').text().trim();
+  const titleParts = rawTitle.split(/[|\-–]/).map((s) => s.trim()).filter(Boolean);
+  let title =
+    titleParts.length > 1 && GENERIC_PAGE_WORDS.has(titleParts[0].toLowerCase())
+      ? titleParts[titleParts.length - 1]
+      : (titleParts[0] ?? '');
+  if (!title) title = $('h1').first().text().trim();
+
+  if (looksLikeMenu(text) || depth > 0) {
+    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages };
+  }
+
+  // Try menu sub-pages in order, return first that has meaningful content
+  for (const link of menuLinks) {
+    try {
+      const menuRes = await scrapeHtmlPage(link, depth + 1);
+      if (menuRes.text.length >= 200) {
+        return { ...menuRes, menuUrl: link, title: menuRes.title || title };
+      }
+    } catch {
+      // try next link
+    }
+  }
+
+  return { text, menuUrl: null, finalUrl, title, menuImages };
+}
+
+export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
+  let url = rawUrl.trim();
+  if (!url.startsWith('http')) url = 'https://' + url;
+
+  const urlType = detectUrlType(url);
+
+  if (urlType === 'social') {
+    return {
+      url,
+      canonicalUrl: url,
+      title: 'Social media page',
+      menuText: '',
+      menuUrl: null,
+      urlType,
+      warning:
+        "Social media pages can't be read automatically. Please paste the restaurant's own website URL instead.",
+    };
+  }
+
+  if (urlType === 'google_maps') {
+    const websiteUrl = await resolveGoogleMapsUrl(url);
+    if (websiteUrl) {
+      const result = await scrapeHtmlPage(websiteUrl);
+      return {
+        url,
+        canonicalUrl: websiteUrl,
+        title: result.title || 'Restaurant',
+        menuText: result.text,
+        menuUrl: result.menuUrl,
+        urlType: 'html',
+      };
+    }
+    return {
+      url,
+      canonicalUrl: url,
+      title: 'Google Maps listing',
+      menuText: '',
+      menuUrl: null,
+      urlType,
+      warning:
+        "We found your Google Maps link but couldn't navigate to the restaurant's website automatically. Please paste their direct website URL instead.",
+    };
+  }
+
+  if (urlType === 'pdf') {
+    return {
+      url,
+      canonicalUrl: url,
+      title: 'Menu PDF',
+      menuText: `[PDF menu at ${url}]`,
+      menuUrl: url,
+      urlType: 'pdf',
+      warning: 'PDF menu detected. Analysis may be less accurate than HTML menus.',
+    };
+  }
+
+  // Review sites (Yelp, TripAdvisor, etc.) — try to find and use the restaurant's own website
+  if (isReviewSite(url)) {
+    try {
+      const res = await fetchWithRetry(url);
+      const html = await res.text();
+      const $ = cheerio.load(html);
+      const websiteUrl = findExternalWebsite($, url);
+      if (websiteUrl) {
+        const result = await scrapeHtmlPage(websiteUrl);
+        if (result.text.length >= 200) {
+          return {
+            url,
+            canonicalUrl: websiteUrl,
+            title: result.title || 'Restaurant',
+            menuText: result.text,
+            menuUrl: result.menuUrl,
+            urlType: 'html',
+          };
+        }
+      }
+    } catch {
+      // fall through to standard scrape of the review page
+    }
+  }
+
+  // Standard HTML scraping
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages } = await scrapeHtmlPage(url);
+  const title = pageTitle || 'Restaurant';
+
+  if (!text || text.length < 100) {
+    if (menuImages && menuImages.length > 0) {
+      // Menu is likely in an image — return images for vision fallback
+      return {
+        url,
+        canonicalUrl: finalUrl,
+        title,
+        menuText: '',
+        menuUrl: null,
+        menuImages,
+        urlType: 'html',
+      };
+    }
+    throw new Error(
+      "We couldn't read this page — it may require JavaScript to load. Try pasting the restaurant's direct menu URL (e.g. theirsite.com/menu)."
+    );
+  }
+
+  return {
+    url,
+    canonicalUrl: finalUrl,
+    title,
+    menuText: text,
+    menuUrl,
+    menuImages,
+    urlType: 'html',
+  };
+}
