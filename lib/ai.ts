@@ -24,7 +24,14 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const SYSTEM_PROMPT = `You are a dietary classifier specializing in vegetarian and vegan restaurant menus.
 
-Your task: analyse a restaurant menu and classify each dish accurately.
+Your task: analyse a restaurant menu and classify each FOOD dish accurately.
+
+CRITICAL — WHAT TO INCLUDE vs. EXCLUDE:
+- INCLUDE: all individual food dishes — starters, mains, sides, desserts, sharing plates, etc.
+- EXCLUDE completely (do not add to any section): ALL beverages — wines, beers, spirits, cocktails, soft drinks, juices, coffee, tea, water, smoothies, or any drink item. Most users assume drinks are vegetarian; listing them wastes space.
+- EXCLUDE: menu section headers used as dish names (e.g. "Daily Dim Sum Menu", "Today's Specials", "Set Menu €35 per person", "Starter Selection"). These are categories, not individual dishes.
+- EXCLUDE: non-dish text like opening hours, allergen notices, chef's notes, reservation policies.
+- If a section contains ONLY drinks, omit that entire section from the output.
 
 Classification rules:
 - "vegan": dish contains only plant-based ingredients with no animal products whatsoever
@@ -126,7 +133,7 @@ export async function classifyMenuWithAI(
   const tokensOut = message.usage.output_tokens;
   const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
 
-  return { menu, usage };
+  return { menu: stripDrinksAndHeaders(menu), usage };
 }
 
 async function downloadImageAsBase64(
@@ -211,7 +218,7 @@ export async function classifyMenuFromImages(
   const tokensOut = message.usage.output_tokens;
   const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
 
-  return { menu, usage };
+  return { menu: stripDrinksAndHeaders(menu), usage };
 }
 
 export async function analysePageForMenu(
@@ -241,6 +248,119 @@ Include suggestedLinks only if isMenu is false and you can see links to menu pag
   } catch {
     return { isMenu: true, suggestedLinks: [] };
   }
+}
+
+const DRINK_SECTION_NAMES = new Set([
+  'drinks', 'beverages', 'wines', 'wine list', 'beer', 'beers', 'cocktails',
+  'spirits', 'soft drinks', 'hot drinks', 'coffee', 'tea', 'juices',
+  'boissons', 'vins', 'bières', 'bebidas', 'vinos', 'getränke', 'weine',
+  'bar menu', 'drinks menu', 'drink menu',
+]);
+
+function isDrinkSectionName(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  return DRINK_SECTION_NAMES.has(lower);
+}
+
+/** Strip out drink-only sections and any residual drink entries the AI may have included. */
+export function stripDrinksAndHeaders(menu: ClassifiedMenu): ClassifiedMenu {
+  const cleaned = menu.sections
+    .filter((s) => !isDrinkSectionName(s.name))
+    .map((s) => ({
+      ...s,
+      dishes: s.dishes.filter((d) => {
+        const nameLower = d.name.toLowerCase();
+        // Reject obvious drink names the AI sometimes leaks through
+        const drinkKeywords = [
+          'wine', 'beer', 'lager', 'ale', 'stout', 'porter', 'cider',
+          'cocktail', 'spirit', 'whiskey', 'whisky', 'gin', 'vodka', 'rum',
+          'prosecco', 'champagne', 'sparkling', 'still water', 'mineral water',
+          'soft drink', 'cola', 'lemonade', 'juice', 'smoothie',
+          'coffee', 'espresso', 'cappuccino', 'latte', 'americano',
+          'tea', 'herbal tea', 'hot chocolate',
+        ];
+        if (drinkKeywords.some((k) => nameLower.includes(k))) return false;
+        // Reject category-header style entries (very short, no price, ends in "menu" or "selection")
+        if (/\b(menu|selection|platter|board|option)s?\b$/i.test(d.name) && !d.description && !d.price) return false;
+        return true;
+      }),
+    }))
+    .filter((s) => s.dishes.length > 0);
+
+  return { ...menu, sections: cleaned };
+}
+
+export async function classifyMenuFromPdf(
+  pdfUrl: string,
+  restaurantName?: string
+): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
+  try {
+    const res = await fetch(pdfUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(20000),
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+
+    const buffer = await res.arrayBuffer();
+    // Skip files > 20 MB
+    if (buffer.byteLength > 20 * 1024 * 1024) return null;
+
+    const pdfBase64 = Buffer.from(buffer).toString('base64');
+    const model = 'claude-sonnet-4-6';
+    const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
+
+    // SDK 0.27.x types don't include 'document' yet, but the API supports it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pdfContent: any[] = [
+      {
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+      },
+      {
+        type: 'text',
+        text: `${nameHint}Analyse this restaurant menu PDF and classify all food dishes. Return ONLY JSON.`,
+      },
+    ];
+
+    const message = await anthropic.messages.create({
+      model,
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: pdfContent }],
+    });
+
+    const content = message.content[0];
+    if (content.type !== 'text') return null;
+
+    const text = content.text.trim();
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
+    const jsonText = jsonMatch[1]?.trim() ?? text;
+
+    let menu: ClassifiedMenu;
+    try {
+      menu = JSON.parse(jsonText) as ClassifiedMenu;
+    } catch {
+      return null;
+    }
+
+    if (!menu.sections || menu.sections.length === 0) return null;
+
+    const tokensIn = message.usage.input_tokens;
+    const tokensOut = message.usage.output_tokens;
+    const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
+
+    return { menu: stripDrinksAndHeaders(menu), usage };
+  } catch {
+    return null;
+  }
+}
+
+export function countFoodItems(menu: ClassifiedMenu): number {
+  return menu.sections.reduce((total, s) => total + s.dishes.length, 0);
 }
 
 export function buildVeganKeywordSet(): Set<string> {

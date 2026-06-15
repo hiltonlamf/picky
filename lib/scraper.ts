@@ -7,6 +7,7 @@ export interface ScrapeResult {
   menuText: string;
   menuUrl: string | null;
   menuImages?: string[];
+  menuPdfUrls?: string[];
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
 }
@@ -17,6 +18,12 @@ const MENU_LINK_KEYWORDS = [
 ];
 
 const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
+const PDF_EXTENSIONS = ['.pdf'];
+
+function isPdfUrl(url: string): boolean {
+  const lower = url.toLowerCase().split('?')[0];
+  return PDF_EXTENSIONS.some((ext) => lower.endsWith(ext)) || lower.includes('/pdf/') || lower.includes('menu.pdf');
+}
 
 const MENU_IMAGE_KEYWORDS = ['menu', 'food', 'carte', 'speise', 'dish', 'notions'];
 const SKIP_IMAGE_KEYWORDS = ['logo', 'icon', 'favicon', 'avatar', 'banner', 'social', 'twitter', 'facebook', 'instagram'];
@@ -103,13 +110,17 @@ function extractText($: cheerio.CheerioAPI): string {
   return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
 }
 
-function findMenuLinks($: cheerio.CheerioAPI, baseUrl: string): string[] {
-  const candidates: Array<{ url: string; score: number }> = [];
+function findMenuLinks(
+  $: cheerio.CheerioAPI,
+  baseUrl: string
+): { htmlLinks: string[]; pdfLinks: string[] } {
+  const htmlCandidates: Array<{ url: string; score: number }> = [];
+  const pdfCandidates: Array<{ url: string; score: number }> = [];
   let baseOrigin: string;
   try {
     baseOrigin = new URL(baseUrl).origin;
   } catch {
-    return [];
+    return { htmlLinks: [], pdfLinks: [] };
   }
 
   $('a[href]').each((_, el) => {
@@ -118,28 +129,48 @@ function findMenuLinks($: cheerio.CheerioAPI, baseUrl: string): string[] {
     const resolvedHref = resolveUrl(href, baseUrl);
 
     if (!resolvedHref) return;
-    if (!resolvedHref.startsWith(baseOrigin)) return;
+    // Allow PDFs from any domain (CDNs, S3, etc.), but restrict HTML links to same origin
+    const isExternal = !resolvedHref.startsWith(baseOrigin);
     if (EXCLUDED_EXTENSIONS.some((ext) => resolvedHref.toLowerCase().endsWith(ext))) return;
     if (resolvedHref === baseUrl) return;
+
+    if (isPdfUrl(resolvedHref)) {
+      let score = 0;
+      for (const keyword of MENU_LINK_KEYWORDS) {
+        if (text.includes(keyword)) score += 2;
+        if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
+      }
+      // Any PDF linked from a menu keyword anchor is a good candidate
+      if (score > 0 || text.includes('download') || text.includes('pdf')) {
+        pdfCandidates.push({ url: resolvedHref, score: score || 1 });
+      }
+      return;
+    }
+
+    if (isExternal) return;
 
     let score = 0;
     for (const keyword of MENU_LINK_KEYWORDS) {
       if (text.includes(keyword)) score += 2;
       if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
     }
-    if (score > 0) candidates.push({ url: resolvedHref, score });
+    if (score > 0) htmlCandidates.push({ url: resolvedHref, score });
   });
 
-  candidates.sort((a, b) => b.score - a.score);
-  const seen = new Set<string>();
-  return candidates
-    .filter((c) => {
-      if (seen.has(c.url)) return false;
-      seen.add(c.url);
-      return true;
-    })
-    .slice(0, 3)
-    .map((c) => c.url);
+  const dedup = (candidates: Array<{ url: string; score: number }>, limit: number) => {
+    candidates.sort((a, b) => b.score - a.score);
+    const seen = new Set<string>();
+    return candidates
+      .filter((c) => {
+        if (seen.has(c.url)) return false;
+        seen.add(c.url);
+        return true;
+      })
+      .slice(0, limit)
+      .map((c) => c.url);
+  };
+
+  return { htmlLinks: dedup(htmlCandidates, 3), pdfLinks: dedup(pdfCandidates, 2) };
 }
 
 // Extract a restaurant's own website from a review site page (Yelp, TripAdvisor, etc.)
@@ -232,14 +263,14 @@ function looksLikeMenu(text: string): boolean {
 async function scrapeHtmlPage(
   url: string,
   depth = 0
-): Promise<{ text: string; menuUrl: string | null; finalUrl: string; title: string; menuImages: string[] }> {
+): Promise<{ text: string; menuUrl: string | null; finalUrl: string; title: string; menuImages: string[]; menuPdfUrls: string[] }> {
   const res = await fetchWithRetry(url);
   const finalUrl = res.url || url;
   const html = await res.text();
   const $ = cheerio.load(html);
 
   // Find links and images BEFORE extractText
-  const menuLinks = depth === 0 ? findMenuLinks($, finalUrl) : [];
+  const { htmlLinks: menuLinks, pdfLinks } = depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
   const menuImages = findMenuImages($, finalUrl);
 
   const text = extractText($);
@@ -258,7 +289,7 @@ async function scrapeHtmlPage(
   if (!title) title = $('h1').first().text().trim();
 
   if (looksLikeMenu(text) || depth > 0) {
-    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages };
+    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
   }
 
   // Try menu sub-pages in order, return first that has meaningful content
@@ -266,14 +297,14 @@ async function scrapeHtmlPage(
     try {
       const menuRes = await scrapeHtmlPage(link, depth + 1);
       if (menuRes.text.length >= 200) {
-        return { ...menuRes, menuUrl: link, title: menuRes.title || title };
+        return { ...menuRes, menuUrl: link, title: menuRes.title || title, menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfLinks };
       }
     } catch {
       // try next link
     }
   }
 
-  return { text, menuUrl: null, finalUrl, title, menuImages };
+  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
 }
 
 export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
@@ -305,6 +336,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         title: result.title || 'Restaurant',
         menuText: result.text,
         menuUrl: result.menuUrl,
+        menuImages: result.menuImages,
+        menuPdfUrls: result.menuPdfUrls,
         urlType: 'html',
       };
     }
@@ -325,10 +358,10 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       url,
       canonicalUrl: url,
       title: 'Menu PDF',
-      menuText: `[PDF menu at ${url}]`,
+      menuText: '',
       menuUrl: url,
+      menuPdfUrls: [url],
       urlType: 'pdf',
-      warning: 'PDF menu detected. Analysis may be less accurate than HTML menus.',
     };
   }
 
@@ -348,6 +381,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
             title: result.title || 'Restaurant',
             menuText: result.text,
             menuUrl: result.menuUrl,
+            menuImages: result.menuImages,
+            menuPdfUrls: result.menuPdfUrls,
             urlType: 'html',
           };
         }
@@ -358,10 +393,22 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages } = await scrapeHtmlPage(url);
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls } = await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
   if (!text || text.length < 100) {
+    if (menuPdfUrls && menuPdfUrls.length > 0) {
+      // Menu is a linked PDF — return for PDF classification
+      return {
+        url,
+        canonicalUrl: finalUrl,
+        title,
+        menuText: '',
+        menuUrl: menuPdfUrls[0],
+        menuPdfUrls,
+        urlType: 'pdf',
+      };
+    }
     if (menuImages && menuImages.length > 0) {
       // Menu is likely in an image — return images for vision fallback
       return {
@@ -386,6 +433,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     menuText: text,
     menuUrl,
     menuImages,
+    menuPdfUrls,
     urlType: 'html',
   };
 }
