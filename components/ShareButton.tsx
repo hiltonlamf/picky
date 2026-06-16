@@ -3,11 +3,14 @@
 import { useState } from 'react';
 import type { Restaurant } from '@/types';
 
-function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
-  const allDishes = restaurant.sections.flatMap((s) => s.dishes);
-  const veganDishes = allDishes.filter((d) => d.classification === 'vegan');
-  const vegDishes = allDishes.filter((d) => d.classification === 'vegetarian');
+const DRINK_KEYWORDS = ['drink', 'beverage', 'cocktail', 'wine', 'beer', 'spirit', 'cider', 'soft drink', 'juice', 'shots', 'spirits', 'alcohol', 'liquor', 'prosecco', 'champagne', 'whiskey', 'whisky', 'gin', 'vodka', 'rum', 'brandy', 'lager', 'ale'];
 
+function isFoodSection(sectionName: string): boolean {
+  const lower = sectionName.toLowerCase();
+  return !DRINK_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
   const name = restaurant.name ?? 'this restaurant';
 
   const lines: string[] = [
@@ -15,15 +18,17 @@ function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
     ``,
   ];
 
-  if (veganDishes.length > 0) {
-    lines.push(`🌱 *Vegan (${veganDishes.length}):*`);
-    veganDishes.forEach((d) => lines.push(`• ${d.name}`));
-    lines.push(``);
-  }
+  const foodSections = restaurant.sections.filter((s) => isFoodSection(s.name));
 
-  if (vegDishes.length > 0) {
-    lines.push(`🥦 *Vegetarian (${vegDishes.length}):*`);
-    vegDishes.forEach((d) => lines.push(`• ${d.name}`));
+  for (const section of foodSections) {
+    const veganDishes = section.dishes.filter((d) => d.classification === 'vegan');
+    const vegDishes = section.dishes.filter((d) => d.classification === 'vegetarian');
+
+    if (veganDishes.length === 0 && vegDishes.length === 0) continue;
+
+    lines.push(`*${section.name}*`);
+    veganDishes.forEach((d) => lines.push(`🥦 ${d.name}`));
+    vegDishes.forEach((d) => lines.push(`🍳 ${d.name}`));
     lines.push(``);
   }
 
@@ -45,7 +50,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
       : `https://picky.ie/restaurant/${restaurant.id}`;
 
   const message = buildWhatsAppMessage(restaurant, pageUrl);
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
 
   async function handleCopy() {
     await navigator.clipboard.writeText(message);

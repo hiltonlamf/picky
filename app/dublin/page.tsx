@@ -48,7 +48,7 @@ export default async function DublinPage() {
       {/* Initialising banner */}
       {isInitialising && (
         <div className="card p-5 border-picky-100 bg-picky-50 mb-6 flex items-start gap-3">
-          <span className="text-picky-600 text-lg mt-0.5 animate-pulse">🌱</span>
+          <span className="text-picky-600 text-lg mt-0.5 animate-pulse">🥦</span>
           <div>
             <p className="text-sm font-semibold text-picky-800 mb-0.5">
               Analysing Dublin menus&hellip;

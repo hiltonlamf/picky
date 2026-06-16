@@ -100,7 +100,7 @@ export default function RestaurantPage() {
   if (restaurant.status === 'pending' || restaurant.status === 'processing') {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-        <div className="text-5xl mb-4 animate-pulse">🌱</div>
+        <div className="text-5xl mb-4 animate-pulse">🥦</div>
         <h1 className="text-xl font-bold text-gray-900 mb-2">
           Analysing {restaurant.name ?? 'this menu'}&hellip;
         </h1>
@@ -121,8 +121,8 @@ export default function RestaurantPage() {
 
   const filters: { value: Filter; label: string; count: number }[] = [
     { value: 'all', label: 'All dishes', count: totalDishes },
-    { value: 'vegetarian', label: '🥦 Vegetarian', count: vegCount },
-    { value: 'vegan', label: '🌱 Vegan', count: veganCount },
+    { value: 'vegetarian', label: '🍳 Vegetarian', count: vegCount },
+    { value: 'vegan', label: '🥦 Vegan', count: veganCount },
   ];
 
   return (
@@ -163,9 +163,9 @@ export default function RestaurantPage() {
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { label: 'Vegan', count: veganCount, emoji: '🌱', color: 'text-picky-700' },
-          { label: 'Vegetarian', count: vegCount, emoji: '🥦', color: 'text-picky-600' },
-          { label: 'Total dishes', count: totalDishes, emoji: '🍽️', color: 'text-gray-600' },
+          { label: 'Vegan', count: veganCount, emoji: '🥦', color: 'text-picky-700' },
+          { label: 'Vegetarian', count: vegCount, emoji: '🍳', color: 'text-picky-600' },
+          { label: 'Total dishes', count: totalDishes, emoji: '🥩', color: 'text-gray-600' },
         ].map((stat) => (
           <div key={stat.label} className="card p-3 text-center">
             <div className="text-xl mb-0.5">{stat.emoji}</div>
