@@ -34,13 +34,13 @@ export default function RestaurantCard({ restaurant }: Props) {
       <div className="flex gap-3 mb-3">
         {veganCount > 0 && (
           <span className="text-xs flex items-center gap-1 text-picky-700">
-            <span>🌱</span>
+            <span>🥦</span>
             {veganCount} vegan
           </span>
         )}
         {vegetarianCount > 0 && (
           <span className="text-xs flex items-center gap-1 text-picky-600">
-            <span>🥦</span>
+            <span>🥚</span>
             {vegetarianCount} vegetarian
           </span>
         )}
