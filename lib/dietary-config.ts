@@ -25,7 +25,7 @@ export const DIETARY_FILTERS: Record<string, DietaryFilterConfig> = {
   },
   vegetarian: {
     label: 'Vegetarian',
-    emoji: '🥚',
+    emoji: '🍳',
     color: 'emerald',
     badgeClass: 'bg-picky-500 text-white',
     markers: [

@@ -40,7 +40,7 @@ export default function RestaurantCard({ restaurant }: Props) {
         )}
         {vegetarianCount > 0 && (
           <span className="text-xs flex items-center gap-1 text-picky-600">
-            <span>🥚</span>
+            <span>🍳</span>
             {vegetarianCount} vegetarian
           </span>
         )}

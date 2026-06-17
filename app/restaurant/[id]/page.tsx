@@ -121,7 +121,7 @@ export default function RestaurantPage() {
 
   const filters: { value: Filter; label: string; count: number }[] = [
     { value: 'all', label: 'All dishes', count: totalDishes },
-    { value: 'vegetarian', label: '🥚 Vegetarian', count: vegCount },
+    { value: 'vegetarian', label: '🍳 Vegetarian', count: vegCount },
     { value: 'vegan', label: '🥦 Vegan', count: veganCount },
   ];
 
@@ -164,8 +164,8 @@ export default function RestaurantPage() {
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
           { label: 'Vegan', count: veganCount, emoji: '🥦', color: 'text-picky-700' },
-          { label: 'Vegetarian', count: vegCount, emoji: '🥚', color: 'text-picky-600' },
-          { label: 'Total dishes', count: totalDishes, emoji: '🍽️', color: 'text-gray-600' },
+          { label: 'Vegetarian', count: vegCount, emoji: '🍳', color: 'text-picky-600' },
+          { label: 'Total dishes', count: totalDishes, emoji: '🥩', color: 'text-gray-600' },
         ].map((stat) => (
           <div key={stat.label} className="card p-3 text-center">
             <div className="text-xl mb-0.5">{stat.emoji}</div>
