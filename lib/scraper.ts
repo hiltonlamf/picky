@@ -344,21 +344,30 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     let html = await res.text();
     console.log(`[maps] fetched ${url} → ${finalUrl} (${html.length} bytes)`);
 
-    // Follow meta-refresh redirect (some Google short links use client-side redirect)
-    const metaRefreshMatch = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^;]*;\s*url=([^"'\s>]+)/i)
-      ?? html.match(/content=["'][^;]*;\s*url=([^"'\s>]+)[^>]*http-equiv=["']?refresh["']?/i);
-    if (metaRefreshMatch?.[1]) {
-      const refreshUrl = metaRefreshMatch[1].replace(/^['"]|['"]$/g, '');
-      if (refreshUrl.startsWith('http') && !refreshUrl.includes('google.com')) {
-        console.log(`[maps] meta-refresh to non-google URL: ${refreshUrl}`);
-        return refreshUrl;
+    // Follow client-side redirects (meta-refresh or window.location JS redirect)
+    const clientRedirectUrl = (() => {
+      // meta http-equiv="refresh"
+      const m = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^;]*;\s*url=([^"'\s>]+)/i)
+        ?? html.match(/content=["'][^;]*;\s*url=([^"'\s>]+)[^>]*http-equiv=["']?refresh["']?/i);
+      if (m?.[1]) return m[1].replace(/^['"]|['"]$/g, '');
+      // JavaScript window.location redirect
+      const js = html.match(/window\.location(?:\.href)?\s*=\s*["'](https?:\/\/[^"']+)["']/i)
+        ?? html.match(/location\.replace\s*\(\s*["'](https?:\/\/[^"']+)["']\s*\)/i);
+      if (js?.[1]) return js[1];
+      return null;
+    })();
+
+    if (clientRedirectUrl?.startsWith('http')) {
+      if (!clientRedirectUrl.includes('google.com') && isRestaurantWebsite(clientRedirectUrl)) {
+        console.log(`[maps] client-redirect to non-google restaurant URL: ${clientRedirectUrl}`);
+        return clientRedirectUrl;
       }
-      if (refreshUrl.startsWith('http')) {
+      if (clientRedirectUrl.startsWith('http')) {
         try {
-          const res2 = await fetchWithRetry(refreshUrl);
+          const res2 = await fetchWithRetry(clientRedirectUrl);
           finalUrl = res2.url;
           html = await res2.text();
-          console.log(`[maps] followed meta-refresh → ${finalUrl} (${html.length} bytes)`);
+          console.log(`[maps] followed client-redirect → ${finalUrl} (${html.length} bytes)`);
         } catch {}
       }
     }
@@ -395,13 +404,21 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
       return extracted;
     }
 
-    // Strategy 3: Fallback — anchor tag link extraction
-    const websiteLink = $('a[href]').filter((_, el) => {
+    // Strategy 3: Fallback — anchor tag link extraction, scored
+    const anchorCandidates: Array<{ href: string; score: number }> = [];
+    $('a[href]').each((_, el) => {
       const href = $(el).attr('href') ?? '';
-      return isRestaurantWebsite(href);
-    }).first().attr('href');
+      const text = ($(el).text() ?? '').toLowerCase();
+      if (!isRestaurantWebsite(href)) return;
+      let score = scoreAsRestaurantHomepage(href);
+      // Boost if anchor text looks like a website label
+      if (text.includes('website') || text.includes('web') || text.includes('homepage')) score += 20;
+      anchorCandidates.push({ href, score });
+    });
+    anchorCandidates.sort((a, b) => b.score - a.score);
+    const websiteLink = anchorCandidates[0]?.href ?? null;
 
-    console.log(`[maps] resolved via anchor tags: ${websiteLink ?? 'null'}`);
+    console.log(`[maps] anchor candidates: ${anchorCandidates.slice(0, 3).map(c => c.href).join(', ') || 'none'}`);
 
     // Log a snippet of the HTML for debugging when nothing was found
     if (!websiteLink) {
