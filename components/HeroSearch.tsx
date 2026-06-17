@@ -136,7 +136,7 @@ export default function HeroSearch() {
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>✓ Restaurant names</span>
         <span>✓ Website URLs</span>
-        <span>✓ Google Maps links</span>
+        <span>✓ Direct menu links</span>
       </div>
     </form>
   );
