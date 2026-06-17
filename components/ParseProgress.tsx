@@ -31,9 +31,9 @@ export default function ParseProgress({ currentStep, completedSteps, error }: Pr
       </div>
 
       {error ? (
-        <div className="rounded-xl bg-red-50 border border-red-200 p-4">
-          <p className="text-sm font-semibold text-red-700 mb-1">Something went wrong</p>
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="rounded-xl bg-amber-50 border border-amber-200 p-4">
+          <p className="text-sm font-semibold text-amber-800 mb-1">Oops, we hit a snag</p>
+          <p className="text-sm text-amber-700">{error}</p>
         </div>
       ) : (
         <ol className="space-y-3">

@@ -16,13 +16,13 @@ function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
   ];
 
   if (veganDishes.length > 0) {
-    lines.push(`🌱 *Vegan (${veganDishes.length}):*`);
+    lines.push(`🥦 *Vegan (${veganDishes.length}):*`);
     veganDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
 
   if (vegDishes.length > 0) {
-    lines.push(`🥦 *Vegetarian (${vegDishes.length}):*`);
+    lines.push(`🍳 *Vegetarian (${vegDishes.length}):*`);
     vegDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }

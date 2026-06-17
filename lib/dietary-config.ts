@@ -3,7 +3,7 @@ import type { DietaryFilterConfig } from '@/types';
 export const DIETARY_FILTERS: Record<string, DietaryFilterConfig> = {
   vegan: {
     label: 'Vegan',
-    emoji: '🌱',
+    emoji: '🥦',
     color: 'green',
     badgeClass: 'bg-picky-600 text-white',
     markers: [
@@ -25,7 +25,7 @@ export const DIETARY_FILTERS: Record<string, DietaryFilterConfig> = {
   },
   vegetarian: {
     label: 'Vegetarian',
-    emoji: '🥦',
+    emoji: '🍳',
     color: 'emerald',
     badgeClass: 'bg-picky-500 text-white',
     markers: [

@@ -17,6 +17,14 @@ export const maxDuration = 60;
 
 const schema = z.object({ url: z.string().url('Please provide a valid URL') });
 
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return 'https://' + trimmed;
+  }
+  return trimmed;
+}
+
 function sseEncoder() {
   const encoder = new TextEncoder();
   return (event: ParseEvent) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
@@ -58,6 +66,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
+        if (typeof body.url === 'string') body.url = normalizeUrl(body.url);
         const parsed = schema.safeParse(body);
         if (!parsed.success) {
           send({ type: 'error', error: parsed.error.issues[0]?.message ?? 'Invalid URL' });
@@ -112,7 +121,7 @@ export async function POST(request: NextRequest) {
           (scrapeResult.menuImages && scrapeResult.menuImages.length > 0);
 
         if (!hasAnyContent) {
-          const msg = scrapeResult.warning ?? "We couldn't find any menu content on this page. The menu may be unavailable or require a direct menu URL.";
+          const msg = scrapeResult.warning ?? "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantError(restaurantId, msg);
           send({ type: 'error', error: msg });
           return close();
@@ -145,12 +154,12 @@ export async function POST(request: NextRequest) {
               } else {
                 // Use whichever gave more items
                 const best = pdfResult && (!imgResult || countFoodItems(pdfResult.menu) >= countFoodItems(imgResult?.menu ?? { sections: [] })) ? pdfResult : imgResult;
-                if (!best) throw new Error("The menu on this page couldn't be read. It may be unavailable or behind a login.");
+                if (!best) throw new Error("We found a menu PDF and some images but couldn't extract dishes from either. Try pasting the menu page URL instead.");
                 menu = best.menu;
                 aiUsage = best.usage;
               }
             } else {
-              if (!pdfResult) throw new Error("The menu PDF couldn't be read. It may be password-protected or corrupted.");
+              if (!pdfResult) throw new Error("We found a menu PDF but couldn't extract the dishes from it. Try pasting the main menu page URL instead.");
               menu = pdfResult.menu;
               aiUsage = pdfResult.usage;
             }
@@ -158,7 +167,7 @@ export async function POST(request: NextRequest) {
             // Primary: image vision
             send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
             const imageResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
-            if (!imageResult) throw new Error("Couldn't extract menu dishes from the images on this page.");
+            if (!imageResult) throw new Error("We found menu images but couldn't read them clearly. Try pasting a page where the menu is written out as text.");
             menu = imageResult.menu;
             aiUsage = imageResult.usage;
           } else if (hasText) {
@@ -186,12 +195,12 @@ export async function POST(request: NextRequest) {
               }
             }
           } else {
-            throw new Error("We couldn't find any menu content on this page. The menu may be unavailable or require a direct menu URL.");
+            throw new Error("We loaded the page but couldn't find any menu content — no text, PDF, or images. Try pasting a direct link to the menu page.");
           }
 
           // Final guard: if we still have very few items, it's likely a parsing failure
           if (countFoodItems(menu) < MIN_FOOD_ITEMS && countFoodItems(menu) === 0) {
-            throw new Error("No menu dishes could be found on this page. The menu may be unavailable or only accessible to guests.");
+            throw new Error("We couldn't find any dishes listed on this page — it's possible the restaurant doesn't have their menu online. If you spotted a menu link we missed, paste it directly and we'll try again.");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
