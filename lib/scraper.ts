@@ -78,13 +78,25 @@ const BROWSER_UA =
 
 // Domains that are never a restaurant's own website
 const NON_RESTAURANT_DOMAINS = [
+  // Google
   'google.com', 'googleapis.com', 'goo.gl', 'googletagmanager.com',
   'googleusercontent.com', 'googlevideo.com', 'doubleclick.net', 'ggpht.com',
+  // Social media
   'youtube.com', 'facebook.com', 'fb.com', 'instagram.com', 'twitter.com',
   'x.com', 'linkedin.com', 'tiktok.com', 'pinterest.com', 'snapchat.com',
+  // Tech / infra
   'apple.com', 'microsoft.com', 'amazon.com', 'cloudflare.com',
   'schema.org', 'w3.org', 'openstreetmap.org', 'maps.app',
+  // Review / discovery sites
   'yelp.com', 'tripadvisor.com', 'zomato.com', 'opentable.com', 'thefork.com',
+  // Delivery platforms
+  'deliveroo.com', 'ubereats.com', 'just-eat.', 'doordash.com',
+  'grubhub.com', 'seamless.com', 'menulog.com', 'hungryhouse.co.uk',
+  // Reservation / booking platforms
+  'resdiary.com', 'resdiary.net', 'quandoo.com', 'bookatable.com',
+  'sevenrooms.com', 'resy.com', 'booking.com', 'toasttab.com',
+  // Link-in-bio / aggregators (we want the real site, not the hub)
+  'linktr.ee', 'linktree.com', 'beacons.ai', 'bio.site',
 ];
 
 const NON_RESTAURANT_EXTENSIONS = [
@@ -269,7 +281,9 @@ async function fetchWithRetry(url: string, retries = 2): Promise<Response> {
 async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
   try {
     const res = await fetchWithRetry(url);
+    const finalUrl = res.url;
     const html = await res.text();
+    console.log(`[maps] fetched ${url} → ${finalUrl} (${html.length} bytes)`);
     const $ = cheerio.load(html);
 
     // Strategy 1: JSON-LD structured data (most reliable — designed for machine reading)
@@ -278,10 +292,16 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
         const data = JSON.parse($(el).html() ?? '');
         const items = Array.isArray(data) ? data : [data];
         for (const item of items) {
-          if (typeof item?.url === 'string' && isRestaurantWebsite(item.url)) return item.url;
+          if (typeof item?.url === 'string' && isRestaurantWebsite(item.url)) {
+            console.log(`[maps] resolved via JSON-LD: ${item.url}`);
+            return item.url;
+          }
           if (Array.isArray(item?.['@graph'])) {
             for (const node of item['@graph']) {
-              if (typeof node?.url === 'string' && isRestaurantWebsite(node.url)) return node.url;
+              if (typeof node?.url === 'string' && isRestaurantWebsite(node.url)) {
+                console.log(`[maps] resolved via JSON-LD @graph: ${node.url}`);
+                return node.url;
+              }
             }
           }
         }
@@ -291,7 +311,10 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     // Strategy 2: Google Maps embeds place data (including website) as JSON in the page —
     // scan the raw HTML for URLs in quoted/escaped string contexts
     const extracted = extractRestaurantUrlFromHtml(html);
-    if (extracted) return extracted;
+    if (extracted) {
+      console.log(`[maps] resolved via HTML regex: ${extracted}`);
+      return extracted;
+    }
 
     // Strategy 3: Fallback — anchor tag link extraction
     const websiteLink = $('a[href]').filter((_, el) => {
@@ -299,8 +322,10 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
       return isRestaurantWebsite(href);
     }).first().attr('href');
 
+    console.log(`[maps] resolved via anchor tags: ${websiteLink ?? 'null'}`);
     return websiteLink ?? null;
-  } catch {
+  } catch (err) {
+    console.log(`[maps] resolveGoogleMapsUrl failed: ${err}`);
     return null;
   }
 }
