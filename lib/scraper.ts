@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import Anthropic from '@anthropic-ai/sdk';
+import { discoverMenuUrls } from './ai';
 
 export interface ScrapeResult {
   url: string;
@@ -809,16 +810,9 @@ async function scrapeHtmlPage(
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  // Find links and images BEFORE extractText
-  // Always scan for PDFs; only follow HTML sub-links from the root page
-  const { htmlLinks: menuLinks, pdfLinks } = depth === 0
-    ? findMenuLinks($, finalUrl)
-    : { htmlLinks: [], pdfLinks: findMenuLinks($, finalUrl).pdfLinks };
   const menuImages = findMenuImages($, finalUrl);
-
   const text = extractText($);
 
-  // "Menu | Uno Mas" → take last part if first is a generic section name
   const GENERIC_PAGE_WORDS = new Set([
     'menu', 'home', 'food', 'about', 'contact', 'welcome',
     'index', 'start', 'page', 'sample menu', 'our menu',
@@ -831,23 +825,60 @@ async function scrapeHtmlPage(
       : (titleParts[0] ?? '');
   if (!title) title = $('h1').first().text().trim();
 
-  if (looksLikeMenu(text) || depth > 0) {
-    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+  if (depth > 0) {
+    // Already on a sub-page — collect any PDFs directly linked here
+    const subPdfs: string[] = [];
+    $('a[href], embed[src], iframe[src], object[data]').each((_, el) => {
+      const src = $(el).attr('href') ?? $(el).attr('src') ?? $(el).attr('data') ?? '';
+      const resolved = resolveUrl(src, finalUrl);
+      if (resolved && isPdfUrl(resolved)) subPdfs.push(resolved);
+    });
+    return { text, menuUrl: url, finalUrl, title, menuImages, menuPdfUrls: subPdfs.filter((u, i, a) => a.indexOf(u) === i) };
   }
 
-  // Try menu sub-pages in order, return first that has meaningful content
-  for (const link of menuLinks) {
+  // depth === 0: LLM-driven discovery — collect all links and let Claude decide
+  const allLinks: Array<{ href: string; text: string }> = [];
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const linkText = $(el).text().trim();
+    const resolved = resolveUrl(href, finalUrl);
+    if (resolved && !EXCLUDED_EXTENSIONS.some((ext) => resolved.toLowerCase().endsWith(ext))) {
+      allLinks.push({ href: resolved, text: linkText });
+    }
+  });
+
+  const embedSrcs: string[] = [];
+  $('embed[src], iframe[src], object[data]').each((_, el) => {
+    const src = $(el).attr('src') ?? $(el).attr('data') ?? '';
+    const resolved = resolveUrl(src, finalUrl);
+    if (resolved) embedSrcs.push(resolved);
+  });
+
+  // Ask Claude which links lead to the menu (no keyword guessing)
+  const { pdfUrls, menuPageUrls } = await discoverMenuUrls(allLinks, embedSrcs, finalUrl, rawTitle);
+
+  if (looksLikeMenu(text)) {
+    return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfUrls };
+  }
+
+  // Follow identified menu sub-pages, return first with meaningful content
+  for (const link of menuPageUrls) {
     try {
       const menuRes = await scrapeHtmlPage(link, depth + 1);
-      if (menuRes.text.length >= 200) {
-        return { ...menuRes, menuUrl: link, title: menuRes.title || title, menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfLinks };
+      if (menuRes.text.length >= 200 || menuRes.menuPdfUrls.length > 0) {
+        return {
+          ...menuRes,
+          menuUrl: link,
+          title: menuRes.title || title,
+          menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfUrls,
+        };
       }
     } catch {
       // try next link
     }
   }
 
-  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfUrls };
 }
 
 export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {

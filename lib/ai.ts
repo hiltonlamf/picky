@@ -290,6 +290,71 @@ export function stripDrinksAndHeaders(menu: ClassifiedMenu): ClassifiedMenu {
   return { ...menu, sections: cleaned };
 }
 
+/**
+ * Given all links on a restaurant page, asks Claude Haiku which ones lead
+ * to the menu. Replaces keyword matching with LLM understanding so unusual
+ * link text like "Asti" or "Our Story" is correctly handled.
+ */
+export async function discoverMenuUrls(
+  pageLinks: Array<{ href: string; text: string }>,
+  embedSrcs: string[],
+  pageUrl: string,
+  pageTitle: string
+): Promise<{ pdfUrls: string[]; menuPageUrls: string[] }> {
+  if (pageLinks.length === 0 && embedSrcs.length === 0) {
+    return { pdfUrls: [], menuPageUrls: [] };
+  }
+
+  // Deduplicate and cap to keep the prompt small
+  const seen = new Set<string>();
+  const uniqueLinks = pageLinks.filter((l) => {
+    if (seen.has(l.href)) return false;
+    seen.add(l.href);
+    return true;
+  }).slice(0, 80);
+
+  const linkList = uniqueLinks
+    .map((l) => `- [${(l.text.trim() || '(no text)').slice(0, 60)}](${l.href})`)
+    .join('\n');
+
+  const embedPart = embedSrcs.length > 0
+    ? `\nEmbedded/iframe resources:\n${embedSrcs.map((s) => `- ${s}`).join('\n')}`
+    : '';
+
+  const msg = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 512,
+    messages: [{
+      role: 'user',
+      content: `Restaurant website: ${pageUrl}
+Page title: ${pageTitle}
+
+All links on this page:
+${linkList}${embedPart}
+
+Which URLs lead to the food menu? Return:
+- "pdfUrls": any PDF file that is a menu document
+- "menuPageUrls": HTML pages that show the food menu, including restaurant section or location pages (e.g. /asti/, /taverna/) — they usually contain a menu even if the link text doesn't say "menu"
+
+Exclude: social media, reservations, contact, about us, blog, privacy, home page.
+
+Reply with JSON only: {"pdfUrls": ["..."], "menuPageUrls": ["..."]}`,
+    }],
+  });
+
+  const text = msg.content[0].type === 'text' ? msg.content[0].text.trim() : '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/) ?? [null];
+  try {
+    const result = JSON.parse(jsonMatch[0] ?? '{}') as Record<string, unknown>;
+    return {
+      pdfUrls: Array.isArray(result.pdfUrls) ? (result.pdfUrls as unknown[]).filter((u): u is string => typeof u === 'string') : [],
+      menuPageUrls: Array.isArray(result.menuPageUrls) ? (result.menuPageUrls as unknown[]).filter((u): u is string => typeof u === 'string') : [],
+    };
+  } catch {
+    return { pdfUrls: [], menuPageUrls: [] };
+  }
+}
+
 const AGENTIC_SYSTEM_PROMPT = `You are a dietary classifier specializing in vegetarian and vegan restaurant menus.
 
 GOAL: Find the complete restaurant menu and classify every food dish.
