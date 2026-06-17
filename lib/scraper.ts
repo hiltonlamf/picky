@@ -494,6 +494,42 @@ async function searchDuckDuckGo(query: string, exclusions: string[] = []): Promi
   return null;
 }
 
+// Ask Claude (with live web search) for the restaurant's official website URL.
+// Falls back to training-data knowledge if the web search tool is unavailable.
+export async function resolveRestaurantNameToUrl(name: string): Promise<string | null> {
+  try {
+    const client = new Anthropic();
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: [{ type: 'web_search_20260209', name: 'web_search' } as any],
+      messages: [{
+        role: 'user',
+        content: `Find the official website URL for the restaurant: "${name}". Reply with only the URL (starting with https://) or "unknown" if you cannot find it with confidence. Do not invent URLs.`,
+      }],
+    });
+
+    for (const block of msg.content) {
+      if (block.type === 'text') {
+        const matches = block.text.match(/https?:\/\/[^\s"'<>\)\]]+/g) ?? [];
+        for (const candidate of matches) {
+          const clean = candidate.replace(/[.,;:!?]+$/, '');
+          if (isRestaurantWebsite(clean)) {
+            console.log(`[web-search] resolved "${name}" → ${clean}`);
+            return clean;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.log(`[web-search] tool failed, falling back to LLM: ${err}`);
+  }
+
+  // Fallback: Claude training-data knowledge
+  return resolveViaClaudeLLM(name, null);
+}
+
 // Ask Claude for the restaurant's official website URL.
 // Claude's training data includes most restaurants — this is faster and more
 // reliable than scraping third-party services from a datacenter IP.

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { scrapeRestaurant } from '@/lib/scraper';
+import { scrapeRestaurant, resolveRestaurantNameToUrl } from '@/lib/scraper';
 import { classifyMenuWithAI, classifyMenuFromImages, classifyMenuFromPdf, countFoodItems } from '@/lib/ai';
 import {
   findExistingRestaurant,
@@ -15,7 +15,12 @@ import type { ParseEvent } from '@/types';
 
 export const maxDuration = 60;
 
-const schema = z.object({ url: z.string().url('Please provide a valid URL') });
+const schema = z.object({ url: z.string().min(1, 'Please enter a restaurant name or URL') });
+
+function looksLikeUrl(input: string): boolean {
+  const t = input.trim();
+  return t.startsWith('http://') || t.startsWith('https://') || (!t.includes(' ') && t.includes('.'));
+}
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -73,7 +78,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        const { url } = parsed.data;
+        const input = parsed.data.url.trim();
 
         // Rate limiting
         const { allowed, remaining } = await checkRateLimit(ip);
@@ -86,8 +91,29 @@ export async function POST(request: NextRequest) {
         }
         void remaining;
 
-        // Step 1: Check cache
-        send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
+        // Resolve restaurant name → URL if the user typed a name instead of a URL
+        let url: string;
+        let stepBase: number;
+        let totalSteps: number;
+
+        if (!looksLikeUrl(input)) {
+          stepBase = 1;
+          totalSteps = 5;
+          send({ type: 'progress', step: 'Finding restaurant website...', stepNumber: 1, totalSteps: 5 });
+          const resolved = await resolveRestaurantNameToUrl(input);
+          if (!resolved) {
+            send({ type: 'error', error: `We couldn't find a website for "${input}". Try pasting the restaurant's URL directly.` });
+            return close();
+          }
+          url = resolved;
+        } else {
+          stepBase = 0;
+          totalSteps = 4;
+          url = normalizeUrl(input);
+        }
+
+        // Step: Check cache
+        send({ type: 'progress', step: 'Checking our database...', stepNumber: 1 + stepBase, totalSteps });
         const existing = await findExistingRestaurant(url).catch(() => null);
 
         if (existing?.status === 'done' && isFresh(existing.lastScrapedAt)) {
@@ -103,8 +129,8 @@ export async function POST(request: NextRequest) {
           await resetRestaurantForReparse(restaurantId);
         }
 
-        // Step 2: Scrape
-        send({ type: 'progress', step: 'Fetching the restaurant page...', stepNumber: 2, totalSteps: 4 });
+        // Step: Scrape
+        send({ type: 'progress', step: 'Fetching the restaurant page...', stepNumber: 2 + stepBase, totalSteps });
         let scrapeResult;
         try {
           scrapeResult = await scrapeRestaurant(url);
@@ -127,8 +153,8 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        // Step 3: AI classification — text → PDF → image fallback chain
-        send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 3, totalSteps: 4 });
+        // Step: AI classification — text → PDF → image fallback chain
+        send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 3 + stepBase, totalSteps });
         let menu;
         let aiUsage;
         try {
@@ -137,16 +163,17 @@ export async function POST(request: NextRequest) {
           const hasImages = scrapeResult.menuImages && scrapeResult.menuImages.length > 0;
           const MIN_FOOD_ITEMS = 7;
 
+          const aiStep = 3 + stepBase;
           if (hasPdfs && !hasText) {
             // Primary: PDF document
-            send({ type: 'progress', step: 'Reading menu PDF with AI...', stepNumber: 3, totalSteps: 4 });
+            send({ type: 'progress', step: 'Reading menu PDF with AI...', stepNumber: aiStep, totalSteps });
             const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
             if (pdfResult && countFoodItems(pdfResult.menu) >= MIN_FOOD_ITEMS) {
               menu = pdfResult.menu;
               aiUsage = pdfResult.usage;
             } else if (hasImages) {
               // Fallback to images if PDF gave too few items
-              send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
+              send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
               const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
               if (imgResult && countFoodItems(imgResult.menu) >= MIN_FOOD_ITEMS) {
                 menu = imgResult.menu;
@@ -165,7 +192,7 @@ export async function POST(request: NextRequest) {
             }
           } else if (!hasText && hasImages) {
             // Primary: image vision
-            send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
+            send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
             const imageResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
             if (!imageResult) throw new Error("We found menu images but couldn't read them clearly. Try pasting a page where the menu is written out as text.");
             menu = imageResult.menu;
@@ -179,14 +206,14 @@ export async function POST(request: NextRequest) {
             // If text gave too few items, try PDF or image fallback
             if (countFoodItems(menu) < MIN_FOOD_ITEMS) {
               if (hasPdfs) {
-                send({ type: 'progress', step: 'Checking menu PDF for more dishes...', stepNumber: 3, totalSteps: 4 });
+                send({ type: 'progress', step: 'Checking menu PDF for more dishes...', stepNumber: aiStep, totalSteps });
                 const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
                 if (pdfResult && countFoodItems(pdfResult.menu) > countFoodItems(menu)) {
                   menu = pdfResult.menu;
                   aiUsage = pdfResult.usage;
                 }
               } else if (hasImages && countFoodItems(menu) < MIN_FOOD_ITEMS) {
-                send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
+                send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
                 const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
                 if (imgResult && countFoodItems(imgResult.menu) > countFoodItems(menu)) {
                   menu = imgResult.menu;
@@ -214,8 +241,8 @@ export async function POST(request: NextRequest) {
           menu.restaurantName = scrapeResult.title;
         }
 
-        // Step 4: Save
-        send({ type: 'progress', step: 'Saving your results...', stepNumber: 4, totalSteps: 4 });
+        // Step: Save
+        send({ type: 'progress', step: 'Saving your results...', stepNumber: 4 + stepBase, totalSteps });
         await saveClassifiedMenu(
           restaurantId,
           scrapeResult.canonicalUrl,

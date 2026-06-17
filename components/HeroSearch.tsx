@@ -9,28 +9,26 @@ type AppState = 'idle' | 'parsing' | 'error';
 
 export default function HeroSearch() {
   const router = useRouter();
-  const [url, setUrl] = useState('');
+  const [input, setInput] = useState('');
   const [state, setState] = useState<AppState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState<ParseProgressEvent | null>(null);
-  const [completedSteps, setCompletedSteps] = useState<string[]>([]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      const trimmed = url.trim();
+      const trimmed = input.trim();
       if (!trimmed) return;
 
       setState('parsing');
       setError(null);
       setCurrentStep(null);
-      setCompletedSteps([]);
 
       try {
         const response = await fetch('/api/parse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: trimmed.startsWith('http') ? trimmed : `https://${trimmed}` }),
+          body: JSON.stringify({ url: trimmed }),
         });
 
         if (!response.body) throw new Error('No response body');
@@ -60,15 +58,7 @@ export default function HeroSearch() {
             }
 
             if (event.type === 'progress') {
-              // Mark all steps before the current one as complete
-              const allSteps = [
-                'Checking our database...',
-                'Fetching the restaurant page...',
-                'Analysing dishes with AI...',
-                'Saving your results...',
-              ];
               setCurrentStep(event);
-              setCompletedSteps(allSteps.slice(0, event.stepNumber - 1));
             } else if (event.type === 'result' || event.type === 'cached') {
               router.push(`/restaurant/${event.restaurantId}`);
               return;
@@ -84,14 +74,13 @@ export default function HeroSearch() {
         setState('error');
       }
     },
-    [url, router]
+    [input, router]
   );
 
   const reset = () => {
     setState('idle');
     setError(null);
     setCurrentStep(null);
-    setCompletedSteps([]);
   };
 
   if (state === 'parsing' || state === 'error') {
@@ -99,12 +88,11 @@ export default function HeroSearch() {
       <div className="flex flex-col items-center gap-6">
         <ParseProgress
           currentStep={currentStep}
-          completedSteps={completedSteps}
           error={state === 'error' ? error : null}
         />
         {state === 'error' && (
           <button onClick={reset} className="btn-ghost text-sm">
-            ← Try a different link
+            ← Try again
           </button>
         )}
       </div>
@@ -116,19 +104,19 @@ export default function HeroSearch() {
       <div className="flex flex-col gap-3">
         <div className="relative">
           <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://restaurant.com or Google Maps link"
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Restaurant name or website URL"
             className="input-url pr-12 text-base"
-            autoComplete="url"
+            autoComplete="off"
             autoFocus
-            aria-label="Restaurant URL"
+            aria-label="Restaurant name or URL"
           />
-          {url && (
+          {input && (
             <button
               type="button"
-              onClick={() => setUrl('')}
+              onClick={() => setInput('')}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
               aria-label="Clear"
             >
@@ -138,7 +126,7 @@ export default function HeroSearch() {
         </div>
         <button
           type="submit"
-          disabled={!url.trim()}
+          disabled={!input.trim()}
           className="btn-primary text-base w-full sm:w-auto sm:self-start"
         >
           Find my food →
@@ -146,9 +134,9 @@ export default function HeroSearch() {
       </div>
 
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
-        <span>✓ Restaurant websites</span>
+        <span>✓ Restaurant names</span>
+        <span>✓ Website URLs</span>
         <span>✓ Google Maps links</span>
-        <span>✓ Direct menu URLs</span>
       </div>
     </form>
   );
