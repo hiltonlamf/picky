@@ -17,6 +17,14 @@ export const maxDuration = 60;
 
 const schema = z.object({ url: z.string().url('Please provide a valid URL') });
 
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return 'https://' + trimmed;
+  }
+  return trimmed;
+}
+
 function sseEncoder() {
   const encoder = new TextEncoder();
   return (event: ParseEvent) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
@@ -58,6 +66,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
+        if (typeof body.url === 'string') body.url = normalizeUrl(body.url);
         const parsed = schema.safeParse(body);
         if (!parsed.success) {
           send({ type: 'error', error: parsed.error.issues[0]?.message ?? 'Invalid URL' });
