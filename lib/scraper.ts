@@ -16,6 +16,12 @@ export interface ScrapeResult {
 const MENU_LINK_KEYWORDS = [
   'menu', 'food', 'eat', 'dishes', 'cuisine', 'carte',
   'speisekarte', 'kaart', 'menukaart',
+  // wine bars / drink-led venues
+  'wine', 'drinks', 'cocktail', 'list',
+  // meal occasions
+  'lunch', 'dinner', 'brunch', 'breakfast', 'supper',
+  // dish types
+  'starter', 'snack', 'nibble', 'tapas', 'sharing', 'dessert',
 ];
 
 const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
@@ -256,15 +262,12 @@ function findMenuLinks(
     if (resolvedHref === baseUrl) return;
 
     if (isPdfUrl(resolvedHref)) {
-      let score = 0;
+      let score = 1; // any PDF on a restaurant site is worth trying
       for (const keyword of MENU_LINK_KEYWORDS) {
         if (text.includes(keyword)) score += 2;
         if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
       }
-      // Any PDF linked from a menu keyword anchor is a good candidate
-      if (score > 0 || text.includes('download') || text.includes('pdf')) {
-        pdfCandidates.push({ url: resolvedHref, score: score || 1 });
-      }
+      pdfCandidates.push({ url: resolvedHref, score });
       return;
     }
 
@@ -277,6 +280,23 @@ function findMenuLinks(
     }
     if (score > 0) htmlCandidates.push({ url: resolvedHref, score });
   });
+
+  // Also catch PDFs embedded via <embed src>, <iframe src>, <object data>
+  // (common on Squarespace, WordPress PDF blocks — no <a href> wrapper)
+  const embedSelectors: Array<{ sel: string; attr: string }> = [
+    { sel: 'embed[src]',  attr: 'src'  },
+    { sel: 'iframe[src]', attr: 'src'  },
+    { sel: 'object[data]',attr: 'data' },
+  ];
+  for (const { sel, attr } of embedSelectors) {
+    $(sel).each((_, el) => {
+      const src = $(el).attr(attr) ?? $(el).attr('data-src') ?? '';
+      const resolved = resolveUrl(src, baseUrl);
+      if (resolved && isPdfUrl(resolved)) {
+        pdfCandidates.push({ url: resolved, score: 10 }); // directly embedded → highest priority
+      }
+    });
+  }
 
   const dedup = (candidates: Array<{ url: string; score: number }>, limit: number) => {
     candidates.sort((a, b) => b.score - a.score);
@@ -790,7 +810,10 @@ async function scrapeHtmlPage(
   const $ = cheerio.load(html);
 
   // Find links and images BEFORE extractText
-  const { htmlLinks: menuLinks, pdfLinks } = depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
+  // Always scan for PDFs; only follow HTML sub-links from the root page
+  const { htmlLinks: menuLinks, pdfLinks } = depth === 0
+    ? findMenuLinks($, finalUrl)
+    : { htmlLinks: [], pdfLinks: findMenuLinks($, finalUrl).pdfLinks };
   const menuImages = findMenuImages($, finalUrl);
 
   const text = extractText($);
