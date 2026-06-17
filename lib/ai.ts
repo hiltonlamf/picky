@@ -460,16 +460,31 @@ const FETCH_URL_TOOL = {
   },
 };
 
-async function fetchUrlContent(targetUrl: string): Promise<string> {
+async function fetchUrlContent(targetUrl: string): Promise<string | unknown[]> {
   try {
     const res = await fetch(targetUrl, {
       headers: { 'User-Agent': BROWSER_UA },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(20000),
       redirect: 'follow',
     });
     if (!res.ok) return `HTTP ${res.status} fetching ${targetUrl}`;
+
+    const contentType = res.headers.get('content-type') ?? '';
+    const looksLikePdf =
+      contentType.includes('application/pdf') || targetUrl.toLowerCase().split('?')[0].endsWith('.pdf');
+
+    if (looksLikePdf) {
+      const buffer = await res.arrayBuffer();
+      if (buffer.byteLength > 20 * 1024 * 1024) return `PDF at ${targetUrl} is too large (>20MB) to read.`;
+      const data = Buffer.from(buffer).toString('base64');
+      // Return PDF as a document block so Claude can read it natively
+      return [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } },
+        { type: 'text', text: `PDF retrieved from ${targetUrl} — read it above and extract all menu dishes.` },
+      ];
+    }
+
     const html = await res.text();
-    // Strip tags to get readable text
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -587,10 +602,11 @@ export async function classifyMenuAgentic(
       toolUseBlocks.map(async (block) => {
         if (block.name === 'fetch_url') {
           const input = block.input as { url?: string };
-          const fetchedText = input.url
+          const fetched = input.url
             ? await fetchUrlContent(input.url)
             : 'No URL provided.';
-          return { type: 'tool_result' as const, tool_use_id: block.id, content: fetchedText };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return { type: 'tool_result' as const, tool_use_id: block.id, content: fetched as any };
         }
         return { type: 'tool_result' as const, tool_use_id: block.id, content: '' };
       })
@@ -603,9 +619,21 @@ export async function classifyMenuAgentic(
     throw new Error('AI did not return a classification response. Please try again.');
   }
 
-  // Extract JSON — handles both fenced and bare JSON
-  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, responseText];
-  const jsonText = (jsonMatch[1]?.trim() ?? responseText).trim();
+  // Extract JSON from potentially mixed text (Claude may add preamble before/after JSON)
+  function extractJson(raw: string): string {
+    // 1. Fenced code block
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenced?.[1]) return fenced[1].trim();
+    // 2. JSON object containing the expected "sections" key (handles preamble text)
+    const withSections = raw.match(/(\{[\s\S]*?"sections"[\s\S]*\})/);
+    if (withSections?.[1]) return withSections[1].trim();
+    // 3. Any JSON object
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) return raw.slice(firstBrace, lastBrace + 1).trim();
+    return raw.trim();
+  }
+  const jsonText = extractJson(responseText);
 
   let menu: ClassifiedMenu;
   try {
