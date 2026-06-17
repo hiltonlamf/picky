@@ -442,7 +442,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuUrl: null,
       urlType,
       warning:
-        "Social media pages can't be read automatically. Please paste the restaurant's own website URL instead.",
+        "Oops, we couldn't read the menu from this social media page. Would you mind sharing the restaurant's website URL directly?",
     };
   }
 
@@ -469,7 +469,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuUrl: null,
       urlType,
       warning:
-        "We found your Google Maps link but couldn't navigate to the restaurant's website automatically. Please paste their direct website URL instead.",
+        "Oops, we couldn't find the menu from this Google Maps link. Would you mind sharing the restaurant's website URL directly?",
     };
   }
 
@@ -542,7 +542,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       };
     }
     throw new Error(
-      "We couldn't read this page — it may require JavaScript to load. Try pasting the restaurant's direct menu URL (e.g. theirsite.com/menu)."
+      "Oops, we couldn't read this page — it may need JavaScript to load. Would you mind sharing the restaurant's direct menu URL (e.g. theirsite.com/menu)?"
     );
   }
 
