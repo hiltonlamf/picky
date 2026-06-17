@@ -294,13 +294,17 @@ const AGENTIC_SYSTEM_PROMPT = `You are a dietary classifier specializing in vege
 
 GOAL: Find the complete restaurant menu and classify every food dish.
 
-APPROACH — work through all provided content in order:
+APPROACH — work through these steps in order:
 1. Read any attached PDF documents first — they usually contain the full menu
 2. Read any attached menu images — extract all dish text visible in them
 3. Read the provided page text — look for dish listings within it
-4. If the content is empty, shows only navigation/about-us text, or you cannot identify any dishes, USE web_search to find the menu. Search for "[restaurant name] menu" or "[website url] menu"
-5. If the first search does not yield the menu, try additional searches with varied terms
-6. Never return zero dishes without first exhausting all provided content and attempting web_search
+4. USE web_search in any of these situations:
+   - No PDFs, images, or page text were provided (scraping was blocked)
+   - Content is clearly just navigation/about-us/contact text with no dishes
+   - You found fewer than 5 dishes and suspect there is more
+   - Search for "[restaurant name] menu", "[domain] menu pdf", or the restaurant URL directly
+5. Try at least two different search queries before giving up
+6. Never return zero dishes without first attempting web_search
 
 WHAT TO INCLUDE vs. EXCLUDE:
 - INCLUDE: all individual food dishes — starters, mains, sides, desserts, sharing plates, etc.
@@ -411,8 +415,15 @@ export async function classifyMenuAgentic(
   // Build context text
   const lines: string[] = [`Restaurant URL: ${url}`];
   if (content.title) lines.push(`Page title: ${content.title}`);
+  const hasContent =
+    (content.text && content.text.length > 50) ||
+    pdfBlocks.length > 0 ||
+    imageBlocks.length > 0;
   if (content.text && content.text.length > 50) {
     lines.push(`\nPage content:\n${content.text.slice(0, 25000)}`);
+  }
+  if (!hasContent) {
+    lines.push('\nNote: The website could not be scraped (blocked or JS-only). Use web_search to find this restaurant\'s menu.');
   }
   lines.push('\nClassify all food dishes from this restaurant. Return ONLY JSON.');
 

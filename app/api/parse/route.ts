@@ -129,28 +129,25 @@ export async function POST(request: NextRequest) {
           await resetRestaurantForReparse(restaurantId);
         }
 
-        // Step: Scrape
+        // Step: Scrape (best-effort — failures fall through to AI with web_search)
         send({ type: 'progress', step: 'Fetching the restaurant page...', stepNumber: 2 + stepBase, totalSteps });
-        let scrapeResult;
+        let scrapeResult: Awaited<ReturnType<typeof scrapeRestaurant>> | null = null;
         try {
           scrapeResult = await scrapeRestaurant(url);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Could not fetch this page';
-          await markRestaurantError(restaurantId, msg);
-          send({ type: 'error', error: msg });
-          return close();
+        } catch {
+          // Scrape failed (blocked site, JS-only, etc.) — Claude will use web_search
         }
 
-        // Step: AI analysis — Claude reads all content and uses web_search if needed
+        // Step: AI analysis — Claude reads all scraped content and uses web_search when needed
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 3 + stepBase, totalSteps });
         let menu;
         let aiUsage;
         try {
           const result = await classifyMenuAgentic(url, {
-            text: scrapeResult.menuText,
-            pdfUrls: scrapeResult.menuPdfUrls,
-            imageUrls: scrapeResult.menuImages,
-            title: scrapeResult.title,
+            text: scrapeResult?.menuText,
+            pdfUrls: scrapeResult?.menuPdfUrls,
+            imageUrls: scrapeResult?.menuImages,
+            title: scrapeResult?.title,
           });
           menu = result.menu;
           aiUsage = result.usage;
@@ -165,17 +162,17 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        // If restaurant name not detected by AI, fall back to scraped title
-        if (!menu.restaurantName && scrapeResult.title) {
-          menu.restaurantName = scrapeResult.title;
+        // Fallback restaurant name
+        if (!menu.restaurantName) {
+          menu.restaurantName = scrapeResult?.title || new URL(url).hostname;
         }
 
         // Step: Save
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 4 + stepBase, totalSteps });
         await saveClassifiedMenu(
           restaurantId,
-          scrapeResult.canonicalUrl,
-          scrapeResult.menuUrl,
+          scrapeResult?.canonicalUrl ?? url,
+          scrapeResult?.menuUrl ?? null,
           menu,
           aiUsage
         );
