@@ -107,11 +107,11 @@ export default function HeroSearch() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Restaurant name or website URL"
+            placeholder="Paste the restaurant website link"
             className="input-url pr-12 text-base"
             autoComplete="off"
             autoFocus
-            aria-label="Restaurant name or URL"
+            aria-label="Restaurant website link"
           />
           {input && (
             <button
@@ -134,9 +134,9 @@ export default function HeroSearch() {
       </div>
 
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
-        <span>✓ Restaurant names</span>
-        <span>✓ Website URLs</span>
-        <span>✓ Direct menu links</span>
+        <span>✓ Restaurant websites</span>
+        <span>✓ Menu pages</span>
+        <span>✓ PDF menus</span>
       </div>
     </form>
   );
