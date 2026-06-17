@@ -76,6 +76,55 @@ function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+// Domains that are never a restaurant's own website
+const NON_RESTAURANT_DOMAINS = [
+  'google.com', 'googleapis.com', 'goo.gl', 'googletagmanager.com',
+  'googleusercontent.com', 'googlevideo.com', 'doubleclick.net', 'ggpht.com',
+  'youtube.com', 'facebook.com', 'fb.com', 'instagram.com', 'twitter.com',
+  'x.com', 'linkedin.com', 'tiktok.com', 'pinterest.com', 'snapchat.com',
+  'apple.com', 'microsoft.com', 'amazon.com', 'cloudflare.com',
+  'schema.org', 'w3.org', 'openstreetmap.org', 'maps.app',
+  'yelp.com', 'tripadvisor.com', 'zomato.com', 'opentable.com', 'thefork.com',
+];
+
+const NON_RESTAURANT_EXTENSIONS = [
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
+  '.css', '.js', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.mp3',
+];
+
+function isRestaurantWebsite(candidate: string, additionalExclusions: string[] = []): boolean {
+  try {
+    const u = new URL(candidate);
+    const lower = candidate.toLowerCase();
+    if (!u.hostname.includes('.')) return false;
+    if ([...NON_RESTAURANT_DOMAINS, ...additionalExclusions].some(ex => lower.includes(ex))) return false;
+    const path = u.pathname.toLowerCase();
+    if (NON_RESTAURANT_EXTENSIONS.some(ext => path.endsWith(ext))) return false;
+    if (candidate.length > 300) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Scan raw HTML for URLs embedded in JSON string contexts (standard + escaped variants)
+function extractRestaurantUrlFromHtml(html: string, additionalExclusions: string[] = []): string | null {
+  const cap = html.slice(0, 2 * 1024 * 1024); // cap at 2 MB for performance
+  const patterns = [
+    /"(https?:\/\/[^"\\]{5,300})"/g,
+    /\\x22(https?:\/\/[^\\]{5,300})\\x22/g,
+    /\\u0022(https?:\/\/[^\\]{5,300})\\u0022/g,
+  ];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(cap)) !== null) {
+      if (isRestaurantWebsite(match[1], additionalExclusions)) return match[1];
+    }
+  }
+  return null;
+}
+
 function detectUrlType(url: string): ScrapeResult['urlType'] {
   const lower = url.toLowerCase();
   if (lower.endsWith('.pdf') || lower.includes('/pdf/') || lower.includes('menu.pdf')) return 'pdf';
@@ -223,17 +272,74 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    const websiteLink = $('a[href*="http"]').filter((_, el) => {
+    // Strategy 1: JSON-LD structured data (most reliable — designed for machine reading)
+    for (const el of $('script[type="application/ld+json"]').toArray()) {
+      try {
+        const data = JSON.parse($(el).html() ?? '');
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          if (typeof item?.url === 'string' && isRestaurantWebsite(item.url)) return item.url;
+          if (Array.isArray(item?.['@graph'])) {
+            for (const node of item['@graph']) {
+              if (typeof node?.url === 'string' && isRestaurantWebsite(node.url)) return node.url;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Strategy 2: Google Maps embeds place data (including website) as JSON in the page —
+    // scan the raw HTML for URLs in quoted/escaped string contexts
+    const extracted = extractRestaurantUrlFromHtml(html);
+    if (extracted) return extracted;
+
+    // Strategy 3: Fallback — anchor tag link extraction
+    const websiteLink = $('a[href]').filter((_, el) => {
       const href = $(el).attr('href') ?? '';
-      return (
-        !href.includes('google.com') &&
-        !href.includes('maps.app') &&
-        !href.includes('goo.gl') &&
-        href.startsWith('http')
-      );
+      return isRestaurantWebsite(href);
     }).first().attr('href');
 
     return websiteLink ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSocialMediaUrl(url: string): Promise<string | null> {
+  try {
+    const socialHostname = new URL(url).hostname.replace('www.', '');
+    const res = await fetchWithRetry(url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    // Strategy 1: JSON-LD structured data
+    for (const el of $('script[type="application/ld+json"]').toArray()) {
+      try {
+        const data = JSON.parse($(el).html() ?? '');
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          if (typeof item?.url === 'string' && isRestaurantWebsite(item.url, [socialHostname])) return item.url;
+          if (Array.isArray(item?.['@graph'])) {
+            for (const node of item['@graph']) {
+              if (typeof node?.url === 'string' && isRestaurantWebsite(node.url, [socialHostname])) return node.url;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Strategy 2: Social platforms (Instagram, TikTok, Facebook) embed profile data as JSON —
+    // includes an external_url / website field we can find via regex
+    const extracted = extractRestaurantUrlFromHtml(html, [socialHostname]);
+    if (extracted) return extracted;
+
+    // Strategy 3: Anchor tags — platforms sometimes render the bio link statically
+    const externalLink = $('a[href]').filter((_, el) => {
+      const href = $(el).attr('href') ?? '';
+      return isRestaurantWebsite(href, [socialHostname]);
+    }).first().attr('href');
+
+    return externalLink ?? null;
   } catch {
     return null;
   }
@@ -314,6 +420,20 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   const urlType = detectUrlType(url);
 
   if (urlType === 'social') {
+    const websiteUrl = await resolveSocialMediaUrl(url);
+    if (websiteUrl) {
+      const result = await scrapeHtmlPage(websiteUrl);
+      return {
+        url,
+        canonicalUrl: websiteUrl,
+        title: result.title || 'Restaurant',
+        menuText: result.text,
+        menuUrl: result.menuUrl,
+        menuImages: result.menuImages,
+        menuPdfUrls: result.menuPdfUrls,
+        urlType: 'html',
+      };
+    }
     return {
       url,
       canonicalUrl: url,
