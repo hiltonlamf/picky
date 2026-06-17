@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
           (scrapeResult.menuImages && scrapeResult.menuImages.length > 0);
 
         if (!hasAnyContent) {
-          const msg = scrapeResult.warning ?? "Oops, we couldn't find a menu at this link. Would you mind sharing the restaurant's website URL directly?";
+          const msg = scrapeResult.warning ?? "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.";
           await markRestaurantError(restaurantId, msg);
           send({ type: 'error', error: msg });
           return close();
@@ -145,12 +145,12 @@ export async function POST(request: NextRequest) {
               } else {
                 // Use whichever gave more items
                 const best = pdfResult && (!imgResult || countFoodItems(pdfResult.menu) >= countFoodItems(imgResult?.menu ?? { sections: [] })) ? pdfResult : imgResult;
-                if (!best) throw new Error("Oops, we couldn't read the menu on this page — it may be behind a login. Would you mind sharing the direct menu URL?");
+                if (!best) throw new Error("Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.");
                 menu = best.menu;
                 aiUsage = best.usage;
               }
             } else {
-              if (!pdfResult) throw new Error("Oops, we couldn't read this PDF menu — it may be password-protected or corrupted.");
+              if (!pdfResult) throw new Error("Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.");
               menu = pdfResult.menu;
               aiUsage = pdfResult.usage;
             }
@@ -158,7 +158,7 @@ export async function POST(request: NextRequest) {
             // Primary: image vision
             send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: 3, totalSteps: 4 });
             const imageResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
-            if (!imageResult) throw new Error("Oops, we couldn't extract dishes from the images on this page. Would you mind sharing the direct menu URL?");
+            if (!imageResult) throw new Error("Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.");
             menu = imageResult.menu;
             aiUsage = imageResult.usage;
           } else if (hasText) {
@@ -186,12 +186,12 @@ export async function POST(request: NextRequest) {
               }
             }
           } else {
-            throw new Error("Oops, we couldn't find a menu at this link. Would you mind sharing the restaurant's website URL directly?");
+            throw new Error("Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.");
           }
 
           // Final guard: if we still have very few items, it's likely a parsing failure
           if (countFoodItems(menu) < MIN_FOOD_ITEMS && countFoodItems(menu) === 0) {
-            throw new Error("Oops, we couldn't find any dishes on this page. Would you mind sharing the restaurant's direct menu URL?");
+            throw new Error("Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';

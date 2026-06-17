@@ -119,22 +119,66 @@ function isRestaurantWebsite(candidate: string, additionalExclusions: string[] =
   }
 }
 
-// Scan raw HTML for URLs embedded in JSON string contexts (standard + escaped variants)
+// Score a URL by how likely it is to be a restaurant's own homepage.
+// Higher = better. Prefer root paths, no query strings, shorter total length.
+function scoreAsRestaurantHomepage(url: string): number {
+  try {
+    const u = new URL(url);
+    let score = 100;
+    const pathDepth = u.pathname.split('/').filter(Boolean).length;
+    score -= pathDepth * 20;          // deep paths → probably not the homepage
+    if (u.search) score -= 40;        // query strings → tracking / booking links
+    if (u.hash) score -= 10;
+    score -= Math.floor(url.length / 15); // shorter URL → more likely a root domain
+    return score;
+  } catch {
+    return -999;
+  }
+}
+
+// Scan raw HTML for URLs embedded in JSON string contexts (standard + escaped variants).
+// Collects all candidates, then returns the one most likely to be the restaurant homepage.
 function extractRestaurantUrlFromHtml(html: string, additionalExclusions: string[] = []): string | null {
   const cap = html.slice(0, 2 * 1024 * 1024); // cap at 2 MB for performance
+
+  // Priority pass: look for patterns specific to Google Maps website fields
+  const mapsWebsitePatterns = [
+    /website_uri[^"]{0,20}"(https?:\/\/[^"\\]+)"/,
+    /"website"\s*:\s*"(https?:\/\/[^"\\]+)"/,
+    /\["(https?:\/\/[^"\\]+)",null,null,null/,
+  ];
+  for (const p of mapsWebsitePatterns) {
+    const m = cap.match(p);
+    if (m?.[1] && isRestaurantWebsite(m[1], additionalExclusions)) {
+      console.log(`[maps] found via targeted pattern: ${m[1]}`);
+      return m[1];
+    }
+  }
+
+  // General pass: collect all candidate URLs then pick the best-scoring one
   const patterns = [
     /"(https?:\/\/[^"\\]{5,300})"/g,
     /\\x22(https?:\/\/[^\\]{5,300})\\x22/g,
     /\\u0022(https?:\/\/[^\\]{5,300})\\u0022/g,
   ];
+  const candidates: string[] = [];
+  const seen = new Set<string>();
   for (const pattern of patterns) {
     let match: RegExpExecArray | null;
     pattern.lastIndex = 0;
     while ((match = pattern.exec(cap)) !== null) {
-      if (isRestaurantWebsite(match[1], additionalExclusions)) return match[1];
+      const u = match[1];
+      if (!seen.has(u) && isRestaurantWebsite(u, additionalExclusions)) {
+        seen.add(u);
+        candidates.push(u);
+        if (candidates.length >= 60) break; // enough to find the homepage
+      }
     }
+    if (candidates.length >= 60) break;
   }
-  return null;
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => scoreAsRestaurantHomepage(b) - scoreAsRestaurantHomepage(a));
+  return candidates[0];
 }
 
 function detectUrlType(url: string): ScrapeResult['urlType'] {
@@ -467,7 +511,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuUrl: null,
       urlType,
       warning:
-        "Oops, we couldn't read the menu from this social media page. Would you mind sharing the restaurant's website URL directly?",
+        "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.",
     };
   }
 
@@ -494,7 +538,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuUrl: null,
       urlType,
       warning:
-        "Oops, we couldn't find the menu from this Google Maps link. Would you mind sharing the restaurant's website URL directly?",
+        "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.",
     };
   }
 
@@ -567,7 +611,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       };
     }
     throw new Error(
-      "Oops, we couldn't read this page — it may need JavaScript to load. Would you mind sharing the restaurant's direct menu URL (e.g. theirsite.com/menu)?"
+      "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link."
     );
   }
 
