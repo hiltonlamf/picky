@@ -812,6 +812,11 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         urlType: 'html',
       };
     }
+    const platform = url.includes('instagram') ? 'Instagram'
+      : url.includes('facebook') ? 'Facebook'
+      : url.includes('tiktok') ? 'TikTok'
+      : url.includes('twitter') || url.includes('x.com') ? 'Twitter/X'
+      : 'that social page';
     return {
       url,
       canonicalUrl: url,
@@ -819,8 +824,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuText: '',
       menuUrl: null,
       urlType,
-      warning:
-        "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.",
+      warning: `We opened the ${platform} page but couldn't find a link to the restaurant's website. Try pasting their website URL directly.`,
     };
   }
 
@@ -846,8 +850,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       menuText: '',
       menuUrl: null,
       urlType,
-      warning:
-        "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link.",
+      warning: "We found the restaurant on Google Maps but couldn't track down their website. Try pasting the restaurant's website URL directly.",
     };
   }
 
@@ -920,7 +923,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
       };
     }
     throw new Error(
-      "Oops, it didn't work. We couldn't find the menu. Please directly paste the restaurant link."
+      "We opened the page but couldn't find any readable content — the site may be JavaScript-only or require a login. Try pasting a direct link to the menu page."
     );
   }
 
