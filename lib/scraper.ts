@@ -346,25 +346,55 @@ async function fetchWithRetry(
 // not the EU cookie-consent interstitial (which contains no restaurant data).
 const GOOGLE_CONSENT_COOKIE = 'CONSENT=YES+cb; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlfMjAyNDA';
 
-// Extract the place/business name from a Google Maps URL.
-//   .../maps/place/Uno+Mas/@53.33,-6.26,17z/...  →  "Uno Mas"
-// Also handles consent-screen URLs that wrap the real URL in a `continue=` param.
+// Extract the place/business name from a Google Maps URL — tries multiple formats.
+//   /maps/place/Uno+Mas/@53.33,-6.26,17z/...  →  "Uno Mas"
+//   /maps/search/?api=1&query=Uno+Mas&...     →  "Uno Mas"
+//   consent.google.com/...?continue=<enc url> →  decoded + re-parsed
 function extractPlaceNameFromMapsUrl(mapsUrl: string): string | null {
   try {
     let target = mapsUrl;
-    // Consent screen: consent.google.com/...?continue=<encoded real url>
     const u = new URL(mapsUrl);
+    // Consent-screen wrapper — unwrap the real URL
     const cont = u.searchParams.get('continue');
     if (cont) target = decodeURIComponent(cont);
 
-    const m = target.match(/\/maps\/place\/([^/@]+)/);
-    if (!m?.[1]) return null;
-    // "Uno+Mas" / "Uno%20Mas" → "Uno Mas"
-    const name = decodeURIComponent(m[1].replace(/\+/g, ' ')).trim();
-    return name.length > 1 ? name : null;
-  } catch {
-    return null;
+    // Format 1: /maps/place/Uno+Mas/@...
+    const placeMatch = target.match(/\/maps\/place\/([^/@?#]+)/);
+    if (placeMatch?.[1]) {
+      const name = decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')).trim();
+      if (name.length > 1) return name;
+    }
+
+    // Format 2: ?q=Uno+Mas or ?query=Uno+Mas (search-style Maps URLs)
+    const tu = new URL(target);
+    for (const param of ['q', 'query', 'search']) {
+      const val = tu.searchParams.get(param);
+      if (val && val.length > 1) return decodeURIComponent(val.replace(/\+/g, ' ')).trim();
+    }
+  } catch {}
+  return null;
+}
+
+// Extract restaurant name from the HTML of any Google page (works even on
+// consent walls or JavaScript-redirect shells).
+function extractPlaceNameFromHtml(html: string): string | null {
+  const $ = cheerio.load(html);
+  const sources = [
+    $('meta[property="og:title"]').attr('content'),
+    $('meta[name="title"]').attr('content'),
+    $('title').text(),
+    $('h1').first().text(),
+  ];
+  for (const raw of sources) {
+    if (!raw) continue;
+    // "Uno Mas - Google Maps" / "Uno Mas | Maps" → "Uno Mas"
+    const clean = raw
+      .replace(/\s*[-|–]\s*(Google Maps?|Maps|Google)\s*$/i, '')
+      .replace(/\s*•.*$/, '')
+      .trim();
+    if (clean.length > 1 && clean.length < 80) return clean;
   }
+  return null;
 }
 
 // Extract @lat,lng from a Google Maps URL if present.
@@ -382,27 +412,46 @@ function extractCoordsFromMapsUrl(mapsUrl: string): { lat: string; lon: string }
   }
 }
 
-// Reverse-geocode coordinates to a town/city using OpenStreetMap's free Nominatim
-// service. Used only to disambiguate the web search; failure is non-fatal.
+// Reverse-geocode coordinates to a town/city using OpenStreetMap Nominatim.
 async function reverseGeocodeCity(lat: string, lon: string): Promise<string | null> {
   try {
-    const res = await fetchWithRetry(
+    const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=14`,
-      1,
-      { Accept: 'application/json' }
+      { headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' }, signal: AbortSignal.timeout(6000) }
     );
     const data = await res.json();
     const a = data?.address ?? {};
-    const city = a.city || a.town || a.village || a.suburb || a.county || a.state;
-    const country = a.country;
-    return [city, country].filter(Boolean).join(' ') || null;
+    const city = a.city || a.town || a.village || a.suburb || a.county;
+    return city || null;
   } catch {
     return null;
   }
 }
 
-// Pull restaurant-website candidates out of a DuckDuckGo results page (works for
-// both the /html/ and /lite/ endpoints — both wrap links as //duckduckgo.com/l/?uddg=).
+// Look up a restaurant in OpenStreetMap via Nominatim — returns website URL if present.
+// OSM extratags include `website` for many restaurants in Ireland/UK.
+async function nominatimLookup(name: string, city: string | null): Promise<string | null> {
+  try {
+    const q = encodeURIComponent(city ? `${name} ${city}` : name);
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=5&extratags=1`,
+      { headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' }, signal: AbortSignal.timeout(7000) }
+    );
+    const results = await res.json();
+    for (const r of results ?? []) {
+      const site = r?.extratags?.website ?? r?.extratags?.['contact:website'];
+      if (site && isRestaurantWebsite(site)) {
+        console.log(`[osm] found website for "${name}": ${site}`);
+        return site.startsWith('http') ? site : `https://${site}`;
+      }
+    }
+  } catch (err) {
+    console.log(`[osm] nominatim failed: ${err}`);
+  }
+  return null;
+}
+
+// Pull restaurant-website candidates out of a DuckDuckGo results page.
 function parseDuckDuckGoResults(html: string, exclusions: string[]): string[] {
   const $ = cheerio.load(html);
   const candidates: string[] = [];
@@ -417,28 +466,28 @@ function parseDuckDuckGoResults(html: string, exclusions: string[]): string[] {
   return candidates;
 }
 
-// Search the web (via DuckDuckGo's no-JS endpoints, which serve real HTML to
-// servers unlike Google) and return the first result that looks like a
-// restaurant's own website.
-async function searchWebForRestaurantWebsite(
-  query: string,
-  exclusions: string[] = []
-): Promise<string | null> {
+// Search DuckDuckGo (scraper-friendly) for the restaurant's own site.
+// Uses short timeouts — called only as fallback after OSM lookup fails.
+async function searchDuckDuckGo(query: string, exclusions: string[] = []): Promise<string | null> {
   const endpoints = [
     `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
     `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
   ];
   for (const endpoint of endpoints) {
     try {
-      const res = await fetchWithRetry(endpoint, 1);
+      const res = await fetch(endpoint, {
+        headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html' },
+        signal: AbortSignal.timeout(8000),
+        redirect: 'follow',
+      });
       const html = await res.text();
       const candidates = parseDuckDuckGoResults(html, exclusions);
       if (candidates.length === 0) continue;
       candidates.sort((a, b) => scoreAsRestaurantHomepage(b) - scoreAsRestaurantHomepage(a));
-      console.log(`[search] query="${query}" → ${candidates.slice(0, 3).join(', ')}`);
+      console.log(`[ddg] query="${query}" → ${candidates.slice(0, 3).join(', ')}`);
       return candidates[0];
     } catch (err) {
-      console.log(`[search] ${endpoint} failed: ${err}`);
+      console.log(`[ddg] ${endpoint} failed: ${err}`);
     }
   }
   return null;
@@ -520,10 +569,14 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     }
   }
 
-  // Step C: robust fallback — Google Maps embeds the business NAME in the URL
-  // path. Use it to search the web (via DuckDuckGo, which serves real HTML) for
-  // the restaurant's own website. This sidesteps Google's bot defences entirely.
-  const placeName = extractPlaceNameFromMapsUrl(finalUrl) || extractPlaceNameFromMapsUrl(url);
+  // Step C: robust fallback — extract the business name from the URL path
+  // (or HTML title if the URL lacks it) and look it up via OSM Nominatim first,
+  // then DuckDuckGo. This sidesteps Google's bot defences entirely.
+  const placeName =
+    extractPlaceNameFromMapsUrl(finalUrl) ||
+    extractPlaceNameFromMapsUrl(url) ||
+    (html ? extractPlaceNameFromHtml(html) : null);
+
   if (placeName) {
     console.log(`[maps] extracted place name: "${placeName}"`);
 
@@ -531,15 +584,24 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     let cityHint: string | null = null;
     const coords = extractCoordsFromMapsUrl(finalUrl) || extractCoordsFromMapsUrl(url);
     if (coords) cityHint = await reverseGeocodeCity(coords.lat, coords.lon);
+    if (cityHint) console.log(`[maps] city hint: "${cityHint}"`);
 
+    // C1: OpenStreetMap Nominatim — free, structured, bot-friendly
+    const osmResult = await nominatimLookup(placeName, cityHint);
+    if (osmResult) {
+      console.log(`[maps] resolved via OSM: ${osmResult}`);
+      return osmResult;
+    }
+
+    // C2: DuckDuckGo web search fallback
     const queries = cityHint
       ? [`${placeName} restaurant ${cityHint}`, `${placeName} restaurant`, placeName]
       : [`${placeName} restaurant`, placeName];
 
     for (const q of queries) {
-      const found = await searchWebForRestaurantWebsite(q);
+      const found = await searchDuckDuckGo(q);
       if (found) {
-        console.log(`[maps] resolved via web search: ${found}`);
+        console.log(`[maps] resolved via DDG: ${found}`);
         return found;
       }
     }
@@ -607,7 +669,7 @@ async function resolveSocialMediaUrl(url: string): Promise<string | null> {
 
   if (searchTerm) {
     console.log(`[social] web-search fallback term: "${searchTerm}"`);
-    const found = await searchWebForRestaurantWebsite(`${searchTerm} restaurant`, [socialHostname]);
+    const found = await searchDuckDuckGo(`${searchTerm} restaurant`, [socialHostname]);
     if (found) return found;
   }
 
