@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { scrapeRestaurant, resolveRestaurantNameToUrl } from '@/lib/scraper';
-import { classifyMenuWithAI, classifyMenuFromImages, classifyMenuFromPdf, countFoodItems } from '@/lib/ai';
+import { classifyMenuAgentic, countFoodItems } from '@/lib/ai';
 import {
   findExistingRestaurant,
   resetRestaurantForReparse,
@@ -141,93 +141,22 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        const hasAnyContent =
-          (scrapeResult.menuText && scrapeResult.menuText.length >= 100) ||
-          (scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0) ||
-          (scrapeResult.menuImages && scrapeResult.menuImages.length > 0);
-
-        if (!hasAnyContent) {
-          const msg = scrapeResult.warning ?? "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
-          await markRestaurantError(restaurantId, msg);
-          send({ type: 'error', error: msg });
-          return close();
-        }
-
-        // Step: AI classification — text → PDF → image fallback chain
+        // Step: AI analysis — Claude reads all content and uses web_search if needed
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 3 + stepBase, totalSteps });
         let menu;
         let aiUsage;
         try {
-          const hasText = scrapeResult.menuText && scrapeResult.menuText.length >= 100;
-          const hasPdfs = scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0;
-          const hasImages = scrapeResult.menuImages && scrapeResult.menuImages.length > 0;
-          const MIN_FOOD_ITEMS = 7;
+          const result = await classifyMenuAgentic(url, {
+            text: scrapeResult.menuText,
+            pdfUrls: scrapeResult.menuPdfUrls,
+            imageUrls: scrapeResult.menuImages,
+            title: scrapeResult.title,
+          });
+          menu = result.menu;
+          aiUsage = result.usage;
 
-          const aiStep = 3 + stepBase;
-          if (hasPdfs && !hasText) {
-            // Primary: PDF document
-            send({ type: 'progress', step: 'Reading menu PDF with AI...', stepNumber: aiStep, totalSteps });
-            const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
-            if (pdfResult && countFoodItems(pdfResult.menu) >= MIN_FOOD_ITEMS) {
-              menu = pdfResult.menu;
-              aiUsage = pdfResult.usage;
-            } else if (hasImages) {
-              // Fallback to images if PDF gave too few items
-              send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
-              const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
-              if (imgResult && countFoodItems(imgResult.menu) >= MIN_FOOD_ITEMS) {
-                menu = imgResult.menu;
-                aiUsage = imgResult.usage;
-              } else {
-                // Use whichever gave more items
-                const best = pdfResult && (!imgResult || countFoodItems(pdfResult.menu) >= countFoodItems(imgResult?.menu ?? { sections: [] })) ? pdfResult : imgResult;
-                if (!best) throw new Error("We found a menu PDF and some images but couldn't extract dishes from either. Try pasting the menu page URL instead.");
-                menu = best.menu;
-                aiUsage = best.usage;
-              }
-            } else {
-              if (!pdfResult) throw new Error("We found a menu PDF but couldn't extract the dishes from it. Try pasting the main menu page URL instead.");
-              menu = pdfResult.menu;
-              aiUsage = pdfResult.usage;
-            }
-          } else if (!hasText && hasImages) {
-            // Primary: image vision
-            send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
-            const imageResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
-            if (!imageResult) throw new Error("We found menu images but couldn't read them clearly. Try pasting a page where the menu is written out as text.");
-            menu = imageResult.menu;
-            aiUsage = imageResult.usage;
-          } else if (hasText) {
-            // Primary: HTML text
-            const result = await classifyMenuWithAI(scrapeResult.menuText, scrapeResult.title);
-            menu = result.menu;
-            aiUsage = result.usage;
-
-            // If text gave too few items, try PDF or image fallback
-            if (countFoodItems(menu) < MIN_FOOD_ITEMS) {
-              if (hasPdfs) {
-                send({ type: 'progress', step: 'Checking menu PDF for more dishes...', stepNumber: aiStep, totalSteps });
-                const pdfResult = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], scrapeResult.title);
-                if (pdfResult && countFoodItems(pdfResult.menu) > countFoodItems(menu)) {
-                  menu = pdfResult.menu;
-                  aiUsage = pdfResult.usage;
-                }
-              } else if (hasImages && countFoodItems(menu) < MIN_FOOD_ITEMS) {
-                send({ type: 'progress', step: 'Reading menu image with AI vision...', stepNumber: aiStep, totalSteps });
-                const imgResult = await classifyMenuFromImages(scrapeResult.menuImages!, scrapeResult.title);
-                if (imgResult && countFoodItems(imgResult.menu) > countFoodItems(menu)) {
-                  menu = imgResult.menu;
-                  aiUsage = imgResult.usage;
-                }
-              }
-            }
-          } else {
-            throw new Error("We loaded the page but couldn't find any menu content — no text, PDF, or images. Try pasting a direct link to the menu page.");
-          }
-
-          // Final guard: if we still have very few items, it's likely a parsing failure
-          if (countFoodItems(menu) < MIN_FOOD_ITEMS && countFoodItems(menu) === 0) {
-            throw new Error("We couldn't find any dishes listed on this page — it's possible the restaurant doesn't have their menu online. If you spotted a menu link we missed, paste it directly and we'll try again.");
+          if (countFoodItems(menu) === 0) {
+            throw new Error("We couldn't find any dishes for this restaurant. If the menu is on a separate page, try pasting that link directly.");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
