@@ -359,17 +359,20 @@ const AGENTIC_SYSTEM_PROMPT = `You are a dietary classifier specializing in vege
 
 GOAL: Find the complete restaurant menu and classify every food dish.
 
+TOOLS:
+- web_search: search the web for this restaurant's menu
+- fetch_url: fetch the full text content of a specific URL
+
 APPROACH — work through these steps in order:
-1. Read any attached PDF documents first — they usually contain the full menu
-2. Read any attached menu images — extract all dish text visible in them
-3. Read the provided page text — look for dish listings within it
-4. USE web_search in any of these situations:
-   - No PDFs, images, or page text were provided (scraping was blocked)
-   - Content is clearly just navigation/about-us/contact text with no dishes
-   - You found fewer than 5 dishes and suspect there is more
-   - Search for "[restaurant name] menu", "[domain] menu pdf", or the restaurant URL directly
-5. Try at least two different search queries before giving up
-6. Never return zero dishes without first attempting web_search
+1. Read any attached PDF documents — they usually contain the full menu
+2. Read any attached menu images — extract all dish text visible
+3. Read the provided page text — look for dish listings
+4. If content is missing, minimal, or clearly not a menu (nav/about/contact), use web_search:
+   - Search "[restaurant name] menu" or "[domain] menu"
+   - When you find a specific menu page URL in results, use fetch_url to get its full content
+   - Try fetch_url on the restaurant's own domain first (e.g. camdenkitchen.ie/a-la-carte-menu)
+5. If the first search is insufficient, try different queries
+6. Never return zero dishes without trying web_search + fetch_url
 
 WHAT TO INCLUDE vs. EXCLUDE:
 - INCLUDE: all individual food dishes — starters, mains, sides, desserts, sharing plates, etc.
@@ -444,11 +447,50 @@ async function downloadPdfAsDocumentBlock(url: string): Promise<unknown | null> 
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const FETCH_URL_TOOL = {
+  name: 'fetch_url',
+  description:
+    'Fetches the text content of a URL. Use this to read a specific restaurant menu page after finding its URL via web_search.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      url: { type: 'string', description: 'Full URL to fetch (https://)' },
+    },
+    required: ['url'],
+  },
+};
+
+async function fetchUrlContent(targetUrl: string): Promise<string> {
+  try {
+    const res = await fetch(targetUrl, {
+      headers: { 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(15000),
+      redirect: 'follow',
+    });
+    if (!res.ok) return `HTTP ${res.status} fetching ${targetUrl}`;
+    const html = await res.text();
+    // Strip tags to get readable text
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return text.slice(0, 20000) || 'No text content found.';
+  } catch (err) {
+    return `Failed to fetch ${targetUrl}: ${err instanceof Error ? err.message : 'unknown error'}`;
+  }
+}
+
 /**
- * Agentic classification: sends all available content (PDFs, images, text) to Claude
- * with web_search enabled. Claude decides how to find and classify the menu — no
- * hardcoded fallback chain. Works for text-based menus, PDF menus, image menus,
- * and sites with no online menu (Claude searches the web).
+ * Agentic classification with a full tool loop.
+ * Claude has two tools: web_search (server-side, finds URLs) and fetch_url
+ * (client-side, retrieves full page content). This handles blocked scrapers,
+ * PDF menus, image menus, and any website structure without hardcoded logic.
  */
 export async function classifyMenuAgentic(
   url: string,
@@ -488,7 +530,9 @@ export async function classifyMenuAgentic(
     lines.push(`\nPage content:\n${content.text.slice(0, 25000)}`);
   }
   if (!hasContent) {
-    lines.push('\nNote: The website could not be scraped (blocked or JS-only). Use web_search to find this restaurant\'s menu.');
+    lines.push(
+      "\nNote: The website could not be scraped (blocked or JS-only). Use web_search then fetch_url to find and read this restaurant's menu."
+    );
   }
   lines.push('\nClassify all food dishes from this restaurant. Return ONLY JSON.');
 
@@ -500,23 +544,59 @@ export async function classifyMenuAgentic(
   ];
 
   const model = 'claude-sonnet-4-6';
-  // web_search_20260209 is server-side: Anthropic runs the search transparently
-  // within a single messages.create() call — no client-side tool loop required.
-  const msg = await anthropic.messages.create({
-    model,
-    max_tokens: 8192,
-    system: AGENTIC_SYSTEM_PROMPT,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tools: [{ type: 'web_search_20260209', name: 'web_search' } as any],
-    messages: [{ role: 'user', content: userContent }],
-  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools: any[] = [
+    { type: 'web_search_20260209', name: 'web_search' },
+    FETCH_URL_TOOL,
+  ];
 
-  const totalIn = msg.usage.input_tokens;
-  const totalOut = msg.usage.output_tokens;
-
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messages: any[] = [{ role: 'user', content: userContent }];
+  let totalIn = 0;
+  let totalOut = 0;
   let responseText = '';
-  for (const block of msg.content) {
-    if (block.type === 'text') responseText += block.text;
+
+  // Agentic loop — up to 8 turns to handle web_search + fetch_url rounds
+  for (let turn = 0; turn < 8; turn++) {
+    const msg = await anthropic.messages.create({
+      model,
+      max_tokens: 8192,
+      system: AGENTIC_SYSTEM_PROMPT,
+      tools,
+      messages,
+    });
+
+    totalIn += msg.usage.input_tokens;
+    totalOut += msg.usage.output_tokens;
+
+    for (const block of msg.content) {
+      if (block.type === 'text') responseText += block.text;
+    }
+
+    if (msg.stop_reason !== 'tool_use') break;
+
+    // Collect tool calls — web_search is server-side (never appears as tool_use);
+    // fetch_url is client-side and needs us to execute it.
+    const toolUseBlocks = msg.content.filter(
+      (b: { type: string }) => b.type === 'tool_use'
+    ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>;
+
+    messages.push({ role: 'assistant', content: msg.content });
+
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(async (block) => {
+        if (block.name === 'fetch_url') {
+          const input = block.input as { url?: string };
+          const fetchedText = input.url
+            ? await fetchUrlContent(input.url)
+            : 'No URL provided.';
+          return { type: 'tool_result' as const, tool_use_id: block.id, content: fetchedText };
+        }
+        return { type: 'tool_result' as const, tool_use_id: block.id, content: '' };
+      })
+    );
+
+    messages.push({ role: 'user', content: toolResults });
   }
 
   if (!responseText.trim()) {
