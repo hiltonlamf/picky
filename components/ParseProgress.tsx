@@ -6,17 +6,28 @@ interface Step {
 
 interface Props {
   currentStep: Step | null;
-  completedSteps: string[];
   error: string | null;
 }
 
-export default function ParseProgress({ currentStep, completedSteps, error }: Props) {
-  const steps = [
-    'Checking our database...',
-    'Fetching the restaurant page...',
-    'Analysing dishes with AI...',
-    'Saving your results...',
-  ];
+const STEPS_4 = [
+  'Checking our database...',
+  'Fetching the restaurant page...',
+  'Analysing dishes with AI...',
+  'Saving your results...',
+];
+
+const STEPS_5 = [
+  'Finding restaurant website...',
+  'Checking our database...',
+  'Fetching the restaurant page...',
+  'Analysing dishes with AI...',
+  'Saving your results...',
+];
+
+export default function ParseProgress({ currentStep, error }: Props) {
+  const totalSteps = currentStep?.totalSteps ?? 4;
+  const steps = totalSteps >= 5 ? STEPS_5 : STEPS_4;
+  const currentStepNumber = currentStep?.stepNumber ?? 0;
 
   return (
     <div className="card p-6 max-w-md w-full">
@@ -38,10 +49,9 @@ export default function ParseProgress({ currentStep, completedSteps, error }: Pr
       ) : (
         <ol className="space-y-3">
           {steps.map((step, i) => {
-            const stepNumber = i + 1;
-            const isDone = completedSteps.includes(step);
-            const isActive = currentStep?.step === step;
-            const isPending = !isDone && !isActive;
+            const stepNum = i + 1;
+            const isDone = stepNum < currentStepNumber;
+            const isActive = stepNum === currentStepNumber;
 
             return (
               <li key={step} className="flex items-center gap-3">
@@ -54,7 +64,7 @@ export default function ParseProgress({ currentStep, completedSteps, error }: Pr
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
-                  {isDone ? '✓' : stepNumber}
+                  {isDone ? '✓' : stepNum}
                 </div>
                 <span
                   className={`text-sm transition-colors duration-300 ${

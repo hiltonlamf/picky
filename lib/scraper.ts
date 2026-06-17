@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import Anthropic from '@anthropic-ai/sdk';
+import { discoverMenuUrls } from './ai';
 
 export interface ScrapeResult {
   url: string;
@@ -16,6 +17,12 @@ export interface ScrapeResult {
 const MENU_LINK_KEYWORDS = [
   'menu', 'food', 'eat', 'dishes', 'cuisine', 'carte',
   'speisekarte', 'kaart', 'menukaart',
+  // wine bars / drink-led venues
+  'wine', 'drinks', 'cocktail', 'list',
+  // meal occasions
+  'lunch', 'dinner', 'brunch', 'breakfast', 'supper',
+  // dish types
+  'starter', 'snack', 'nibble', 'tapas', 'sharing', 'dessert',
 ];
 
 const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
@@ -256,15 +263,12 @@ function findMenuLinks(
     if (resolvedHref === baseUrl) return;
 
     if (isPdfUrl(resolvedHref)) {
-      let score = 0;
+      let score = 1; // any PDF on a restaurant site is worth trying
       for (const keyword of MENU_LINK_KEYWORDS) {
         if (text.includes(keyword)) score += 2;
         if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
       }
-      // Any PDF linked from a menu keyword anchor is a good candidate
-      if (score > 0 || text.includes('download') || text.includes('pdf')) {
-        pdfCandidates.push({ url: resolvedHref, score: score || 1 });
-      }
+      pdfCandidates.push({ url: resolvedHref, score });
       return;
     }
 
@@ -277,6 +281,23 @@ function findMenuLinks(
     }
     if (score > 0) htmlCandidates.push({ url: resolvedHref, score });
   });
+
+  // Also catch PDFs embedded via <embed src>, <iframe src>, <object data>
+  // (common on Squarespace, WordPress PDF blocks — no <a href> wrapper)
+  const embedSelectors: Array<{ sel: string; attr: string }> = [
+    { sel: 'embed[src]',  attr: 'src'  },
+    { sel: 'iframe[src]', attr: 'src'  },
+    { sel: 'object[data]',attr: 'data' },
+  ];
+  for (const { sel, attr } of embedSelectors) {
+    $(sel).each((_, el) => {
+      const src = $(el).attr(attr) ?? $(el).attr('data-src') ?? '';
+      const resolved = resolveUrl(src, baseUrl);
+      if (resolved && isPdfUrl(resolved)) {
+        pdfCandidates.push({ url: resolved, score: 10 }); // directly embedded → highest priority
+      }
+    });
+  }
 
   const dedup = (candidates: Array<{ url: string; score: number }>, limit: number) => {
     candidates.sort((a, b) => b.score - a.score);
@@ -492,6 +513,42 @@ async function searchDuckDuckGo(query: string, exclusions: string[] = []): Promi
     }
   }
   return null;
+}
+
+// Ask Claude (with live web search) for the restaurant's official website URL.
+// Falls back to training-data knowledge if the web search tool is unavailable.
+export async function resolveRestaurantNameToUrl(name: string): Promise<string | null> {
+  try {
+    const client = new Anthropic();
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: [{ type: 'web_search_20260209', name: 'web_search' } as any],
+      messages: [{
+        role: 'user',
+        content: `Find the official website URL for the restaurant: "${name}". Reply with only the URL (starting with https://) or "unknown" if you cannot find it with confidence. Do not invent URLs.`,
+      }],
+    });
+
+    for (const block of msg.content) {
+      if (block.type === 'text') {
+        const matches = block.text.match(/https?:\/\/[^\s"'<>\)\]]+/g) ?? [];
+        for (const candidate of matches) {
+          const clean = candidate.replace(/[.,;:!?]+$/, '');
+          if (isRestaurantWebsite(clean)) {
+            console.log(`[web-search] resolved "${name}" → ${clean}`);
+            return clean;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.log(`[web-search] tool failed, falling back to LLM: ${err}`);
+  }
+
+  // Fallback: Claude training-data knowledge
+  return resolveViaClaudeLLM(name, null);
 }
 
 // Ask Claude for the restaurant's official website URL.
@@ -753,13 +810,9 @@ async function scrapeHtmlPage(
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  // Find links and images BEFORE extractText
-  const { htmlLinks: menuLinks, pdfLinks } = depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
   const menuImages = findMenuImages($, finalUrl);
-
   const text = extractText($);
 
-  // "Menu | Uno Mas" → take last part if first is a generic section name
   const GENERIC_PAGE_WORDS = new Set([
     'menu', 'home', 'food', 'about', 'contact', 'welcome',
     'index', 'start', 'page', 'sample menu', 'our menu',
@@ -772,23 +825,60 @@ async function scrapeHtmlPage(
       : (titleParts[0] ?? '');
   if (!title) title = $('h1').first().text().trim();
 
-  if (looksLikeMenu(text) || depth > 0) {
-    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+  if (depth > 0) {
+    // Already on a sub-page — collect any PDFs directly linked here
+    const subPdfs: string[] = [];
+    $('a[href], embed[src], iframe[src], object[data]').each((_, el) => {
+      const src = $(el).attr('href') ?? $(el).attr('src') ?? $(el).attr('data') ?? '';
+      const resolved = resolveUrl(src, finalUrl);
+      if (resolved && isPdfUrl(resolved)) subPdfs.push(resolved);
+    });
+    return { text, menuUrl: url, finalUrl, title, menuImages, menuPdfUrls: subPdfs.filter((u, i, a) => a.indexOf(u) === i) };
   }
 
-  // Try menu sub-pages in order, return first that has meaningful content
-  for (const link of menuLinks) {
+  // depth === 0: LLM-driven discovery — collect all links and let Claude decide
+  const allLinks: Array<{ href: string; text: string }> = [];
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const linkText = $(el).text().trim();
+    const resolved = resolveUrl(href, finalUrl);
+    if (resolved && !EXCLUDED_EXTENSIONS.some((ext) => resolved.toLowerCase().endsWith(ext))) {
+      allLinks.push({ href: resolved, text: linkText });
+    }
+  });
+
+  const embedSrcs: string[] = [];
+  $('embed[src], iframe[src], object[data]').each((_, el) => {
+    const src = $(el).attr('src') ?? $(el).attr('data') ?? '';
+    const resolved = resolveUrl(src, finalUrl);
+    if (resolved) embedSrcs.push(resolved);
+  });
+
+  // Ask Claude which links lead to the menu (no keyword guessing)
+  const { pdfUrls, menuPageUrls } = await discoverMenuUrls(allLinks, embedSrcs, finalUrl, rawTitle);
+
+  if (looksLikeMenu(text)) {
+    return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfUrls };
+  }
+
+  // Follow identified menu sub-pages, return first with meaningful content
+  for (const link of menuPageUrls) {
     try {
       const menuRes = await scrapeHtmlPage(link, depth + 1);
-      if (menuRes.text.length >= 200) {
-        return { ...menuRes, menuUrl: link, title: menuRes.title || title, menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfLinks };
+      if (menuRes.text.length >= 200 || menuRes.menuPdfUrls.length > 0) {
+        return {
+          ...menuRes,
+          menuUrl: link,
+          title: menuRes.title || title,
+          menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfUrls,
+        };
       }
     } catch {
       // try next link
     }
   }
 
-  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfUrls };
 }
 
 export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {

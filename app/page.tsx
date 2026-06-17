@@ -4,7 +4,7 @@ import HeroSearch from '@/components/HeroSearch';
 export const metadata: Metadata = {
   title: 'Picky — Find your food, your way',
   description:
-    'Paste any restaurant link and instantly discover which dishes are vegetarian or vegan. Works with any restaurant website, Google Maps link, or menu URL.',
+    'Paste any restaurant website link. Picky reads the menu and tells you exactly which dishes are vegetarian or vegan.',
 };
 
 export default function HomePage() {
@@ -24,8 +24,8 @@ export default function HomePage() {
           </h1>
 
           <p className="text-lg text-gray-500 mb-8 max-w-lg mx-auto">
-            Paste any restaurant link. Picky reads the menu and tells you exactly which dishes
-            are vegetarian or vegan — including hidden ingredients AI might miss.
+            Paste the restaurant's website link. Picky reads the menu and tells you exactly which
+            dishes are vegetarian or vegan — including hidden ingredients AI might miss.
           </p>
 
           <div className="flex justify-center">
@@ -42,8 +42,8 @@ export default function HomePage() {
             {[
               {
                 emoji: '🔗',
-                title: 'Paste any link',
-                desc: 'Restaurant website, Google Maps, or a direct menu URL — Picky figures out the rest.',
+                title: 'Paste the link',
+                desc: 'Paste the restaurant\'s website — Picky finds the menu and figures out the rest.',
               },
               {
                 emoji: '🤖',
