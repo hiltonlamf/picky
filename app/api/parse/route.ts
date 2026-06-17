@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
           (scrapeResult.menuImages && scrapeResult.menuImages.length > 0);
 
         if (!hasAnyContent) {
-          const msg = scrapeResult.warning ?? "We opened the website but couldn't find any menu content on it. Try pasting a direct link to the menu page.";
+          const msg = scrapeResult.warning ?? "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantError(restaurantId, msg);
           send({ type: 'error', error: msg });
           return close();
@@ -200,7 +200,7 @@ export async function POST(request: NextRequest) {
 
           // Final guard: if we still have very few items, it's likely a parsing failure
           if (countFoodItems(menu) < MIN_FOOD_ITEMS && countFoodItems(menu) === 0) {
-            throw new Error("We read the page but couldn't spot any dishes on it. If there's a separate menu page, try pasting that link.");
+            throw new Error("We couldn't find any dishes listed on this page — it's possible the restaurant doesn't have their menu online. If you spotted a menu link we missed, paste it directly and we'll try again.");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
