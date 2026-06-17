@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface ScrapeResult {
   url: string;
@@ -493,6 +494,42 @@ async function searchDuckDuckGo(query: string, exclusions: string[] = []): Promi
   return null;
 }
 
+// Ask Claude for the restaurant's official website URL.
+// Claude's training data includes most restaurants — this is faster and more
+// reliable than scraping third-party services from a datacenter IP.
+async function resolveViaClaudeLLM(name: string, city: string | null): Promise<string | null> {
+  try {
+    const client = new Anthropic();
+    const where = city ? ` in ${city}` : '';
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: `What is the official website URL for the restaurant called "${name}"${where}? Reply with only the URL (starting with https://) or the word "unknown" if you are not confident. Never invent a URL.`,
+      }],
+    });
+    const text = (msg.content[0].type === 'text' ? msg.content[0].text : '').trim().split(/\s/)[0];
+    if (!text.startsWith('http')) return null;
+
+    // Verify the URL actually resolves before using it
+    const probe = await fetch(text, {
+      method: 'HEAD',
+      headers: { 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(6000),
+      redirect: 'follow',
+    });
+    if (probe.ok || (probe.status >= 200 && probe.status < 500)) {
+      console.log(`[llm] resolved "${name}" → ${text}`);
+      return text;
+    }
+    console.log(`[llm] probe failed (${probe.status}): ${text}`);
+  } catch (err) {
+    console.log(`[llm] failed: ${err}`);
+  }
+  return null;
+}
+
 async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
   let finalUrl = '';
   let html = '';
@@ -586,18 +623,24 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     if (coords) cityHint = await reverseGeocodeCity(coords.lat, coords.lon);
     if (cityHint) console.log(`[maps] city hint: "${cityHint}"`);
 
-    // C1: OpenStreetMap Nominatim — free, structured, bot-friendly
+    // C1: Ask Claude — it knows most restaurant websites from training data
+    const llmResult = await resolveViaClaudeLLM(placeName, cityHint);
+    if (llmResult) {
+      console.log(`[maps] resolved via LLM: ${llmResult}`);
+      return llmResult;
+    }
+
+    // C2: OpenStreetMap Nominatim structured lookup
     const osmResult = await nominatimLookup(placeName, cityHint);
     if (osmResult) {
       console.log(`[maps] resolved via OSM: ${osmResult}`);
       return osmResult;
     }
 
-    // C2: DuckDuckGo web search fallback
+    // C3: DuckDuckGo web search fallback
     const queries = cityHint
-      ? [`${placeName} restaurant ${cityHint}`, `${placeName} restaurant`, placeName]
-      : [`${placeName} restaurant`, placeName];
-
+      ? [`${placeName} restaurant ${cityHint}`, `${placeName} restaurant`]
+      : [`${placeName} restaurant`];
     for (const q of queries) {
       const found = await searchDuckDuckGo(q);
       if (found) {
@@ -668,7 +711,11 @@ async function resolveSocialMediaUrl(url: string): Promise<string | null> {
   const searchTerm = cleanTitle.length > 2 ? cleanTitle : handle;
 
   if (searchTerm) {
-    console.log(`[social] web-search fallback term: "${searchTerm}"`);
+    console.log(`[social] fallback term: "${searchTerm}"`);
+    // Try Claude first — it knows most restaurant websites
+    const llmResult = await resolveViaClaudeLLM(searchTerm, null);
+    if (llmResult) return llmResult;
+    // Fall back to DuckDuckGo
     const found = await searchDuckDuckGo(`${searchTerm} restaurant`, [socialHostname]);
     if (found) return found;
   }
