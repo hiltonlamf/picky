@@ -79,24 +79,30 @@ const BROWSER_UA =
 // Domains that are never a restaurant's own website
 const NON_RESTAURANT_DOMAINS = [
   // Google
-  'google.com', 'googleapis.com', 'goo.gl', 'googletagmanager.com',
-  'googleusercontent.com', 'googlevideo.com', 'doubleclick.net', 'ggpht.com',
+  'google.com', 'google.ie', 'google.co.uk', 'googleapis.com', 'goo.gl',
+  'googletagmanager.com', 'googleusercontent.com', 'googlevideo.com',
+  'doubleclick.net', 'ggpht.com', 'maps.app',
   // Social media
   'youtube.com', 'facebook.com', 'fb.com', 'instagram.com', 'twitter.com',
   'x.com', 'linkedin.com', 'tiktok.com', 'pinterest.com', 'snapchat.com',
   // Tech / infra
   'apple.com', 'microsoft.com', 'amazon.com', 'cloudflare.com',
-  'schema.org', 'w3.org', 'openstreetmap.org', 'maps.app',
+  'schema.org', 'w3.org', 'openstreetmap.org', 'w3schools.com',
   // Review / discovery sites
   'yelp.com', 'tripadvisor.com', 'zomato.com', 'opentable.com', 'thefork.com',
-  // Delivery platforms
-  'deliveroo.com', 'ubereats.com', 'just-eat.', 'doordash.com',
-  'grubhub.com', 'seamless.com', 'menulog.com', 'hungryhouse.co.uk',
+  'happycow.net', 'foursquare.com', 'lovin.ie', 'timeout.com',
+  // Delivery platforms — use base name to cover all country TLDs (.ie, .co.uk, .com, etc.)
+  'deliveroo.', 'ubereats.com', 'just-eat.', 'doordash.com',
+  'grubhub.com', 'seamless.com', 'menulog.', 'hungryhouse.',
+  'wolt.com', 'bolt.eu', 'flipdish.',
   // Reservation / booking platforms
   'resdiary.com', 'resdiary.net', 'quandoo.com', 'bookatable.com',
   'sevenrooms.com', 'resy.com', 'booking.com', 'toasttab.com',
+  'opentable.com', 'tock.com', 'eatwith.com', 'diningout.ie',
+  // Ordering / menu platforms
+  'order.bar', 'bopple.com', 'square.site', 'squareup.com',
   // Link-in-bio / aggregators (we want the real site, not the hub)
-  'linktr.ee', 'linktree.com', 'beacons.ai', 'bio.site',
+  'linktr.ee', 'linktree.com', 'beacons.ai', 'bio.site', 'campsite.bio',
 ];
 
 const NON_RESTAURANT_EXTENSIONS = [
@@ -139,13 +145,21 @@ function scoreAsRestaurantHomepage(url: string): number {
 // Scan raw HTML for URLs embedded in JSON string contexts (standard + escaped variants).
 // Collects all candidates, then returns the one most likely to be the restaurant homepage.
 function extractRestaurantUrlFromHtml(html: string, additionalExclusions: string[] = []): string | null {
-  const cap = html.slice(0, 2 * 1024 * 1024); // cap at 2 MB for performance
+  // Cap at 2 MB for performance, then unescape \/ (Google Maps JSON encodes slashes this way)
+  let cap = html.slice(0, 2 * 1024 * 1024);
+  cap = cap.replace(/\\\//g, '/'); // "https:\/\/www.unomas.ie\/" → "https://www.unomas.ie/"
 
   // Priority pass: look for patterns specific to Google Maps website fields
   const mapsWebsitePatterns = [
-    /website_uri[^"]{0,20}"(https?:\/\/[^"\\]+)"/,
+    // Google Maps internal data fields
+    /website_uri[^"]{0,30}"(https?:\/\/[^"\\]+)"/,
     /"website"\s*:\s*"(https?:\/\/[^"\\]+)"/,
+    /"primaryUrl"\s*:\s*"(https?:\/\/[^"\\]+)"/,
+    // Array position patterns from Maps data (URL as first non-null in array)
     /\["(https?:\/\/[^"\\]+)",null,null,null/,
+    /\["(https?:\/\/[^"\\]+)",null,null\]/,
+    // "externalLinks" context
+    /externalLinks[^[]{0,50}\["(https?:\/\/[^"\\]+)"/,
   ];
   for (const p of mapsWebsitePatterns) {
     const m = cap.match(p);
@@ -178,6 +192,7 @@ function extractRestaurantUrlFromHtml(html: string, additionalExclusions: string
   }
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => scoreAsRestaurantHomepage(b) - scoreAsRestaurantHomepage(a));
+  console.log(`[maps] top candidates: ${candidates.slice(0, 5).join(', ')}`);
   return candidates[0];
 }
 
@@ -325,9 +340,29 @@ async function fetchWithRetry(url: string, retries = 2): Promise<Response> {
 async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
   try {
     const res = await fetchWithRetry(url);
-    const finalUrl = res.url;
-    const html = await res.text();
+    let finalUrl = res.url;
+    let html = await res.text();
     console.log(`[maps] fetched ${url} → ${finalUrl} (${html.length} bytes)`);
+
+    // Follow meta-refresh redirect (some Google short links use client-side redirect)
+    const metaRefreshMatch = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^;]*;\s*url=([^"'\s>]+)/i)
+      ?? html.match(/content=["'][^;]*;\s*url=([^"'\s>]+)[^>]*http-equiv=["']?refresh["']?/i);
+    if (metaRefreshMatch?.[1]) {
+      const refreshUrl = metaRefreshMatch[1].replace(/^['"]|['"]$/g, '');
+      if (refreshUrl.startsWith('http') && !refreshUrl.includes('google.com')) {
+        console.log(`[maps] meta-refresh to non-google URL: ${refreshUrl}`);
+        return refreshUrl;
+      }
+      if (refreshUrl.startsWith('http')) {
+        try {
+          const res2 = await fetchWithRetry(refreshUrl);
+          finalUrl = res2.url;
+          html = await res2.text();
+          console.log(`[maps] followed meta-refresh → ${finalUrl} (${html.length} bytes)`);
+        } catch {}
+      }
+    }
+
     const $ = cheerio.load(html);
 
     // Strategy 1: JSON-LD structured data (most reliable — designed for machine reading)
@@ -367,6 +402,12 @@ async function resolveGoogleMapsUrl(url: string): Promise<string | null> {
     }).first().attr('href');
 
     console.log(`[maps] resolved via anchor tags: ${websiteLink ?? 'null'}`);
+
+    // Log a snippet of the HTML for debugging when nothing was found
+    if (!websiteLink) {
+      console.log(`[maps] html snippet: ${html.slice(0, 500)}`);
+    }
+
     return websiteLink ?? null;
   } catch (err) {
     console.log(`[maps] resolveGoogleMapsUrl failed: ${err}`);
