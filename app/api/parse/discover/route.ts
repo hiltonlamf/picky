@@ -1,0 +1,195 @@
+import { NextRequest } from 'next/server';
+import { z } from 'zod';
+import { scrapeRestaurant } from '@/lib/scraper';
+import { discoverMenus } from '@/lib/menu-discovery';
+import { extractAndMerge, ExtractContext } from '@/lib/menu-extract';
+import {
+  findExistingRestaurant,
+  resetRestaurantForReparse,
+  createRestaurantRecord,
+  saveClassifiedMenu,
+  saveMenuCandidates,
+  markRestaurantError,
+} from '@/lib/db';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { STALENESS_DAYS } from '@/lib/dietary-config';
+import type { ParseEvent } from '@/types';
+
+export const maxDuration = 60;
+
+const schema = z.object({ url: z.string().url('Please provide a valid URL') });
+
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return 'https://' + trimmed;
+  }
+  return trimmed;
+}
+
+function sseEncoder() {
+  const encoder = new TextEncoder();
+  return (event: ParseEvent) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function isFresh(lastScrapedAt: string | null | undefined): boolean {
+  if (!lastScrapedAt) return false;
+  const age = (Date.now() - new Date(lastScrapedAt).getTime()) / (1000 * 60 * 60 * 24);
+  return age < STALENESS_DAYS;
+}
+
+export async function POST(request: NextRequest) {
+  const ip = getClientIp(request);
+  const encode = sseEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: ParseEvent) => {
+        try {
+          controller.enqueue(encode(event));
+        } catch {
+          // stream may have been closed
+        }
+      };
+      const close = () => {
+        try {
+          controller.close();
+        } catch {}
+      };
+
+      try {
+        let body: { url: string };
+        try {
+          body = await request.json();
+        } catch {
+          send({ type: 'error', error: 'Invalid request body' });
+          return close();
+        }
+
+        if (typeof body.url === 'string') body.url = normalizeUrl(body.url);
+        const parsed = schema.safeParse(body);
+        if (!parsed.success) {
+          send({ type: 'error', error: parsed.error.issues[0]?.message ?? 'Invalid URL' });
+          return close();
+        }
+        const { url } = parsed.data;
+
+        const { allowed } = await checkRateLimit(ip);
+        if (!allowed) {
+          send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
+          return close();
+        }
+
+        // Cache check
+        send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
+        const existing = await findExistingRestaurant(url).catch(() => null);
+        if (existing?.status === 'done' && isFresh(existing.lastScrapedAt)) {
+          send({ type: 'cached', restaurantId: existing.id });
+          return close();
+        }
+
+        let restaurantId = existing?.id ?? '';
+        if (!restaurantId) {
+          restaurantId = await createRestaurantRecord(url);
+        } else {
+          await resetRestaurantForReparse(restaurantId);
+        }
+
+        // Scrape
+        send({ type: 'progress', step: 'Fetching the restaurant page...', stepNumber: 2, totalSteps: 4 });
+        let scrapeResult;
+        try {
+          scrapeResult = await scrapeRestaurant(url);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Could not fetch this page';
+          await markRestaurantError(restaurantId, msg);
+          send({ type: 'error', error: msg });
+          return close();
+        }
+
+        const hasAnyContent =
+          (scrapeResult.menuText && scrapeResult.menuText.length >= 100) ||
+          (scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0) ||
+          (scrapeResult.menuImages && scrapeResult.menuImages.length > 0) ||
+          !!scrapeResult.screenshotUrl;
+
+        if (!hasAnyContent) {
+          const msg =
+            scrapeResult.warning ??
+            "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
+          await markRestaurantError(restaurantId, msg);
+          send({ type: 'error', error: msg });
+          return close();
+        }
+
+        // Discover candidate menus
+        send({ type: 'progress', step: 'Finding the menus...', stepNumber: 3, totalSteps: 4 });
+        const discovery = await discoverMenus(scrapeResult);
+
+        const ctx: ExtractContext = {
+          title: discovery.restaurantTitle || scrapeResult.title,
+          inlineText: discovery.inlineText,
+          screenshotUrl: discovery.screenshotUrl,
+          pdfUrls: scrapeResult.menuPdfUrls,
+          imageUrls: scrapeResult.menuImages,
+          pageUrl: discovery.finalUrl,
+        };
+
+        // Multiple distinct menus → ask the user which to analyze. If we can't
+        // persist the candidate list (e.g. the menu_candidates column hasn't
+        // been migrated yet), degrade gracefully to analysing all menus inline
+        // rather than showing a picker we can't follow through on.
+        if (discovery.candidates.length >= 2) {
+          try {
+            await saveMenuCandidates(restaurantId, {
+              candidates: discovery.candidates,
+              finalUrl: discovery.finalUrl,
+              title: ctx.title,
+              inlineText: ctx.inlineText,
+              screenshotUrl: ctx.screenshotUrl,
+              pdfUrls: ctx.pdfUrls,
+              imageUrls: ctx.imageUrls,
+            });
+            send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
+            return close();
+          } catch {
+            // fall through to inline analysis of all discovered menus
+          }
+        }
+
+        // Single menu (or candidates couldn't be persisted) → analyze inline.
+        send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 4, totalSteps: 4 });
+        let menu;
+        let usage;
+        try {
+          const result = await extractAndMerge(discovery.candidates, ctx);
+          menu = result.menu;
+          usage = result.usage;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'AI classification failed';
+          await markRestaurantError(restaurantId, msg);
+          send({ type: 'error', error: msg });
+          return close();
+        }
+
+        if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
+
+        await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
+        send({ type: 'result', restaurantId });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
+        send({ type: 'error', error: msg });
+      }
+      close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}

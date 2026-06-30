@@ -38,7 +38,33 @@ export interface Restaurant {
   createdAt: string;
 }
 
-export type ParseEventType = 'progress' | 'cached' | 'result' | 'error' | 'question';
+export type MenuCandidateType = 'text' | 'pdf' | 'image' | 'subpage';
+
+export interface MenuCandidate {
+  id: string;
+  label: string;
+  type: MenuCandidateType;
+  ref: string; // URL for pdf/image/subpage; '' for inline text
+  source: 'homepage' | 'subpage';
+}
+
+/** Persisted between the discover and analyze phases (keyed by restaurantId). */
+export interface DiscoveryPayload {
+  candidates: MenuCandidate[];
+  finalUrl: string;
+  title?: string;
+  inlineText?: string;
+  screenshotUrl?: string;
+  pdfUrls?: string[];
+  imageUrls?: string[];
+}
+
+export type ParseEventType =
+  | 'progress'
+  | 'cached'
+  | 'result'
+  | 'error'
+  | 'candidates';
 
 export interface ParseProgressEvent {
   type: 'progress';
@@ -62,11 +88,18 @@ export interface ParseErrorEvent {
   error: string;
 }
 
+export interface ParseCandidatesEvent {
+  type: 'candidates';
+  restaurantId: string;
+  candidates: MenuCandidate[];
+}
+
 export type ParseEvent =
   | ParseProgressEvent
   | ParseCachedEvent
   | ParseResultEvent
-  | ParseErrorEvent;
+  | ParseErrorEvent
+  | ParseCandidatesEvent;
 
 export interface RawDish {
   name: string;

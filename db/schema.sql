@@ -84,6 +84,12 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS tokens_out  INTEGER,
   ADD COLUMN IF NOT EXISTS cost_usd    NUMERIC(10, 6);
 
+-- Multi-menu disambiguation: discovered candidate menus held between the
+-- discover and analyze phases (the analyze step references these by id only).
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS menu_candidates JSONB,
+  ADD COLUMN IF NOT EXISTS candidates_at   TIMESTAMPTZ;
+
 -- ============================================================
 -- Unique constraints
 -- ============================================================

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   },
   description:
     'Instantly discover vegetarian and vegan dishes at any restaurant. Paste a restaurant link and Picky analyses the menu for you.',
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'https://picky.ie'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://picky.ie'),
   openGraph: {
     siteName: 'Picky',
     type: 'website',
