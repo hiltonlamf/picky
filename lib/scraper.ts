@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import Anthropic from '@anthropic-ai/sdk';
+import { readPage } from './reader';
 
 export interface ScrapeResult {
   url: string;
@@ -9,6 +10,8 @@ export interface ScrapeResult {
   menuUrl: string | null;
   menuImages?: string[];
   menuPdfUrls?: string[];
+  menuLinks?: string[]; // candidate menu sub-page links (for discovery)
+  screenshotUrl?: string; // hosted full-page screenshot from the reader, if any
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
 }
@@ -22,14 +25,23 @@ const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '
 const PDF_EXTENSIONS = ['.pdf'];
 
 function isPdfUrl(url: string): boolean {
-  const lower = url.toLowerCase().split('?')[0];
-  return PDF_EXTENSIONS.some((ext) => lower.endsWith(ext)) || lower.includes('/pdf/') || lower.includes('menu.pdf');
+  const full = url.toLowerCase();
+  const lower = full.split('?')[0];
+  return (
+    PDF_EXTENSIONS.some((ext) => lower.endsWith(ext)) ||
+    lower.includes('/pdf/') ||
+    full.includes('.pdf') ||
+    full.includes('issuu.com') ||
+    full.includes('drive.google.com/file') ||
+    full.includes('flipbook') ||
+    full.includes('format=pdf')
+  );
 }
 
 const MENU_IMAGE_KEYWORDS = ['menu', 'food', 'carte', 'speise', 'dish', 'notions'];
 const SKIP_IMAGE_KEYWORDS = ['logo', 'icon', 'favicon', 'avatar', 'banner', 'social', 'twitter', 'facebook', 'instagram'];
 
-function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
+export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
   const candidates: Array<{ url: string; score: number }> = [];
 
   $('img[src], img[data-src]').each((_, el) => {
@@ -231,7 +243,7 @@ function extractText($: cheerio.CheerioAPI): string {
   return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
 }
 
-function findMenuLinks(
+export function findMenuLinks(
   $: cheerio.CheerioAPI,
   baseUrl: string
 ): { htmlLinks: string[]; pdfLinks: string[] } {
@@ -276,6 +288,14 @@ function findMenuLinks(
       if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
     }
     if (score > 0) htmlCandidates.push({ url: resolvedHref, score });
+  });
+
+  // PDFs are frequently embedded via <embed>/<iframe>/<object> (PDF viewers,
+  // flipbooks) rather than plain <a> links — scan those too.
+  $('embed[src], iframe[src], object[data]').each((_, el) => {
+    const ref = $(el).attr('src') ?? $(el).attr('data') ?? '';
+    const resolved = resolveUrl(ref, baseUrl);
+    if (resolved && isPdfUrl(resolved)) pdfCandidates.push({ url: resolved, score: 5 });
   });
 
   const dedup = (candidates: Array<{ url: string; score: number }>, limit: number) => {
@@ -744,27 +764,64 @@ function looksLikeMenu(text: string): boolean {
   );
 }
 
-async function scrapeHtmlPage(
-  url: string,
-  depth = 0
-): Promise<{ text: string; menuUrl: string | null; finalUrl: string; title: string; menuImages: string[]; menuPdfUrls: string[] }> {
+type HtmlPageResult = {
+  text: string;
+  menuUrl: string | null;
+  finalUrl: string;
+  title: string;
+  menuImages: string[];
+  menuPdfUrls: string[];
+  menuLinks: string[];
+  screenshotUrl?: string;
+};
+
+function dedupeStrings(arr: string[]): string[] {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
+async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
   const res = await fetchWithRetry(url);
   const finalUrl = res.url || url;
-  const html = await res.text();
-  const $ = cheerio.load(html);
+  const staticHtml = await res.text();
+
+  // Top-level pages: also run a JS-rendering reader so dynamic sites
+  // (Weebly/Wix/Squarespace) and lazy-loaded menus are captured. The reader is
+  // best-effort and returns null when no provider/key is available or on error.
+  const reader = depth === 0 ? await readPage(finalUrl).catch(() => null) : null;
+
+  // Use the reader's rawHtml for DOM extraction when present (Firecrawl),
+  // otherwise the static HTML still carries anchor tags for link discovery.
+  const $ = cheerio.load(reader?.html && reader.html.length > staticHtml.length ? reader.html : staticHtml);
 
   // Find links and images BEFORE extractText
-  const { htmlLinks: menuLinks, pdfLinks } = depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
-  const menuImages = findMenuImages($, finalUrl);
+  const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs } =
+    depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
+  const cheerioImages = findMenuImages($, finalUrl);
 
-  const text = extractText($);
+  // Merge reader-discovered sources with cheerio-discovered ones. Reader image
+  // URLs bypass cheerio's logo/icon heuristic, so re-apply the skip filter here.
+  const readerImages = (reader?.imageUrls ?? []).filter(
+    (u) => !SKIP_IMAGE_KEYWORDS.some((k) => u.toLowerCase().includes(k)) && !/\.(gif|svg)(\?|$)/i.test(u)
+  );
+  const menuPdfUrls = dedupeStrings([...cheerioPdfs, ...(reader?.pdfLinks ?? [])]);
+  const menuImages = dedupeStrings([...cheerioImages, ...readerImages]).slice(0, 6);
+  // Augment scored cheerio sub-page links with reader links that mention a menu.
+  const readerMenuLinks = (reader?.links ?? []).filter((l) =>
+    MENU_LINK_KEYWORDS.some((k) => l.toLowerCase().includes(k))
+  );
+  const menuLinks = dedupeStrings([...cheerioLinks, ...readerMenuLinks]);
+
+  // Prefer the reader's clean rendered text when it looks substantive.
+  const cheerioText = extractText($);
+  const readerText = reader?.markdown ?? '';
+  const text = readerText.length > cheerioText.length && readerText.length > 200 ? readerText : cheerioText;
 
   // "Menu | Uno Mas" → take last part if first is a generic section name
   const GENERIC_PAGE_WORDS = new Set([
     'menu', 'home', 'food', 'about', 'contact', 'welcome',
     'index', 'start', 'page', 'sample menu', 'our menu',
   ]);
-  const rawTitle = $('title').text().trim();
+  const rawTitle = reader?.title || $('title').text().trim();
   const titleParts = rawTitle.split(/[|\-–]/).map((s) => s.trim()).filter(Boolean);
   let title =
     titleParts.length > 1 && GENERIC_PAGE_WORDS.has(titleParts[0].toLowerCase())
@@ -773,7 +830,16 @@ async function scrapeHtmlPage(
   if (!title) title = $('h1').first().text().trim();
 
   if (looksLikeMenu(text) || depth > 0) {
-    return { text, menuUrl: depth > 0 ? url : null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+    return {
+      text,
+      menuUrl: depth > 0 ? url : null,
+      finalUrl,
+      title,
+      menuImages,
+      menuPdfUrls,
+      menuLinks,
+      screenshotUrl: reader?.screenshotUrl,
+    };
   }
 
   // Try menu sub-pages in order, return first that has meaningful content
@@ -781,14 +847,31 @@ async function scrapeHtmlPage(
     try {
       const menuRes = await scrapeHtmlPage(link, depth + 1);
       if (menuRes.text.length >= 200) {
-        return { ...menuRes, menuUrl: link, title: menuRes.title || title, menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : pdfLinks };
+        return {
+          ...menuRes,
+          menuUrl: link,
+          title: menuRes.title || title,
+          menuImages: menuRes.menuImages.length ? menuRes.menuImages : menuImages,
+          menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : menuPdfUrls,
+          menuLinks,
+          screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
+        };
       }
     } catch {
       // try next link
     }
   }
 
-  return { text, menuUrl: null, finalUrl, title, menuImages, menuPdfUrls: pdfLinks };
+  return {
+    text,
+    menuUrl: null,
+    finalUrl,
+    title,
+    menuImages,
+    menuPdfUrls,
+    menuLinks,
+    screenshotUrl: reader?.screenshotUrl,
+  };
 }
 
 export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
@@ -809,6 +892,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: result.menuUrl,
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
+        menuLinks: result.menuLinks,
+        screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
     }
@@ -840,6 +925,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: result.menuUrl,
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
+        menuLinks: result.menuLinks,
+        screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
     }
@@ -884,6 +971,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
             menuUrl: result.menuUrl,
             menuImages: result.menuImages,
             menuPdfUrls: result.menuPdfUrls,
+            menuLinks: result.menuLinks,
+            screenshotUrl: result.screenshotUrl,
             urlType: 'html',
           };
         }
@@ -894,7 +983,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls } = await scrapeHtmlPage(url);
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, screenshotUrl } =
+    await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
   if (!text || text.length < 100) {
@@ -907,6 +997,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuText: '',
         menuUrl: menuPdfUrls[0],
         menuPdfUrls,
+        menuLinks,
+        screenshotUrl,
         urlType: 'pdf',
       };
     }
@@ -919,6 +1011,22 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuText: '',
         menuUrl: null,
         menuImages,
+        menuLinks,
+        screenshotUrl,
+        urlType: 'html',
+      };
+    }
+    if (screenshotUrl) {
+      // Reader rendered the page but text was thin — fall back to a screenshot
+      // for vision extraction (e.g. fully image-based or canvas menus).
+      return {
+        url,
+        canonicalUrl: finalUrl,
+        title,
+        menuText: '',
+        menuUrl: null,
+        menuLinks,
+        screenshotUrl,
         urlType: 'html',
       };
     }
@@ -935,6 +1043,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     menuUrl,
     menuImages,
     menuPdfUrls,
+    menuLinks,
+    screenshotUrl,
     urlType: 'html',
   };
 }

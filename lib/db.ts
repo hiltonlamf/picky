@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Restaurant, MenuSection, Dish, ClassifiedMenu, RawSection, RawDish } from '@/types';
+import type { Restaurant, MenuSection, Dish, ClassifiedMenu, RawSection, RawDish, DiscoveryPayload } from '@/types';
 import type { AIUsage } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD } from './dietary-config';
 
@@ -82,8 +82,33 @@ export async function findExistingRestaurant(
 export async function resetRestaurantForReparse(id: string): Promise<void> {
   await db()
     .from('restaurants')
-    .update({ status: 'processing', error_message: null })
+    .update({ status: 'processing', error_message: null, menu_candidates: null, candidates_at: null })
     .eq('id', id);
+}
+
+export async function saveMenuCandidates(
+  restaurantId: string,
+  payload: DiscoveryPayload
+): Promise<void> {
+  await db()
+    .from('restaurants')
+    .update({
+      menu_candidates: payload,
+      candidates_at: new Date().toISOString(),
+      status: 'processing',
+    })
+    .eq('id', restaurantId);
+}
+
+export async function getMenuCandidates(restaurantId: string): Promise<DiscoveryPayload | null> {
+  const { data } = await db()
+    .from('restaurants')
+    .select('menu_candidates')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  const payload = (data as { menu_candidates: unknown } | null)?.menu_candidates;
+  if (!payload) return null;
+  return payload as DiscoveryPayload;
 }
 
 export async function fetchRestaurantWithDishes(id: string): Promise<Restaurant | null> {

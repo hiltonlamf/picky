@@ -5,7 +5,8 @@
  */
 
 import { scrapeRestaurant } from './scraper';
-import { classifyMenuWithAI, classifyMenuFromImages, classifyMenuFromPdf, countFoodItems } from './ai';
+import { discoverMenus } from './menu-discovery';
+import { extractAndMerge, ExtractContext } from './menu-extract';
 import {
   createRestaurantRecord,
   saveClassifiedMenu,
@@ -13,8 +14,6 @@ import {
   resetRestaurantForReparse,
 } from './db';
 import { createClient } from '@supabase/supabase-js';
-
-const MIN_FOOD_ITEMS = 7;
 
 export const DUBLIN_RESTAURANTS: { name: string; url: string }[] = [
   { name: 'Chapter One', url: 'https://chapteronerestaurant.com' },
@@ -55,46 +54,29 @@ async function parseAndSave(restaurantId: string, name: string, url: string): Pr
     return;
   }
 
-  if (scrapeResult.warning && !scrapeResult.menuText && !scrapeResult.menuPdfUrls?.length && !scrapeResult.menuImages?.length) {
+  if (scrapeResult.warning && !scrapeResult.menuText && !scrapeResult.menuPdfUrls?.length && !scrapeResult.menuImages?.length && !scrapeResult.screenshotUrl) {
     await markRestaurantError(restaurantId, scrapeResult.warning);
     return;
   }
 
-  const hasText = scrapeResult.menuText && scrapeResult.menuText.length >= 100;
-  const hasPdfs = scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0;
-  const hasImages = scrapeResult.menuImages && scrapeResult.menuImages.length > 0;
-
-  let menu: Awaited<ReturnType<typeof classifyMenuWithAI>>['menu'] | null = null;
-  let aiUsage: Awaited<ReturnType<typeof classifyMenuWithAI>>['usage'] | undefined;
-
+  let menu;
+  let aiUsage;
   try {
-    if (hasPdfs && !hasText) {
-      const r = await classifyMenuFromPdf(scrapeResult.menuPdfUrls![0], name);
-      if (r) { menu = r.menu; aiUsage = r.usage; }
-    }
-
-    if ((!menu || countFoodItems(menu) < MIN_FOOD_ITEMS) && !hasText && hasImages) {
-      const r = await classifyMenuFromImages(scrapeResult.menuImages!, name);
-      if (r && (!menu || countFoodItems(r.menu) > countFoodItems(menu!))) {
-        menu = r.menu; aiUsage = r.usage;
-      }
-    }
-
-    if (!menu || countFoodItems(menu) < MIN_FOOD_ITEMS) {
-      if (hasText) {
-        const r = await classifyMenuWithAI(scrapeResult.menuText, name);
-        if (!menu || countFoodItems(r.menu) > countFoodItems(menu)) {
-          menu = r.menu; aiUsage = r.usage;
-        }
-      }
-    }
+    // Seeding analyses ALL discovered menus combined (no interactive picker).
+    const discovery = await discoverMenus(scrapeResult);
+    const ctx: ExtractContext = {
+      title: name,
+      inlineText: discovery.inlineText,
+      screenshotUrl: discovery.screenshotUrl,
+      pdfUrls: scrapeResult.menuPdfUrls,
+      imageUrls: scrapeResult.menuImages,
+      pageUrl: discovery.finalUrl,
+    };
+    const result = await extractAndMerge(discovery.candidates, ctx);
+    menu = result.menu;
+    aiUsage = result.usage;
   } catch (err) {
-    await markRestaurantError(restaurantId, err instanceof Error ? err.message : 'AI failed');
-    return;
-  }
-
-  if (!menu) {
-    await markRestaurantError(restaurantId, 'No menu content could be extracted');
+    await markRestaurantError(restaurantId, err instanceof Error ? err.message : 'No menu content could be extracted');
     return;
   }
 
