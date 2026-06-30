@@ -30,27 +30,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <HeaderProvider>
           <SiteHeader />
           <main className="flex-1">{children}</main>
-
-        <footer className="border-t border-gray-100 bg-white mt-16">
-          <div className="max-w-5xl mx-auto px-4 py-8">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
-              <div className="flex items-center gap-2">
-                <span className="text-picky-600">🥦</span>
-                <span className="font-medium text-gray-700">Picky</span>
-                <span>— Find your food, your way.</span>
+          <footer className="border-t border-gray-100 bg-white mt-16">
+            <div className="max-w-5xl mx-auto px-4 py-8">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
+                <div className="flex items-center gap-2">
+                  <span className="text-picky-600">🥦</span>
+                  <span className="font-medium text-gray-700">Picky</span>
+                  <span>— Find your food, your way.</span>
+                </div>
+                <div className="flex gap-4">
+                  <Link href="/dublin" className="hover:text-gray-700 transition-colors">Dublin Guide</Link>
+                  <a href="#" className="hover:text-gray-700 transition-colors">Privacy</a>
+                  <a href="#" className="hover:text-gray-700 transition-colors">Legal</a>
+                </div>
               </div>
-              <div className="flex gap-4">
-                <Link href="/dublin" className="hover:text-gray-700 transition-colors">Dublin Guide</Link>
-                <a href="#" className="hover:text-gray-700 transition-colors">Privacy</a>
-                <a href="#" className="hover:text-gray-700 transition-colors">Legal</a>
-              </div>
+              <p className="mt-4 text-xs text-gray-400 text-center sm:text-left">
+                Always confirm dietary information with the restaurant. AI classification may not catch all ingredients.
+              </p>
             </div>
-            <p className="mt-4 text-xs text-gray-400 text-center sm:text-left">
-              Always confirm dietary information with the restaurant. AI classification may not catch all ingredients.
-            </p>
-          </div>
-        </footer>
-
+          </footer>
           <CookieConsent />
         </HeaderProvider>
       </body>

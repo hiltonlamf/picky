@@ -30,7 +30,7 @@ export default function HeroSearch() {
         const response = await fetch('/api/parse', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: trimmed.startsWith('http') ? trimmed : `https://${trimmed}` }),
+          body: JSON.stringify({ url: /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}` }),
         });
 
         if (!response.body) throw new Error('No response body');
@@ -116,10 +116,10 @@ export default function HeroSearch() {
       <div className="flex flex-col gap-3">
         <div className="relative">
           <input
-            type="url"
+            type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://restaurant.com or Google Maps link"
+            placeholder="www.restaurant.com"
             className="input-url pr-12 text-base"
             autoComplete="url"
             autoFocus
@@ -147,8 +147,6 @@ export default function HeroSearch() {
 
       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>✓ Restaurant websites</span>
-        <span>✓ Google Maps links</span>
-        <span>✓ Direct menu URLs</span>
       </div>
     </form>
   );
