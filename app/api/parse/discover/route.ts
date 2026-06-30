@@ -135,22 +135,29 @@ export async function POST(request: NextRequest) {
           pageUrl: discovery.finalUrl,
         };
 
-        // Multiple distinct menus → ask the user which to analyze.
+        // Multiple distinct menus → ask the user which to analyze. If we can't
+        // persist the candidate list (e.g. the menu_candidates column hasn't
+        // been migrated yet), degrade gracefully to analysing all menus inline
+        // rather than showing a picker we can't follow through on.
         if (discovery.candidates.length >= 2) {
-          await saveMenuCandidates(restaurantId, {
-            candidates: discovery.candidates,
-            finalUrl: discovery.finalUrl,
-            title: ctx.title,
-            inlineText: ctx.inlineText,
-            screenshotUrl: ctx.screenshotUrl,
-            pdfUrls: ctx.pdfUrls,
-            imageUrls: ctx.imageUrls,
-          });
-          send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
-          return close();
+          try {
+            await saveMenuCandidates(restaurantId, {
+              candidates: discovery.candidates,
+              finalUrl: discovery.finalUrl,
+              title: ctx.title,
+              inlineText: ctx.inlineText,
+              screenshotUrl: ctx.screenshotUrl,
+              pdfUrls: ctx.pdfUrls,
+              imageUrls: ctx.imageUrls,
+            });
+            send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
+            return close();
+          } catch {
+            // fall through to inline analysis of all discovered menus
+          }
         }
 
-        // Single menu → analyze inline.
+        // Single menu (or candidates couldn't be persisted) → analyze inline.
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 4, totalSteps: 4 });
         let menu;
         let usage;

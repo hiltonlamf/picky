@@ -90,7 +90,7 @@ export async function saveMenuCandidates(
   restaurantId: string,
   payload: DiscoveryPayload
 ): Promise<void> {
-  await db()
+  const { error } = await db()
     .from('restaurants')
     .update({
       menu_candidates: payload,
@@ -98,6 +98,10 @@ export async function saveMenuCandidates(
       status: 'processing',
     })
     .eq('id', restaurantId);
+  // Surface failures (e.g. the menu_candidates column not yet migrated) so the
+  // caller can fall back to inline analysis instead of emitting a candidate
+  // list it can't honour later.
+  if (error) throw new Error(`Failed to persist menu candidates: ${error.message}`);
 }
 
 export async function getMenuCandidates(restaurantId: string): Promise<DiscoveryPayload | null> {
