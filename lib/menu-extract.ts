@@ -258,8 +258,11 @@ export async function extractAndMerge(
   for (const r of results) usage = sumUsage(usage, r.res?.usage);
 
   if (named.length === 0) {
+    // Every source (text, PDF, images, screenshot, escalation) came back with
+    // nothing — either the menu is unreadable or the site doesn't really have
+    // one. Be honest about both possibilities.
     throw new Error(
-      "We found the menu but couldn't read the dishes clearly. Try pasting a direct link to the menu page or a clearer menu source."
+      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again."
     );
   }
 

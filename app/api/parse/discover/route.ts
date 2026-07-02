@@ -126,6 +126,17 @@ export async function POST(request: NextRequest) {
         send({ type: 'progress', step: 'Finding the menus...', stepNumber: 3, totalSteps: 4 });
         const discovery = await discoverMenus(scrapeResult);
 
+        // The page had content but none of it is a menu (e.g. a booking-only
+        // site, or only a drinks list): say so honestly instead of failing
+        // later with a confusing "couldn't read the menu".
+        if (discovery.candidates.length === 0) {
+          const msg =
+            "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
+          await markRestaurantError(restaurantId, msg);
+          send({ type: 'error', error: msg });
+          return close();
+        }
+
         const ctx: ExtractContext = {
           title: discovery.restaurantTitle || scrapeResult.title,
           inlineText: discovery.inlineText,
