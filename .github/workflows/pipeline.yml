@@ -1,0 +1,52 @@
+# Tier 2 — live pipeline QA. Runs the full E2E suite (real restaurant
+# websites + real Claude API calls) on every PR push and gates the merge.
+#
+# Costs real money (~$0.10–0.50/run) and depends on live websites, so:
+#   - concurrency cancels superseded runs on rapid pushes
+#   - the full log is always uploaded as an artifact (pass or fail)
+#   - once the product is live, consider switching `pull_request` to a
+#     nightly `schedule:` trigger and keeping workflow_dispatch for on-demand.
+#
+# Requires repo secret: ANTHROPIC_API_KEY (optional: FIRECRAWL_API_KEY for a
+# more reliable JS reader than keyless Jina).
+name: Live pipeline QA
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Run live pipeline suite
+        run: npm run test:pipeline 2>&1 | tee pipeline-log.txt
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+      - name: Summary
+        if: always()
+        run: |
+          echo '## Live pipeline QA' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-log-${{ github.run_number }}
+          path: pipeline-log.txt
+          retention-days: 30

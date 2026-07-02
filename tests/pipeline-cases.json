@@ -1,0 +1,19 @@
+{
+  "comment": "Live-site E2E cases for scripts/run-pipeline-tests.ts. category: text|pdf|image|multilang|js|multi. smoke: stable subset for quick runs (npm run test:smoke).",
+  "cases": [
+    { "name": "Misters", "url": "https://www.misters.ie/", "category": "text", "smoke": true },
+    { "name": "Host", "url": "https://hostrestaurant.ie/", "category": "text" },
+    { "name": "Good World", "url": "https://www.goodworld.ie", "category": "pdf" },
+    { "name": "Dunne & Crescenzi", "url": "https://www.dunneandcrescenzi.com/", "category": "pdf" },
+    { "name": "Baan Thai", "url": "https://www.baanthai.ie/", "category": "pdf", "smoke": true },
+    { "name": "Notions", "url": "http://notionsdublin.com/", "category": "image" },
+    { "name": "Chez Max", "url": "https://chezmax.com/", "category": "multilang" },
+    { "name": "Las Tapas de Lola", "url": "https://lastapasdelola.com/", "category": "multilang" },
+    { "name": "Forêt", "url": "https://www.foret.ie/menu", "category": "multilang" },
+    { "name": "Charming Noodles", "url": "https://charmingnoodles.weebly.com/", "category": "js" },
+    { "name": "Shouk", "url": "https://www.shouk.ie/", "category": "js" },
+    { "name": "The Vintage Kitchen", "url": "https://thevintagekitchen.ie/", "category": "multi", "smoke": true },
+    { "name": "Jaru", "url": "https://www.jaru.ie/", "category": "multi" },
+    { "name": "Wagamama", "url": "https://wagamama.ie/", "category": "js" }
+  ]
+}

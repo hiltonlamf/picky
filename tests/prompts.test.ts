@@ -67,6 +67,6 @@ describe('buildLabelPrompt (incoherent picker bug)', () => {
   });
 
   it('treats online-ordering pages as menus (Notions-class sites)', () => {
-    expect(prompt).toMatch(/online-ordering pages.*ARE menus/is);
+    expect(prompt).toMatch(/online-ordering pages[\s\S]*ARE menus/i);
   });
 });
