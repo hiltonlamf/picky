@@ -6,6 +6,7 @@ import {
   classifyMenuFromImages,
   classifyMenuFromScreenshot,
   countFoodItems,
+  isBillingError,
   ESCALATION_MODEL,
 } from './ai';
 import { scrapeRestaurant } from './scraper';
@@ -81,13 +82,14 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
     let best: Extraction = null;
     let usage: AIUsage | undefined;
     for (const attempt of attempts) {
-      const res = await attempt().catch(() => null);
+      const res = await attemptOrNull(attempt);
       usage = sumUsage(usage, res?.usage);
       if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
       if (isValid(res)) break;
     }
     return best ? { menu: best.menu, usage: usage! } : null;
-  } catch {
+  } catch (err) {
+    if (isBillingError(err)) throw err;
     return null;
   }
 }
@@ -120,24 +122,25 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * primary source → alternate sources (pdf/image/screenshot) → Opus escalation.
  * Returns the attempt with the most food items, with summed usage/cost.
  */
-/** API-billing failures must surface as such — retrying other sources just
- *  burns more calls and ends in a misleading "couldn't read the menu". */
-function isBillingError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /credit balance|billing|purchase credits/i.test(msg);
-}
-
-export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
-  // A hard failure (e.g. truncated/invalid JSON) must fall through to the
-  // retry chain, not abort the whole extraction — except billing errors.
-  let best: Extraction = null;
+/**
+ * Run one extraction attempt: hard failures (e.g. truncated JSON) become null
+ * so the retry chain continues — except API-billing failures, which must
+ * surface as such; retrying other sources just burns more calls and ends in a
+ * misleading "couldn't read the menu".
+ */
+async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction> {
   try {
-    best = await runPrimary(candidate, ctx);
+    return await fn();
   } catch (err) {
     if (isBillingError(err)) {
       throw new Error('Our AI service is temporarily unavailable. Please try again later.');
     }
+    return null;
   }
+}
+
+export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
+  let best: Extraction = await attemptOrNull(() => runPrimary(candidate, ctx));
   let usage = best?.usage;
   if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
 
@@ -154,7 +157,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
   }
 
   for (const attempt of altAttempts) {
-    const res = await attempt().catch(() => null);
+    const res = await attemptOrNull(attempt);
     usage = sumUsage(usage, res?.usage);
     if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
     if (isValid(res)) break;
@@ -169,7 +172,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
     const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
     const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
     if (shot) {
-      const res = await classifyMenuFromScreenshot(shot, ctx.title).catch(() => null);
+      const res = await attemptOrNull(() => classifyMenuFromScreenshot(shot, ctx.title));
       usage = sumUsage(usage, res?.usage);
       if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
     }
@@ -177,7 +180,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
 
   // Last resort: escalate the original source to the strongest model.
   if (!isValid(best)) {
-    const escalated = await runPrimary(candidate, ctx, ESCALATION_MODEL).catch(() => null);
+    const escalated = await attemptOrNull(() => runPrimary(candidate, ctx, ESCALATION_MODEL));
     usage = sumUsage(usage, escalated?.usage);
     if (escalated && (!best || countFoodItems(escalated.menu) > countFoodItems(best.menu))) best = escalated;
   }

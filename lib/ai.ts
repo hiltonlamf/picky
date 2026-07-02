@@ -21,6 +21,13 @@ export type AIUsage = {
   costUsd: number;
 };
 
+/** True for Anthropic credit/billing failures — callers must surface these
+ *  instead of swallowing them into "couldn't read the menu" fallbacks. */
+export function isBillingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /credit balance|billing|purchase credits/i.test(msg);
+}
+
 function calcCost(model: string, tokensIn: number, tokensOut: number): number {
   const pricing = MODEL_PRICING[model] ?? { input: 3.00, output: 15.00 };
   return (tokensIn * pricing.input + tokensOut * pricing.output) / 1_000_000;
@@ -488,7 +495,8 @@ export async function classifyMenuFromPdf(
     const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
 
     return { menu: stripDrinksAndHeaders(menu), usage };
-  } catch {
+  } catch (err) {
+    if (isBillingError(err)) throw err;
     return null;
   }
 }
