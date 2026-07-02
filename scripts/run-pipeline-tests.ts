@@ -127,7 +127,9 @@ async function runCase(c: Case): Promise<void> {
       pageUrl: discovery.finalUrl,
     };
 
-    const { menu, usage } = await withTimeout(extractAndMerge(discovery.candidates, ctx), 180000, 'extract');
+    // Generous: image-board menus (90+ dishes over 6 photos) on slow CI
+    // runners, plus reader 429 backoffs, can exceed 3 minutes legitimately.
+    const { menu, usage } = await withTimeout(extractAndMerge(discovery.candidates, ctx), 300000, 'extract');
     totalCostUsd += usage.costUsd;
     const count = countFoodItems(menu);
     console.log(`    food items: ${count} | cost: $${usage.costUsd.toFixed(4)}`);
