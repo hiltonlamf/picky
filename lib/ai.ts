@@ -21,11 +21,12 @@ export type AIUsage = {
   costUsd: number;
 };
 
-/** True for Anthropic credit/billing failures — callers must surface these
- *  instead of swallowing them into "couldn't read the menu" fallbacks. */
+/** True for Anthropic account failures (credits exhausted, invalid/missing
+ *  API key) — callers must surface these instead of swallowing them into
+ *  "couldn't read the menu" fallbacks. */
 export function isBillingError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /credit balance|billing|purchase credits/i.test(msg);
+  return /credit balance|billing|purchase credits|authentication_error|invalid x-api-key|api key/i.test(msg);
 }
 
 function calcCost(model: string, tokensIn: number, tokensOut: number): number {
