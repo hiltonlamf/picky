@@ -120,10 +120,24 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * primary source → alternate sources (pdf/image/screenshot) → Opus escalation.
  * Returns the attempt with the most food items, with summed usage/cost.
  */
+/** API-billing failures must surface as such — retrying other sources just
+ *  burns more calls and ends in a misleading "couldn't read the menu". */
+function isBillingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /credit balance|billing|purchase credits/i.test(msg);
+}
+
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
   // A hard failure (e.g. truncated/invalid JSON) must fall through to the
-  // retry chain, not abort the whole extraction.
-  let best: Extraction = await runPrimary(candidate, ctx).catch(() => null);
+  // retry chain, not abort the whole extraction — except billing errors.
+  let best: Extraction = null;
+  try {
+    best = await runPrimary(candidate, ctx);
+  } catch (err) {
+    if (isBillingError(err)) {
+      throw new Error('Our AI service is temporarily unavailable. Please try again later.');
+    }
+  }
   let usage = best?.usage;
   if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
 

@@ -18,9 +18,9 @@
 
     { "name": "Forest Avenue", "url": "https://www.forestavenuerestaurant.ie/", "category": "text", "extended": true },
     { "name": "L'Gueuleton", "url": "https://lgueuleton.com/", "category": "text", "extended": true },
-    { "name": "Sophie's", "url": "https://sophies.ie/", "category": "multi", "extended": true },
+    { "name": "Sophie's", "url": "https://sophies.ie/", "category": "text", "extended": true },
     { "name": "Cornucopia", "url": "https://www.cornucopia.ie/", "category": "text", "extended": true },
-    { "name": "Yamamori", "url": "https://yamamori.ie/", "category": "multi", "extended": true },
+    { "name": "Yamamori", "url": "https://yamamori.ie/", "category": "text", "extended": true },
     { "name": "Bunsen", "url": "https://www.bunsen.ie/", "category": "text", "extended": true },
     { "name": "The Fumbally", "url": "https://thefumbally.ie/", "category": "text", "extended": true },
     { "name": "Brother Hubbard", "url": "https://www.brotherhubbard.ie/", "category": "text", "extended": true },
