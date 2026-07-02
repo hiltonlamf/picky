@@ -84,10 +84,10 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
     const sub = subs[i];
     if (!sub) continue;
     for (const pdf of sub.menuPdfUrls ?? []) {
-      raw.push({ type: 'pdf', ref: pdf, hint: hintFromUrl(pdf), source: 'subpage' });
+      raw.push({ type: 'pdf', ref: pdf, hint: sub.linkLabels?.[pdf] || hintFromUrl(pdf), source: 'subpage' });
     }
     for (const link of sub.menuLinks ?? []) {
-      raw.push({ type: 'subpage', ref: link, hint: hintFromUrl(link), source: 'subpage' });
+      raw.push({ type: 'subpage', ref: link, hint: sub.linkLabels?.[link] || hintFromUrl(link), source: 'subpage' });
     }
     // The nav page itself reads like a menu → it's a menu subpage.
     if (textLooksLikeMenu(sub.menuText ?? '')) {
@@ -95,6 +95,14 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
     }
   }
   return raw;
+}
+
+/** Opaque slug (CDN hash like "aab7fb dbea9641...") — useless as a human hint. */
+function isOpaqueHint(hint: string): boolean {
+  if (!hint) return true;
+  const words = hint.split(/\s+/);
+  const hexish = words.filter((w) => /^[0-9a-f]{6,}$/i.test(w) || /^\d+$/.test(w)).length;
+  return hexish >= Math.max(1, words.length - 1);
 }
 
 /** Format preference when the same menu exists in several formats: PDFs are
@@ -134,11 +142,19 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   if (textLooksLikeMenu(inlineText)) {
     raw.push({ type: 'text', ref: '', hint: 'Main Menu', source: 'homepage' });
   }
+  // Prefer the link's anchor text over the URL slug — Wix/Squarespace PDFs have
+  // opaque hash filenames while the button says "Lunch" / "Dinner".
+  const hintFor = (url: string): string => {
+    const anchor = scrape.linkLabels?.[url];
+    const slug = hintFromUrl(url);
+    if (anchor && (isOpaqueHint(slug) || anchor.length <= slug.length)) return anchor;
+    return slug || anchor || '';
+  };
   for (const pdf of scrape.menuPdfUrls ?? []) {
-    raw.push({ type: 'pdf', ref: pdf, hint: hintFromUrl(pdf), source: 'homepage' });
+    raw.push({ type: 'pdf', ref: pdf, hint: hintFor(pdf), source: 'homepage' });
   }
   for (const link of scrape.menuLinks ?? []) {
-    raw.push({ type: 'subpage', ref: link, hint: hintFromUrl(link), source: 'subpage' });
+    raw.push({ type: 'subpage', ref: link, hint: hintFor(link), source: 'subpage' });
   }
 
   // De-dupe by ref, and drop obvious drink-only sources (wine lists etc.)
@@ -156,9 +172,12 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
 
   let deduped = dedupeRaw(raw);
 
-  // Deep fallback: no food-menu source on the landing page → follow top nav
-  // links one hop (multi-venue sites where the menu hides under "Restaurants").
-  if (deduped.length === 0 && (scrape.navLinks?.length ?? 0) > 0) {
+  // Deep fallback: the landing page has no self-contained menu source (no menu
+  // text, no PDF) and at most one subpage lead — follow top nav links one hop
+  // (multi-venue sites where menus hide under "Restaurants", JS-heavy chains).
+  const hasStrongSource = deduped.some((r) => r.type === 'text' || r.type === 'pdf');
+  const subpageCount = deduped.filter((r) => r.type === 'subpage').length;
+  if (!hasStrongSource && subpageCount <= 1 && (scrape.navLinks?.length ?? 0) > 0) {
     deduped = dedupeRaw([...raw, ...(await deepDiscoverRaw(scrape.navLinks!))]);
   }
 
@@ -227,20 +246,20 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     }
     representatives.sort((a, b) => a.index - b.index);
 
-    // Dedupe by normalized label (two "Dinner" entries are one choice), then cap.
-    const byLabel = new Map<string, Judged>();
+    // Label collisions: distinct sources the labeler failed to distinguish
+    // (e.g. four hash-named PDFs all labeled "Menu") are kept but suffixed
+    // ("Menu 2") — hiding a real menu is worse than a slightly awkward name.
+    // True duplicates were already collapsed via duplicateOf above.
+    const labelCount = new Map<string, number>();
+    const unique: Array<{ j: Judged; label: string }> = [];
     for (const j of representatives) {
-      const norm = j.verdict.label.toLowerCase().replace(/\s+/g, ' ').trim();
-      const existing = byLabel.get(norm);
-      if (!existing || FORMAT_PREFERENCE[j.raw.type] < FORMAT_PREFERENCE[existing.raw.type]) {
-        byLabel.set(norm, j);
-      }
+      const base = j.verdict.label || j.raw.hint || 'Menu';
+      const norm = base.toLowerCase().replace(/\s+/g, ' ').trim();
+      const n = (labelCount.get(norm) ?? 0) + 1;
+      labelCount.set(norm, n);
+      unique.push({ j, label: n === 1 ? base : `${base} ${n}` });
     }
-    const unique = Array.from(byLabel.values())
-      .sort((a, b) => a.index - b.index)
-      .slice(0, MAX_PICKER_CANDIDATES);
-
-    finalCandidates = unique.map((j) => toCandidate(j.raw, j.verdict.label || j.raw.hint || 'Menu'));
+    finalCandidates = unique.slice(0, MAX_PICKER_CANDIDATES).map(({ j, label }) => toCandidate(j.raw, label));
 
     // De-dupe by id (defensive against hash collisions).
     const byId = new Map<string, MenuCandidate>();

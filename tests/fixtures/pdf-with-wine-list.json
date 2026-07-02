@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-02T12:54:31.037Z",
+  "recordedAt": "2026-07-02T16:16:21.325Z",
   "sourceUrl": "https://www.goodworld.ie",
   "scrape": {
     "url": "https://www.goodworld.ie",
@@ -25,6 +25,9 @@
       "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886434",
       "https://www.goodworld.ie/index.php?c=Front/ProductClassPage"
     ],
+    "linkLabels": {
+      "https://www.goodworld.ie/Content/2297107.html": "Menu"
+    },
     "urlType": "html"
   }
 }

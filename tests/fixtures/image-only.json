@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-02T12:54:51.445Z",
+  "recordedAt": "2026-07-02T16:20:00.612Z",
   "sourceUrl": "http://notionsdublin.com",
   "scrape": {
     "url": "http://notionsdublin.com",
@@ -16,10 +16,9 @@
       "https://images.squarespace-cdn.com/content/v1/5f601128afb1365e6a21e177/26b92455-2b75-4e77-9620-973d223bceea/C0D0D806-9EDC-4491-B9C2-D9287F8B3DC5.jpeg"
     ],
     "menuPdfUrls": [],
-    "menuLinks": [
-      "https://order.toasttab.com/egiftcards/two-pups-francis-street"
-    ],
+    "menuLinks": [],
     "navLinks": [],
+    "linkLabels": {},
     "urlType": "html"
   }
 }

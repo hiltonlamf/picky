@@ -114,7 +114,7 @@ export async function classifyMenuWithAI(
 
   const message = await anthropic().messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: buildPrompt(menuText, restaurantName) }],
   });
@@ -214,7 +214,7 @@ export async function classifyMenuFromImages(
 
   const message = await anthropic().messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -462,7 +462,7 @@ export async function classifyMenuFromPdf(
 
     const message = await anthropic().messages.create({
       model,
-      max_tokens: 4096,
+      max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: pdfContent }],
     });

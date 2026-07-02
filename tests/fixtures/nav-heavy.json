@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-02T12:55:13.686Z",
+  "recordedAt": "2026-07-02T16:16:23.938Z",
   "sourceUrl": "https://www.dunneandcrescenzi.com",
   "scrape": {
     "url": "https://www.dunneandcrescenzi.com",
@@ -19,6 +19,9 @@
       "https://www.dunneandcrescenzi.com/our-story",
       "https://www.dunneandcrescenzi.com/events"
     ],
+    "linkLabels": {
+      "https://www.dunneandcrescenzi.com/restaurants": "menus"
+    },
     "urlType": "html"
   }
 }

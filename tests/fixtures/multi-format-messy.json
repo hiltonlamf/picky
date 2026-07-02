@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-02T12:55:16.584Z",
+  "recordedAt": "2026-07-02T16:20:03.352Z",
   "sourceUrl": "https://www.jaru.ie",
   "scrape": {
     "url": "https://www.jaru.ie",
@@ -19,8 +19,7 @@
       "https://www.jaru.ie/_files/ugd/aab7fb_82988574a2ac4535b532e0f313bf8303.pdf"
     ],
     "menuLinks": [
-      "https://www.jaru.ie/menu",
-      "https://squareup.com/gift/MLFFEXHV1X3NC/order"
+      "https://www.jaru.ie/menu"
     ],
     "navLinks": [
       "https://www.jaru.ie/products",
@@ -32,6 +31,13 @@
       "https://www.jaru.ie/menu",
       "https://www.jaru.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf"
     ],
+    "linkLabels": {
+      "https://www.jaru.ie/menu": "Menus (New)",
+      "https://www.jaru.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf": "LUNCH",
+      "https://www.jaru.ie/_files/ugd/aab7fb_666a12d78f854a339706f57c23786c74.pdf": "DRINKS",
+      "https://www.jaru.ie/_files/ugd/aab7fb_29f19dd9768f4d018af53609039d7726.pdf": "SHARING PLATES",
+      "https://www.jaru.ie/_files/ugd/aab7fb_82988574a2ac4535b532e0f313bf8303.pdf": "DINNER"
+    },
     "urlType": "html"
   }
 }

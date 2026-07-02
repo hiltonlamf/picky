@@ -1,9 +1,10 @@
 /**
  * End-to-end pipeline QA against real restaurant sites.
  *
- *   npx tsx scripts/run-pipeline-tests.ts            # all cases
+ *   npx tsx scripts/run-pipeline-tests.ts            # core cases (PR gate)
  *   npx tsx scripts/run-pipeline-tests.ts misters    # filter by substring
  *   npx tsx scripts/run-pipeline-tests.ts --smoke    # stable 3-site subset
+ *   npx tsx scripts/run-pipeline-tests.ts --extended # core + extended Dublin QA set
  *
  * Cases live in tests/pipeline-cases.json (shared with CI). Calls the library
  * directly (no HTTP / no DB writes):
@@ -30,6 +31,8 @@ interface Case {
   url: string;
   category: Category;
   smoke?: boolean;
+  /** Extra QA-only sites — run with --extended (or a filter), not on the PR gate. */
+  extended?: boolean;
 }
 
 const CASES: Case[] = (
@@ -153,14 +156,17 @@ async function runCase(c: Case): Promise<void> {
 async function main() {
   const arg = process.argv[2]?.toLowerCase();
   const smoke = arg === '--smoke';
-  const filter = smoke ? undefined : arg;
+  const extended = arg === '--extended';
+  const filter = smoke || extended ? undefined : arg;
   const cases = smoke
     ? CASES.filter((c) => c.smoke)
-    : filter
-      ? CASES.filter((c) => c.name.toLowerCase().includes(filter) || c.url.includes(filter))
-      : CASES;
+    : extended
+      ? CASES
+      : filter
+        ? CASES.filter((c) => c.name.toLowerCase().includes(filter) || c.url.includes(filter))
+        : CASES.filter((c) => !c.extended);
 
-  console.log(`Reader enabled: ${isReaderEnabled()} | provider auto${smoke ? ' | SMOKE subset' : ''}`);
+  console.log(`Reader enabled: ${isReaderEnabled()} | provider auto${smoke ? ' | SMOKE subset' : extended ? ' | EXTENDED set' : ''}`);
   console.log(`Running ${cases.length} case(s)...`);
 
   for (const c of cases) {

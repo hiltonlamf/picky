@@ -14,6 +14,20 @@
     { "name": "Shouk", "url": "https://www.shouk.ie/", "category": "js" },
     { "name": "The Vintage Kitchen", "url": "https://thevintagekitchen.ie/", "category": "multi", "smoke": true },
     { "name": "Jaru", "url": "https://www.jaru.ie/", "category": "multi" },
-    { "name": "Wagamama", "url": "https://wagamama.ie/", "category": "js" }
+    { "name": "Wagamama", "url": "https://wagamama.ie/", "category": "js" },
+
+    { "name": "Forest Avenue", "url": "https://www.forestavenuerestaurant.ie/", "category": "text", "extended": true },
+    { "name": "L'Gueuleton", "url": "https://lgueuleton.com/", "category": "text", "extended": true },
+    { "name": "Sophie's", "url": "https://sophies.ie/", "category": "multi", "extended": true },
+    { "name": "Cornucopia", "url": "https://www.cornucopia.ie/", "category": "text", "extended": true },
+    { "name": "Yamamori", "url": "https://yamamori.ie/", "category": "multi", "extended": true },
+    { "name": "Bunsen", "url": "https://www.bunsen.ie/", "category": "text", "extended": true },
+    { "name": "The Fumbally", "url": "https://thefumbally.ie/", "category": "text", "extended": true },
+    { "name": "Brother Hubbard", "url": "https://www.brotherhubbard.ie/", "category": "text", "extended": true },
+    { "name": "The Winding Stair", "url": "https://winding-stair.com/", "category": "text", "extended": true },
+    { "name": "Fish Shop", "url": "https://fish-shop.ie/", "category": "text", "extended": true },
+    { "name": "Bujo", "url": "https://bujo.ie/", "category": "text", "extended": true },
+    { "name": "Pi Pizza", "url": "https://pipizzas.ie/", "category": "text", "extended": true },
+    { "name": "Grano", "url": "https://grano.ie/", "category": "text", "extended": true }
   ]
 }

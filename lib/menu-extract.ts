@@ -54,23 +54,39 @@ function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
   };
 }
 
-/** Lazily scrape a sub-page and classify whichever source it yields. */
+/**
+ * Lazily scrape a sub-page and classify whichever source it yields. Tries each
+ * available source in order and keeps the best — a nav-heavy page whose TEXT
+ * is just venue blurb must still fall through to its PDF/images/screenshot.
+ */
 async function extractSubpage(url: string, title?: string, model?: string): Promise<Extraction> {
   try {
     const sub = await scrapeRestaurant(url);
+    const t = title ?? sub.title;
+
+    const attempts: Array<() => Promise<Extraction>> = [];
     if (sub.menuText && sub.menuText.length >= 100) {
-      return classifyMenuWithAI(sub.menuText, title ?? sub.title, model);
+      attempts.push(() => classifyMenuWithAI(sub.menuText, t, model));
     }
     if (sub.menuPdfUrls && sub.menuPdfUrls.length > 0) {
-      return classifyMenuFromPdf(sub.menuPdfUrls[0], title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromPdf(sub.menuPdfUrls![0], t, model));
     }
     if (sub.menuImages && sub.menuImages.length > 0) {
-      return classifyMenuFromImages(sub.menuImages, title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 4), t, model));
     }
     if (sub.screenshotUrl) {
-      return classifyMenuFromScreenshot(sub.screenshotUrl, title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromScreenshot(sub.screenshotUrl!, t, model));
     }
-    return null;
+
+    let best: Extraction = null;
+    let usage: AIUsage | undefined;
+    for (const attempt of attempts) {
+      const res = await attempt().catch(() => null);
+      usage = sumUsage(usage, res?.usage);
+      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
+      if (isValid(res)) break;
+    }
+    return best ? { menu: best.menu, usage: usage! } : null;
   } catch {
     return null;
   }
@@ -104,7 +120,9 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * Returns the attempt with the most food items, with summed usage/cost.
  */
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
-  let best: Extraction = await runPrimary(candidate, ctx);
+  // A hard failure (e.g. truncated/invalid JSON) must fall through to the
+  // retry chain, not abort the whole extraction.
+  let best: Extraction = await runPrimary(candidate, ctx).catch(() => null);
   let usage = best?.usage;
   if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
 

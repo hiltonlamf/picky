@@ -153,11 +153,11 @@ describe('coherent picker lists (jaru.ie bug)', () => {
     expect(res.candidates.find((c) => c.type === 'pdf')!.label).toBe('Dinner');
   });
 
-  it('dedupes candidates that get the same label', async () => {
+  it('keeps distinct sources with colliding labels, disambiguated with suffixes', async () => {
     mockLabeler.mockImplementation(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
-        label: 'Dinner', // labeler failed to distinguish
+        label: 'Menu', // labeler failed to distinguish (e.g. hash-named PDFs)
         isDistinctMenu: true,
         isDrinkOnly: false,
         duplicateOf: null,
@@ -171,7 +171,31 @@ describe('coherent picker lists (jaru.ie bug)', () => {
       ],
     });
     const res = await discoverMenus(scrape);
-    expect(res.candidates).toHaveLength(1);
+    // Hiding a real menu is worse than an awkward name — all three stay.
+    expect(res.candidates).toHaveLength(3);
+    expect(new Set(res.candidates.map((c) => c.label)).size).toBe(3);
+  });
+
+  it('uses anchor text as the hint for opaque PDF filenames', async () => {
+    const captured: Array<{ hint: string }> = [];
+    mockLabeler.mockImplementation(async (candidates) => {
+      captured.push(...candidates.map((c) => ({ hint: c.hint })));
+      return candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Menu',
+        isDistinctMenu: true,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }));
+    });
+    const pdf = 'https://example-restaurant.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf';
+    const scrape = makeScrape({
+      menuPdfUrls: [pdf],
+      linkLabels: { [pdf]: 'Dinner Menu' },
+    });
+    const res = await discoverMenus(scrape);
+    expect(captured[0].hint).toBe('Dinner Menu');
+    expect(res.candidates[0].label).toBe('Dinner Menu');
   });
 
   it(`caps the picker at ${MAX_PICKER_CANDIDATES} options`, async () => {
