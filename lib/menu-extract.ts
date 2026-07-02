@@ -72,7 +72,7 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
       attempts.push(() => classifyMenuFromPdf(sub.menuPdfUrls![0], t, model));
     }
     if (sub.menuImages && sub.menuImages.length > 0) {
-      attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 4), t, model));
+      attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 6), t, model));
     }
     if (sub.screenshotUrl) {
       attempts.push(() => classifyMenuFromScreenshot(sub.screenshotUrl!, t, model));
@@ -101,9 +101,10 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
     case 'pdf':
       return classifyMenuFromPdf(candidate.ref, title, model);
     case 'image':
-      // Include sibling page images for better context.
+      // Include sibling page images — menu boards are often split across
+      // several photos and the food menu may not be the first image.
       return classifyMenuFromImages(
-        Array.from(new Set([candidate.ref, ...(ctx.imageUrls ?? [])])).slice(0, 4),
+        Array.from(new Set([candidate.ref, ...(ctx.imageUrls ?? [])])).slice(0, 6),
         title,
         model
       );
@@ -132,7 +133,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
     altAttempts.push(() => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title));
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
-    altAttempts.push(() => classifyMenuFromImages(ctx.imageUrls!.slice(0, 4), ctx.title));
+    altAttempts.push(() => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title));
   }
   if (ctx.screenshotUrl) {
     altAttempts.push(() => classifyMenuFromScreenshot(ctx.screenshotUrl!, ctx.title));

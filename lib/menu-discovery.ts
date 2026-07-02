@@ -32,7 +32,10 @@ export function textLooksLikeMenu(text: string): boolean {
   if (!text || text.length < 100) return false;
   const priceTokens = (text.match(/(?:€|£|\$)\s?\d|\b\d{1,3}\.\d{2}\b/g) ?? []).length;
   const hasMenuWords = MENU_WORD_RE.test(text);
-  return (priceTokens >= 4 && hasMenuWords) || (priceTokens >= 8) || (hasMenuWords && text.length > 1500);
+  // Priceless menus (tasting menus) list many courses — a single menu word in
+  // a long marketing page ("seasonal sharing plates…") is not a menu.
+  const menuWordCount = (text.match(new RegExp(MENU_WORD_RE.source, 'gi')) ?? []).length;
+  return (priceTokens >= 4 && hasMenuWords) || (priceTokens >= 8) || (menuWordCount >= 5 && text.length > 1500);
 }
 
 /**
@@ -106,8 +109,9 @@ function isOpaqueHint(hint: string): boolean {
 }
 
 /** Format preference when the same menu exists in several formats: PDFs are
- * self-contained, text is already fetched, subpages cost another scrape. */
-const FORMAT_PREFERENCE: Record<MenuCandidateType, number> = { pdf: 0, text: 1, subpage: 2, image: 3 };
+ * self-contained; a dedicated menu subpage beats the landing-page text (which
+ * is often nav/hero copy the labeler mistakes for "the menu"). */
+const FORMAT_PREFERENCE: Record<MenuCandidateType, number> = { pdf: 0, subpage: 1, text: 2, image: 3 };
 
 function toCandidate(r: Raw, label: string): MenuCandidate {
   return {

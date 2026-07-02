@@ -46,12 +46,13 @@ function dishes(menu: ClassifiedMenu) {
   return menu.sections.flatMap((s) => s.dishes);
 }
 
-/** Duplicate dish names within the same source menu (cross-menu repeats are fine). */
+/** Duplicate dishes within the same source menu (cross-menu repeats and
+ *  same-name-different-price size variants are fine). */
 function dupCount(menu: ClassifiedMenu): number {
   const seen = new Map<string, number>();
   for (const s of menu.sections) {
     for (const d of s.dishes) {
-      const k = `${s.menuLabel ?? ''}|${d.name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const k = `${s.menuLabel ?? ''}|${d.name.toLowerCase().replace(/[^a-z0-9]/g, '')}|${(d.price ?? '').toLowerCase()}`;
       seen.set(k, (seen.get(k) ?? 0) + 1);
     }
   }
