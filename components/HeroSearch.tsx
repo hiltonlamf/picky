@@ -79,6 +79,12 @@ export default function HeroSearch() {
           }
         }
       }
+
+      // Stream closed without a result/candidates/error event — the server
+      // was cut off mid-analysis. Fail visibly rather than spinning forever.
+      throw new Error(
+        'The analysis took longer than expected and the connection dropped. Please try again — a retry usually succeeds.'
+      );
     },
     [router]
   );

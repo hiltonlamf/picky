@@ -15,7 +15,9 @@ import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
 
-export const maxDuration = 60;
+// Heavy sites (image-board menus, subpage + vision retries) legitimately need
+// more than 60s; Vercel kills the function at maxDuration and the stream dies.
+export const maxDuration = 300;
 
 const schema = z.object({ url: z.string().url('Please provide a valid URL') });
 
@@ -170,6 +172,8 @@ export async function POST(request: NextRequest) {
 
         // Single menu (or candidates couldn't be persisted) → analyze inline.
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 4, totalSteps: 4 });
+        // Stream live extraction status so long analyses don't look frozen.
+        ctx.onProgress = (message) => send({ type: 'progress', step: message, stepNumber: 4, totalSteps: 4 });
         let menu;
         let usage;
         try {

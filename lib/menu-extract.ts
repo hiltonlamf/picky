@@ -22,6 +22,9 @@ export interface ExtractContext {
   pdfUrls?: string[];
   imageUrls?: string[];
   pageUrl?: string; // the menu page URL — used to fetch a screenshot as last resort
+  /** Live status callback — long analyses stream these to the user so a slow
+   *  extraction doesn't look like a frozen app. */
+  onProgress?: (message: string) => void;
 }
 
 type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
@@ -141,25 +144,52 @@ async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction>
   }
 }
 
+/** Human phrasing for the start of a candidate's extraction. */
+function startMessage(candidate: MenuCandidate): string {
+  switch (candidate.type) {
+    case 'pdf':
+      return `Reading the ${candidate.label} PDF...`;
+    case 'image':
+      return 'Found the menu in an image — scanning it for dishes...';
+    case 'subpage':
+      return `Opening the ${candidate.label} page...`;
+    default:
+      return 'Reading the menu text...';
+  }
+}
+
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
+  const progress = ctx.onProgress ?? (() => {});
+
+  progress(startMessage(candidate));
   let best: Extraction = await attemptOrNull(() => runPrimary(candidate, ctx));
   let usage = best?.usage;
   if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
 
   // Alternate sources not already tried, in priority order.
-  const altAttempts: Array<() => Promise<Extraction>> = [];
+  const altAttempts: Array<{ note: string; run: () => Promise<Extraction> }> = [];
   if (candidate.type !== 'pdf' && ctx.pdfUrls?.length) {
-    altAttempts.push(() => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title));
+    altAttempts.push({
+      note: 'That source was unclear — reading the menu PDF instead...',
+      run: () => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title),
+    });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
-    altAttempts.push(() => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title));
+    altAttempts.push({
+      note: 'Scanning the menu images for dishes...',
+      run: () => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title),
+    });
   }
   if (ctx.screenshotUrl) {
-    altAttempts.push(() => classifyMenuFromScreenshot(ctx.screenshotUrl!, ctx.title));
+    altAttempts.push({
+      note: 'Reading a full snapshot of the page...',
+      run: () => classifyMenuFromScreenshot(ctx.screenshotUrl!, ctx.title),
+    });
   }
 
   for (const attempt of altAttempts) {
-    const res = await attemptOrNull(attempt);
+    progress(attempt.note);
+    const res = await attemptOrNull(attempt.run);
     usage = sumUsage(usage, res?.usage);
     if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
     if (isValid(res)) break;
@@ -172,6 +202,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
     // Screenshot the candidate's own page when it's a sub-page; otherwise the
     // menu page we landed on.
     const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
+    progress('Taking a snapshot of the page to read it visually...');
     const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
     if (shot) {
       const res = await attemptOrNull(() => classifyMenuFromScreenshot(shot, ctx.title));
@@ -182,6 +213,7 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
 
   // Last resort: escalate the original source to the strongest model.
   if (!isValid(best)) {
+    progress('Double-checking with our strongest AI model...');
     const escalated = await attemptOrNull(() => runPrimary(candidate, ctx, ESCALATION_MODEL));
     usage = sumUsage(usage, escalated?.usage);
     if (escalated && (!best || countFoodItems(escalated.menu) > countFoodItems(best.menu))) best = escalated;
@@ -253,6 +285,8 @@ export async function extractAndMerge(
   const named = results
     .filter((r) => r.res && r.res.menu.sections.length > 0)
     .map((r) => ({ label: r.label, menu: r.res!.menu }));
+
+  if (named.length > 1) ctx.onProgress?.('Combining the menus and classifying every dish...');
 
   let usage: AIUsage | undefined;
   for (const r of results) usage = sumUsage(usage, r.res?.usage);

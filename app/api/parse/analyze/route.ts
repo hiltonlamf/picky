@@ -5,7 +5,9 @@ import { getMenuCandidates, saveClassifiedMenu, markRestaurantError } from '@/li
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import type { ParseEvent } from '@/types';
 
-export const maxDuration = 60;
+// Heavy sites (image-board menus, subpage + vision retries) legitimately need
+// more than 60s; Vercel kills the function at maxDuration and the stream dies.
+export const maxDuration = 300;
 
 const schema = z.object({
   restaurantId: z.string().uuid('Invalid restaurant id'),
@@ -78,6 +80,8 @@ export async function POST(request: NextRequest) {
           pdfUrls: payload.pdfUrls,
           imageUrls: payload.imageUrls,
           pageUrl: payload.finalUrl,
+          // Stream live extraction status so long analyses don't look frozen.
+          onProgress: (message) => send({ type: 'progress', step: message, stepNumber: 1, totalSteps: 2 }),
         };
 
         let menu;
