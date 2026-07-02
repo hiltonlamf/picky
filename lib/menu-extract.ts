@@ -133,6 +133,8 @@ async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction>
     return await fn();
   } catch (err) {
     if (isBillingError(err)) {
+      // Keep the underlying cause in server logs; users get the generic line.
+      console.error('[extract] API access error:', err instanceof Error ? err.message : err);
       throw new Error('Our AI service is temporarily unavailable. Please try again later.');
     }
     return null;

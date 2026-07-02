@@ -30,6 +30,18 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: API key sanity check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "key length: ${#ANTHROPIC_API_KEY}"
+          echo -n "API HTTP status: "
+          curl -s -o /tmp/api-check.json -w '%{http_code}\n' https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
+          grep -o '"type":"[a-z_]*"' /tmp/api-check.json | head -2 || true
       - name: Run live pipeline suite
         run: npm run test:pipeline 2>&1 | tee pipeline-log.txt
         shell: bash
