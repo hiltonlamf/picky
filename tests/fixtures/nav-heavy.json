@@ -1,0 +1,24 @@
+{
+  "recordedAt": "2026-07-02T12:55:13.686Z",
+  "sourceUrl": "https://www.dunneandcrescenzi.com",
+  "scrape": {
+    "url": "https://www.dunneandcrescenzi.com",
+    "canonicalUrl": "https://www.dunneandcrescenzi.com/restaurants",
+    "title": "Restaurants — Dunne and Crescenzi",
+    "menuText": "0 our locations Dublin CITY CENTRE14-16 South Frederick Street, Dublin 2, Ireland​Monday - Sunday 9:30am - lateGROUP BOOKINGS To book for 6 or more please email us at bookings@dunneandcrescenzigroup.ie Please note, for group bookings of 6 or more, we require a deposit paymentIf you need to speak to a member of the team directly, please call us on +353 (0) 1 675 9892 BOOK NOW Private dining MENU DUNDRUMDundrum Town Centre, Dublin 16​+353 1 216 6764Sunday - Wednesday 11:30 am - 9 pm Thursday - Saturday 11:30 am - 10 pm BOOK NOW BOOK NOW Menu ALL TIPS, GRATUITIES & SERVICE CHARGE ARE DISTRIBUTED BY STAFF ON A TRONC SYSTEM",
+    "menuUrl": "https://www.dunneandcrescenzi.com/restaurants",
+    "menuImages": [
+      "https://images.squarespace-cdn.com/content/v1/65a846700905a93bd71cd26f/fb209825-171a-4101-a6d7-3a76a9c3bc09/Wine2.jpg?format=1500w"
+    ],
+    "menuPdfUrls": [],
+    "menuLinks": [
+      "https://www.dunneandcrescenzi.com/restaurants"
+    ],
+    "navLinks": [
+      "https://www.dunneandcrescenzi.com/restaurants",
+      "https://www.dunneandcrescenzi.com/our-story",
+      "https://www.dunneandcrescenzi.com/events"
+    ],
+    "urlType": "html"
+  }
+}

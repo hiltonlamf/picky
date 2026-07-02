@@ -28,8 +28,13 @@ CREATE TABLE IF NOT EXISTS menu_sections (
   restaurant_id   UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   name            TEXT NOT NULL,
   display_order   INTEGER NOT NULL DEFAULT 0,
+  menu_label      TEXT, -- source menu (Lunch/Dinner/...); NULL for single-menu restaurants
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Safe for existing schemas (mirrors supabase/migrations/20260702090000_add_menu_label.sql)
+ALTER TABLE menu_sections
+  ADD COLUMN IF NOT EXISTS menu_label TEXT;
 
 CREATE TABLE IF NOT EXISTS dishes (
   id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

@@ -1,6 +1,6 @@
 import type { MenuCandidate, MenuCandidateType } from '@/types';
-import type { ScrapeResult } from './scraper';
-import { labelMenuCandidates } from './ai';
+import { scrapeRestaurant, type ScrapeResult } from './scraper';
+import { labelMenuCandidates, LabeledCandidate } from './ai';
 
 export interface DiscoveryResult {
   candidates: MenuCandidate[];
@@ -9,6 +9,9 @@ export interface DiscoveryResult {
   finalUrl: string;
   screenshotUrl?: string;
 }
+
+/** Max menu options shown in the picker — beyond this the list stops being a choice. */
+export const MAX_PICKER_CANDIDATES = 6;
 
 /** Stable, non-cryptographic id for a candidate (FNV-1a, 32-bit, hex). */
 function candidateId(type: MenuCandidateType, ref: string): string {
@@ -25,15 +28,22 @@ const MENU_WORD_RE =
   /\b(starter|main|dessert|appetiser|appetizer|entr[ée]e|side|sharing|à la carte|a la carte|course|salad|soup|pasta|pizza|risotto|burger|brunch|lunch|dinner)\b/i;
 
 /** Heuristic: does this text actually read like a menu (prices + food words)? */
-function textLooksLikeMenu(text: string): boolean {
+export function textLooksLikeMenu(text: string): boolean {
   if (!text || text.length < 100) return false;
   const priceTokens = (text.match(/(?:€|£|\$)\s?\d|\b\d{1,3}\.\d{2}\b/g) ?? []).length;
   const hasMenuWords = MENU_WORD_RE.test(text);
   return (priceTokens >= 4 && hasMenuWords) || (priceTokens >= 8) || (hasMenuWords && text.length > 1500);
 }
 
+/**
+ * Drink-only menu sources (wine lists, cocktail lists...). The app analyses
+ * food only, so these are dropped before they ever reach the picker.
+ */
+export const DRINK_SOURCE_RE =
+  /\b(wine|wines|winelist|drink|drinks|beverage|beverages|cocktail|cocktails|spirits|aperitif|digestif|bar\s?list|bar\s?menu|beer\s?list|gin\s?list|whisk(e)?y\s?list|vino|vinos|boissons|bebidas)\b/i;
+
 /** Turn a URL into a short human hint from its slug, e.g. ".../wine-list.pdf" → "wine list". */
-function hintFromUrl(url: string): string {
+export function hintFromUrl(url: string): string {
   try {
     const path = new URL(url).pathname;
     const last = path.split('/').filter(Boolean).pop() ?? '';
@@ -46,17 +56,76 @@ function hintFromUrl(url: string): string {
   }
 }
 
+type Raw = { type: MenuCandidateType; ref: string; hint: string; source: MenuCandidate['source'] };
+
+/** How many nav links the deep pass follows, and its total time budget. */
+const DEEP_NAV_LINKS = 3;
+const DEEP_BUDGET_MS = 15000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]).catch(() => null);
+}
+
+/**
+ * Deep discovery, one hop, bounded: when the landing page yields NO menu
+ * source at all, follow the top scored nav links (e.g. a "Restaurants" or
+ * "Dining" section on a multi-venue site) and harvest menu sources from those
+ * pages. Never triggers when the first pass found anything, so it cannot
+ * affect sites that already work.
+ */
+async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
+  const targets = navLinks.slice(0, DEEP_NAV_LINKS);
+  if (targets.length === 0) return [];
+
+  const subs = await Promise.all(targets.map((u) => withTimeout(scrapeRestaurant(u), DEEP_BUDGET_MS)));
+
+  const raw: Raw[] = [];
+  for (let i = 0; i < subs.length; i++) {
+    const sub = subs[i];
+    if (!sub) continue;
+    for (const pdf of sub.menuPdfUrls ?? []) {
+      raw.push({ type: 'pdf', ref: pdf, hint: hintFromUrl(pdf), source: 'subpage' });
+    }
+    for (const link of sub.menuLinks ?? []) {
+      raw.push({ type: 'subpage', ref: link, hint: hintFromUrl(link), source: 'subpage' });
+    }
+    // The nav page itself reads like a menu → it's a menu subpage.
+    if (textLooksLikeMenu(sub.menuText ?? '')) {
+      raw.push({ type: 'subpage', ref: sub.canonicalUrl || targets[i], hint: hintFromUrl(targets[i]), source: 'subpage' });
+    }
+  }
+  return raw;
+}
+
+/** Format preference when the same menu exists in several formats: PDFs are
+ * self-contained, text is already fetched, subpages cost another scrape. */
+const FORMAT_PREFERENCE: Record<MenuCandidateType, number> = { pdf: 0, text: 1, subpage: 2, image: 3 };
+
+function toCandidate(r: Raw, label: string): MenuCandidate {
+  return {
+    id: candidateId(r.type, r.ref),
+    label,
+    type: r.type,
+    ref: r.ref,
+    source: r.source,
+  };
+}
+
 /**
  * Enumerate the distinct menu sources on a scraped restaurant page and label
  * them with a cheap LLM pass. The page text itself counts as one "text"
- * candidate when present; PDFs, images, and menu sub-pages are the others.
+ * candidate when present; PDFs and menu sub-pages are the others.
+ *
+ * Page images are NOT offered as a menu option when any text/PDF/subpage menu
+ * exists — an image is a container a menu might be delivered in, not a menu.
+ * They remain available to extraction as a fallback source (ctx.imageUrls),
+ * and become the (single, sole) candidate only on image-only sites.
  */
 export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResult> {
   const inlineText = scrape.menuText ?? '';
   const finalUrl = scrape.canonicalUrl;
 
   // Build raw candidates with a type, ref and a human hint for labeling.
-  type Raw = { type: MenuCandidateType; ref: string; hint: string; source: MenuCandidate['source'] };
   const raw: Raw[] = [];
 
   // Only treat inline text as a menu candidate when it actually looks like a
@@ -71,70 +140,123 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   for (const link of scrape.menuLinks ?? []) {
     raw.push({ type: 'subpage', ref: link, hint: hintFromUrl(link), source: 'subpage' });
   }
-  // Collapse ALL page images into a SINGLE image candidate (extraction passes
-  // the full image set to vision). Avoids a false multi-menu picker full of
-  // photos, and keeps image menus (e.g. Squarespace boards) selectable.
-  const firstImage = (scrape.menuImages ?? [])[0];
-  if (firstImage) {
-    raw.push({ type: 'image', ref: firstImage, hint: 'Menu Images', source: 'homepage' });
-  }
 
-  // De-dupe by ref (text has empty ref → keep one).
-  const seen = new Set<string>();
-  const deduped = raw.filter((r) => {
-    const key = `${r.type}|${r.ref}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  if (deduped.length === 0) {
-    return { candidates: [], inlineText, restaurantTitle: scrape.title, finalUrl, screenshotUrl: scrape.screenshotUrl };
-  }
-
-  // Label + distinctness via Haiku. Failures degrade to keeping everything.
-  let labeled: Array<{ ref: string; label: string; isDistinctMenu: boolean }>;
-  try {
-    labeled = await labelMenuCandidates(
-      deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, hint: r.hint, type: r.type })),
-      scrape.title
-    );
-  } catch {
-    labeled = deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, label: r.hint || 'Menu', isDistinctMenu: true }));
-  }
-
-  const candidates: MenuCandidate[] = deduped
-    .map((r, i) => {
+  // De-dupe by ref, and drop obvious drink-only sources (wine lists etc.)
+  // before spending tokens on labeling.
+  const dedupeRaw = (items: Raw[]): Raw[] => {
+    const seen = new Set<string>();
+    return items.filter((r) => {
       const key = `${r.type}|${r.ref}`;
-      const match = labeled.find((l) => l.ref === key) ?? labeled[i];
+      if (seen.has(key)) return false;
+      seen.add(key);
+      if (r.type !== 'text' && DRINK_SOURCE_RE.test(`${r.hint} ${hintFromUrl(r.ref)}`)) return false;
+      return true;
+    });
+  };
+
+  let deduped = dedupeRaw(raw);
+
+  // Deep fallback: no food-menu source on the landing page → follow top nav
+  // links one hop (multi-venue sites where the menu hides under "Restaurants").
+  if (deduped.length === 0 && (scrape.navLinks?.length ?? 0) > 0) {
+    deduped = dedupeRaw([...raw, ...(await deepDiscoverRaw(scrape.navLinks!))]);
+  }
+
+  let finalCandidates: MenuCandidate[] = [];
+
+  if (deduped.length > 0) {
+    // Label + distinctness/drink/duplicate detection via Haiku.
+    // Failures degrade to keeping everything.
+    let labeled: LabeledCandidate[];
+    try {
+      labeled = await labelMenuCandidates(
+        deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, hint: r.hint, type: r.type, url: r.ref || undefined })),
+        scrape.title
+      );
+    } catch {
+      labeled = deduped.map((r) => ({
+        ref: `${r.type}|${r.ref}`,
+        label: r.hint || 'Menu',
+        isDistinctMenu: true,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }));
+    }
+
+    type Judged = { raw: Raw; verdict: LabeledCandidate; index: number };
+    const judged: Judged[] = deduped.map((r, i) => {
+      const key = `${r.type}|${r.ref}`;
+      const verdict = labeled.find((l) => l.ref === key) ?? labeled[i];
       return {
-        candidate: {
-          id: candidateId(r.type, r.ref),
-          label: match?.label || r.hint || 'Menu',
-          type: r.type,
-          ref: r.ref,
-          source: r.source,
-        } as MenuCandidate,
-        isDistinct: match?.isDistinctMenu ?? true,
+        raw: r,
+        index: i,
+        verdict: verdict ?? { ref: key, label: r.hint || 'Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null },
       };
-    })
-    // Drop non-menu links (nav/about/etc.). Always keep inline text, PDFs, and
-    // the single image candidate, which are rarely false positives — so we never
-    // strip the only real menu (e.g. an image-only site).
-    .filter(
-      (c) => c.isDistinct || c.candidate.type === 'text' || c.candidate.type === 'pdf' || c.candidate.type === 'image'
-    )
-    .map((c) => c.candidate);
+    });
 
-  // De-dupe by id (different refs could hash-collide on label only — defensive).
-  const byId = new Map<string, MenuCandidate>();
-  for (const c of candidates) if (!byId.has(c.id)) byId.set(c.id, c);
-  const finalCandidates = Array.from(byId.values());
+    // Drop drink-only menus outright, and non-menu links (nav/about/etc.).
+    // Text and PDF candidates survive a false isDistinctMenu verdict — they are
+    // rarely false positives, and dropping them could strip the only real menu.
+    const kept = judged.filter(
+      (j) =>
+        !j.verdict.isDrinkOnly &&
+        (j.verdict.isDistinctMenu || j.raw.type === 'text' || j.raw.type === 'pdf')
+    );
 
-  // Guarantee at least one candidate when any content exists, so the single-menu
-  // path always has something to extract (covers teaser text / screenshot-only).
+    // Resolve duplicate groups (same menu in several formats) via duplicateOf
+    // pointers; keep the preferred format from each group.
+    const groupOf = new Map<number, number>(); // index → group root
+    for (const j of judged) {
+      const dup = j.verdict.duplicateOf;
+      if (dup !== null && dup < j.index) {
+        groupOf.set(j.index, groupOf.get(dup) ?? dup);
+      } else if (!groupOf.has(j.index)) {
+        groupOf.set(j.index, j.index);
+      }
+    }
+    const groups = new Map<number, Judged[]>();
+    for (const j of kept) {
+      const root = groupOf.get(j.index) ?? j.index;
+      groups.set(root, [...(groups.get(root) ?? []), j]);
+    }
+
+    const representatives: Judged[] = [];
+    for (const members of Array.from(groups.values())) {
+      members.sort((a, b) => FORMAT_PREFERENCE[a.raw.type] - FORMAT_PREFERENCE[b.raw.type] || a.index - b.index);
+      representatives.push(members[0]);
+    }
+    representatives.sort((a, b) => a.index - b.index);
+
+    // Dedupe by normalized label (two "Dinner" entries are one choice), then cap.
+    const byLabel = new Map<string, Judged>();
+    for (const j of representatives) {
+      const norm = j.verdict.label.toLowerCase().replace(/\s+/g, ' ').trim();
+      const existing = byLabel.get(norm);
+      if (!existing || FORMAT_PREFERENCE[j.raw.type] < FORMAT_PREFERENCE[existing.raw.type]) {
+        byLabel.set(norm, j);
+      }
+    }
+    const unique = Array.from(byLabel.values())
+      .sort((a, b) => a.index - b.index)
+      .slice(0, MAX_PICKER_CANDIDATES);
+
+    finalCandidates = unique.map((j) => toCandidate(j.raw, j.verdict.label || j.raw.hint || 'Menu'));
+
+    // De-dupe by id (defensive against hash collisions).
+    const byId = new Map<string, MenuCandidate>();
+    for (const c of finalCandidates) if (!byId.has(c.id)) byId.set(c.id, c);
+    finalCandidates = Array.from(byId.values());
+  }
+
+  // Guarantee at least one candidate when any content exists, so the
+  // single-menu path always has something to extract. Only here — when no
+  // text/PDF/subpage menu was found — do images become the candidate
+  // (image-only sites, e.g. Squarespace menu boards).
   if (finalCandidates.length === 0) {
-    if (inlineText.length >= 100) {
+    const firstImage = (scrape.menuImages ?? [])[0];
+    if (firstImage) {
+      finalCandidates.push({ id: candidateId('image', firstImage), label: 'Menu', type: 'image', ref: firstImage, source: 'homepage' });
+    } else if (inlineText.length >= 100) {
       finalCandidates.push({ id: candidateId('text', ''), label: 'Menu', type: 'text', ref: '', source: 'homepage' });
     } else if (scrape.screenshotUrl) {
       finalCandidates.push({ id: candidateId('image', scrape.screenshotUrl), label: 'Menu', type: 'image', ref: scrape.screenshotUrl, source: 'homepage' });

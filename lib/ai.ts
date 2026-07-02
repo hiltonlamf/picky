@@ -4,7 +4,7 @@ import { DIETARY_FILTERS } from './dietary-config';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-haiku-4-5-20251001': { input: 0.80, output: 4.00 },
+  'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
   'claude-sonnet-4-6':         { input: 3.00, output: 15.00 },
   'claude-opus-4-8':           { input: 5.00, output: 25.00 },
 };
@@ -26,11 +26,19 @@ function calcCost(model: string, tokensIn: number, tokensOut: number): number {
   return (tokensIn * pricing.input + tokensOut * pricing.output) / 1_000_000;
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Lazy client: constructing the SDK at module load throws when no API key is
+// set (unit tests, CI builds). Same pattern as lib/db.ts.
+let _anthropic: Anthropic | null = null;
+function anthropic(): Anthropic {
+  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || undefined });
+  return _anthropic;
+}
 
-const SYSTEM_PROMPT = `You are a dietary classifier specializing in vegetarian and vegan restaurant menus.
+export const SYSTEM_PROMPT = `You are a dietary classifier specializing in vegetarian and vegan restaurant menus.
 
 Your task: analyse a restaurant menu and classify each FOOD dish accurately.
+
+A menu is always WRITTEN TEXT — dish names, descriptions, and prices — even when it is presented inside an image, a PDF, or a photographed menu board. Work only from that written text. Photographs of food, plates, or the restaurant are decoration, not menu content.
 
 CRITICAL — WHAT TO INCLUDE vs. EXCLUDE:
 - INCLUDE: all individual food dishes — starters, mains, sides, desserts, sharing plates, etc.
@@ -38,6 +46,7 @@ CRITICAL — WHAT TO INCLUDE vs. EXCLUDE:
 - EXCLUDE: menu section headers used as dish names (e.g. "Daily Dim Sum Menu", "Today's Specials", "Set Menu €35 per person", "Starter Selection"). These are categories, not individual dishes.
 - EXCLUDE: non-dish text like opening hours, allergen notices, chef's notes, reservation policies.
 - If a section contains ONLY drinks, omit that entire section from the output.
+- NEVER invent, guess, or infer dishes that are not explicitly written in the provided menu content. Only include dishes whose names appear as text in the source.
 
 CRITICAL — MULTI-LANGUAGE / BILINGUAL MENUS:
 - Some menus list each dish in two languages (e.g. French and English, or Spanish and English), either side by side or stacked. Output each dish EXACTLY ONCE — never as two separate entries. Use the dish's primary/original language for the "name" and put any translation in the description.
@@ -103,7 +112,7 @@ export async function classifyMenuWithAI(
   // language; an explicit override (e.g. escalation) wins.
   const model = modelOverride ?? EXTRACTION_MODEL;
 
-  const message = await anthropic.messages.create({
+  const message = await anthropic().messages.create({
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
@@ -180,6 +189,17 @@ function sniffImageType(b: Uint8Array): string | null {
   return null;
 }
 
+/**
+ * OCR-style instruction for vision extraction. Menus are text; images are just
+ * a container. Exported so tests can guard against prompt regressions.
+ */
+export const IMAGE_OCR_INSTRUCTION =
+  'Read ONLY the text visibly written in the image(s): printed or handwritten menu text with dish names, descriptions, and prices. ' +
+  'Treat this as OCR — transcribe and classify what is written, nothing more. ' +
+  'NEVER infer or invent dishes from photographs of food, plates, drinks, ingredients, people, or the restaurant interior; a photo of dumplings is NOT a menu entry. ' +
+  'If some images are food photography and others contain a written menu, use only the written menu. ' +
+  'If no readable menu text is present in any image, return {"sections": []}.';
+
 export async function classifyMenuFromImages(
   imageUrls: string[],
   restaurantName?: string,
@@ -192,7 +212,7 @@ export async function classifyMenuFromImages(
   const model = modelOverride ?? EXTRACTION_MODEL;
   const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 
-  const message = await anthropic.messages.create({
+  const message = await anthropic().messages.create({
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
@@ -210,7 +230,7 @@ export async function classifyMenuFromImages(
           })),
           {
             type: 'text' as const,
-            text: `${nameHint}Look at the image(s) above. Find any restaurant menu with dish listings and classify every dish. If no menu is visible, return an empty sections array.\n\nReturn ONLY JSON.`,
+            text: `${nameHint}${IMAGE_OCR_INSTRUCTION}\n\nClassify every dish found in the written menu text. Return ONLY JSON.`,
           },
         ],
       },
@@ -253,58 +273,84 @@ export async function classifyMenuFromScreenshot(
   return classifyMenuFromImages([screenshotUrl], restaurantName, modelOverride);
 }
 
-/**
- * Cheap Haiku pass that turns raw menu-source candidates into human-friendly,
- * de-duplicated menu labels and flags which are genuinely distinct menus.
- * Used by the discovery phase to drive the multi-menu picker.
- */
-export async function labelMenuCandidates(
-  candidates: Array<{ ref: string; hint: string; type: string }>,
+export interface LabeledCandidate {
+  ref: string;
+  label: string;
+  isDistinctMenu: boolean;
+  isDrinkOnly: boolean;
+  duplicateOf: number | null;
+}
+
+/** Exported for prompt-regression tests. */
+export function buildLabelPrompt(
+  candidates: Array<{ ref: string; hint: string; type: string; url?: string }>,
   restaurantName?: string
-): Promise<Array<{ ref: string; label: string; isDistinctMenu: boolean }>> {
-  if (candidates.length === 0) return [];
+): string {
   const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n` : '';
   const list = candidates
-    .map((c, i) => `${i}. [${c.type}] ${c.hint || c.ref}`)
+    .map((c, i) => `${i}. [${c.type}] hint: "${c.hint || '(none)'}"${c.url ? ` url: ${c.url}` : ''}`)
     .join('\n');
 
-  const message = await anthropic.messages.create({
-    model: DISCOVERY_MODEL,
-    max_tokens: 1024,
-    messages: [
-      {
-        role: 'user',
-        content: `${nameHint}Below is a list of candidate menu sources found on a restaurant website (each is a link, PDF, image, or the page text itself). For EACH item, give a short human label describing what menu it is (e.g. "Dinner Menu", "Wine List", "Lunch", "Brunch", "À la carte", "Set Menu"), and decide if it is a DISTINCT food/drink menu a diner would choose between.
+  return `${nameHint}Below is a list of candidate menu sources found on a restaurant website (each is a link, PDF, image, or the page text itself). For EACH item decide:
 
-Mark isDistinctMenu = false for: navigation/about/contact/gallery/booking/gift-voucher links, social media, duplicates of another item, or anything that is not actually a menu.
+1. "label": a short, human-distinguishable name a diner would recognise, e.g. "Lunch", "Dinner", "À la carte", "Weekend Brunch", "Set Menu", "Mon–Thu", "Fri–Sun". Use the hint and URL slug. NEVER use meta-labels like "Menu images", "Menus", "Main website", "Page text" — describe WHICH menu it is. If you genuinely can't tell, use "Menu".
+2. "isDistinctMenu": true only if it is a real menu a diner would choose between. False for navigation/about/contact/gallery/booking/gift-voucher links, social media, login/account/checkout pages, or anything that is not actually a menu. Note: online-ordering pages (Toast, Square, etc.) usually contain the restaurant's live menu — those ARE menus.
+3. "isDrinkOnly": true if the source is exclusively drinks (wine list, cocktail list, beverages, bar list). This app analyses FOOD only — drink lists are discarded. A menu that includes both food and drinks is NOT drink-only.
+4. "duplicateOf": if this candidate is the SAME menu as an earlier candidate in a different format (e.g. the same dinner menu as both a PDF and a web page, or the same URL twice), give that earlier candidate's index; otherwise null.
 
 Candidates:
 ${list}
 
 Return ONLY a JSON array, one object per candidate index, in order:
-[{"index": 0, "label": "Dinner Menu", "isDistinctMenu": true}, ...]`,
-      },
-    ],
+[{"index": 0, "label": "Dinner", "isDistinctMenu": true, "isDrinkOnly": false, "duplicateOf": null}, ...]`;
+}
+
+/**
+ * Cheap Haiku pass that turns raw menu-source candidates into human-friendly,
+ * de-duplicated menu labels and flags which are genuinely distinct FOOD menus.
+ * Used by the discovery phase to drive the multi-menu picker.
+ */
+export async function labelMenuCandidates(
+  candidates: Array<{ ref: string; hint: string; type: string; url?: string }>,
+  restaurantName?: string
+): Promise<LabeledCandidate[]> {
+  if (candidates.length === 0) return [];
+
+  const fallback = (): LabeledCandidate[] =>
+    candidates.map((c) => ({ ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null }));
+
+  const message = await anthropic().messages.create({
+    model: DISCOVERY_MODEL,
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: buildLabelPrompt(candidates, restaurantName) }],
   });
 
   const content = message.content[0];
-  if (content.type !== 'text') return candidates.map((c) => ({ ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true }));
+  if (content.type !== 'text') return fallback();
 
   const text = content.text.trim();
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
   const jsonText = jsonMatch[1]?.trim() ?? text;
   try {
-    const parsed = JSON.parse(jsonText) as Array<{ index: number; label: string; isDistinctMenu: boolean }>;
+    const parsed = JSON.parse(jsonText) as Array<{
+      index: number;
+      label: string;
+      isDistinctMenu: boolean;
+      isDrinkOnly?: boolean;
+      duplicateOf?: number | null;
+    }>;
     return candidates.map((c, i) => {
       const match = parsed.find((p) => p.index === i);
       return {
         ref: c.ref,
         label: match?.label?.trim() || c.hint || 'Menu',
         isDistinctMenu: match?.isDistinctMenu ?? true,
+        isDrinkOnly: match?.isDrinkOnly ?? false,
+        duplicateOf: typeof match?.duplicateOf === 'number' && match.duplicateOf >= 0 && match.duplicateOf < i ? match.duplicateOf : null,
       };
     });
   } catch {
-    return candidates.map((c) => ({ ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true }));
+    return fallback();
   }
 }
 
@@ -312,7 +358,7 @@ export async function analysePageForMenu(
   pageText: string,
   pageUrl: string
 ): Promise<{ isMenu: boolean; suggestedLinks: string[] }> {
-  const message = await anthropic.messages.create({
+  const message = await anthropic().messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 512,
     messages: [
@@ -402,7 +448,7 @@ export async function classifyMenuFromPdf(
     const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 
     // SDK 0.27.x types don't include 'document' yet, but the API supports it.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line
     const pdfContent: any[] = [
       {
         type: 'document',
@@ -414,7 +460,7 @@ export async function classifyMenuFromPdf(
       },
     ];
 
-    const message = await anthropic.messages.create({
+    const message = await anthropic().messages.create({
       model,
       max_tokens: 4096,
       system: SYSTEM_PROMPT,

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import type { Restaurant, DietaryClassification } from '@/types';
+import type { Restaurant, DietaryClassification, MenuSection as MenuSectionType } from '@/types';
 import MenuSection from '@/components/MenuSection';
 import FreshnessIndicator from '@/components/FreshnessIndicator';
 import Disclaimer from '@/components/Disclaimer';
@@ -12,8 +12,8 @@ import { useHeader } from '@/lib/header-context';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
 
-function countDishes(restaurant: Restaurant, filter: DietaryClassification | 'all') {
-  const dishes = restaurant.sections.flatMap((s) => s.dishes);
+function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
+  const dishes = sections.flatMap((s) => s.dishes);
   if (filter === 'all') return dishes.length;
   return dishes.filter((d) => {
     if (filter === 'vegan') return d.classification === 'vegan';
@@ -22,12 +22,24 @@ function countDishes(restaurant: Restaurant, filter: DietaryClassification | 'al
   }).length;
 }
 
+/** Distinct source-menu labels (Lunch/Dinner/...) in display order; empty for single-menu restaurants. */
+function distinctMenuLabels(restaurant: Restaurant): string[] {
+  const labels: string[] = [];
+  for (const s of restaurant.sections) {
+    if (s.menuLabel && !labels.includes(s.menuLabel)) labels.push(s.menuLabel);
+  }
+  return labels;
+}
+
 export default function RestaurantPage() {
   const params = useParams<{ id: string }>();
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('vegetarian');
+  // 'all' or a specific source-menu label (Lunch/Dinner/...) when the
+  // restaurant has multiple analysed menus.
+  const [menuFilter, setMenuFilter] = useState<string>('all');
   const { setRestaurantName } = useHeader();
 
   useEffect(() => {
@@ -38,6 +50,9 @@ export default function RestaurantPage() {
       })
       .then((data: Restaurant) => {
         setRestaurant(data);
+        // Default to viewing one menu at a time — a combined lunch+dinner+... list isn't helpful.
+        const labels = distinctMenuLabels(data);
+        if (labels.length > 1) setMenuFilter(labels[0]);
         if (data.name) {
           setRestaurantName(data.name);
           document.title = `${data.name} | Picky`;
@@ -115,9 +130,16 @@ export default function RestaurantPage() {
     );
   }
 
-  const veganCount = countDishes(restaurant, 'vegan');
-  const vegCount = countDishes(restaurant, 'vegetarian');
-  const totalDishes = restaurant.sections.flatMap((s) => s.dishes).length;
+  const menuLabels = distinctMenuLabels(restaurant);
+  // Unlabeled sections (e.g. unsectioned dishes) are shown in every view.
+  const visibleSections =
+    menuLabels.length > 1 && menuFilter !== 'all'
+      ? restaurant.sections.filter((s) => s.menuLabel === menuFilter || !s.menuLabel)
+      : restaurant.sections;
+
+  const veganCount = countDishes(visibleSections, 'vegan');
+  const vegCount = countDishes(visibleSections, 'vegetarian');
+  const totalDishes = visibleSections.flatMap((s) => s.dishes).length;
 
   const filters: { value: Filter; label: string; count: number }[] = [
     { value: 'all', label: 'All dishes', count: totalDishes },
@@ -175,6 +197,28 @@ export default function RestaurantPage() {
         ))}
       </div>
 
+      {/* Menu selector — only when multiple menus were analysed */}
+      {menuLabels.length > 1 && (
+        <div className="mb-4">
+          <label htmlFor="menu-select" className="block text-xs font-medium text-gray-500 mb-1.5">
+            Menu
+          </label>
+          <select
+            id="menu-select"
+            value={menuFilter}
+            onChange={(e) => setMenuFilter(e.target.value)}
+            className="w-full sm:w-auto px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-picky-500"
+          >
+            {menuLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+            <option value="all">All menus</option>
+          </select>
+        </div>
+      )}
+
       {/* Filter tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
         {filters.map((f) => (
@@ -200,14 +244,35 @@ export default function RestaurantPage() {
       </div>
 
       {/* Menu sections */}
-      {restaurant.sections.length === 0 ? (
+      {visibleSections.length === 0 ? (
         <div className="card p-8 text-center">
           <div className="text-4xl mb-3">🤔</div>
           <p className="text-gray-600">No menu sections found for this restaurant.</p>
         </div>
+      ) : menuLabels.length > 1 && menuFilter === 'all' ? (
+        // "All menus" view: group sections under a heading per source menu.
+        <>
+          {menuLabels.map((label) => {
+            const group = visibleSections.filter((s) => s.menuLabel === label);
+            if (group.length === 0) return null;
+            return (
+              <div key={label} className="mb-8">
+                <h2 className="text-lg font-bold text-gray-900 mb-3 pb-2 border-b border-gray-200">{label}</h2>
+                {group.map((section) => (
+                  <MenuSection key={section.id} section={section} activeFilter={filter} />
+                ))}
+              </div>
+            );
+          })}
+          {visibleSections
+            .filter((s) => !s.menuLabel)
+            .map((section) => (
+              <MenuSection key={section.id} section={section} activeFilter={filter} />
+            ))}
+        </>
       ) : (
         <>
-          {restaurant.sections.map((section) => (
+          {visibleSections.map((section) => (
             <MenuSection key={section.id} section={section} activeFilter={filter} />
           ))}
         </>

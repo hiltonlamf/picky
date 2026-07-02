@@ -30,3 +30,7 @@ next-env.d.ts
 # OS
 .DS_Store
 .env*
+
+# local-only, not for the public repo
+CLAUDE.md
+.claude/

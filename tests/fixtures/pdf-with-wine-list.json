@@ -1,0 +1,30 @@
+{
+  "recordedAt": "2026-07-02T12:54:31.037Z",
+  "sourceUrl": "https://www.goodworld.ie",
+  "scrape": {
+    "url": "https://www.goodworld.ie",
+    "canonicalUrl": "https://www.goodworld.ie/Content/2297107.html",
+    "title": "Good World Restaurant",
+    "menuText": "Home Our Story Menu Daily Steamed Dim Sum Sweets Events History HuNan Spicy Contact Us Menu —— good world signature Product —— Home>Menu Daily Steamed Dim Sum Sweets More 分享至微信 打开微信“扫一扫” 即可分享到微信 点击右上角 分享给朋友吧 RESERVATIONS Ring us between 12pm to 9pm, we will take good care of you! CONTACT US Telephone：(01) 677 5373 Address： 18 South Great George's Street, Dublin 2, D02 AE10 Hours: Monday - Sunday 12:30 pm– 9:30 pm Copyright © 1991-2025 Good World Restaurant All Rights Reserved. Cancel 首页 电话咨询 产品分类 添加微信好友，详细了解产品 使用企业微信“扫一扫”加入群聊 复制成功 添加微信好友，详细了解产品 我知道了",
+    "menuUrl": "https://www.goodworld.ie/Content/2297107.html",
+    "menuImages": [
+      "https://gcdn.meidianbang.cn/images/imgbg.png",
+      "https://www.goodworld.ie/Content/2297107.html"
+    ],
+    "menuPdfUrls": [],
+    "menuLinks": [
+      "https://www.goodworld.ie/Content/2297107.html"
+    ],
+    "navLinks": [
+      "https://www.goodworld.ie/PageSearch?isSearch=1",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886441",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886440",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886438",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886437",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886436",
+      "https://www.goodworld.ie/Daily-Steamed-Dim-Sum-PG11886434",
+      "https://www.goodworld.ie/index.php?c=Front/ProductClassPage"
+    ],
+    "urlType": "html"
+  }
+}

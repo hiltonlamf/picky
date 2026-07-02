@@ -20,6 +20,8 @@ export interface MenuSection {
   name: string;
   displayOrder: number;
   dishes: Dish[];
+  /** Which source menu this section came from (e.g. "Lunch"); null for single-menu restaurants. */
+  menuLabel?: string | null;
 }
 
 export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error';
@@ -113,6 +115,8 @@ export interface RawDish {
 export interface RawSection {
   name: string;
   dishes: RawDish[];
+  /** Which source menu this section came from (e.g. "Lunch"); absent for single-menu results. */
+  menuLabel?: string | null;
 }
 
 export interface ClassifiedMenu {

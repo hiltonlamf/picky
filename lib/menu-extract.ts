@@ -156,29 +156,47 @@ function normName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
 }
 
-/** Merge several labeled menus into one, prefixing sections and de-duping dishes. */
+/**
+ * Merge several labeled menus into one, tagging each section with its source
+ * menu (menuLabel) so the UI can present one menu at a time.
+ *
+ * Dishes are de-duped only WITHIN a menu: a dish on both Lunch and Dinner must
+ * still appear when the user views either menu, so cross-menu de-dup would be
+ * wrong. Single-menu results carry no menuLabel and render as before.
+ */
 export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>): ClassifiedMenu {
-  const sections: RawSection[] = [];
-  // Track best (highest-confidence) instance of each dish across all menus.
-  const seen = new Map<string, number>(); // key → confidence kept
-
   const multi = named.length > 1;
   let restaurantName: string | undefined;
   let language: string | undefined;
 
+  const dishKey = (label: string, d: { name: string; price?: string }) =>
+    `${label.toLowerCase()}|${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
+
+  // Pass 1: best confidence per dish within each menu.
+  const best = new Map<string, number>();
+  for (const { label, menu } of named) {
+    for (const section of menu.sections) {
+      for (const d of section.dishes) {
+        const key = dishKey(label, d);
+        if ((best.get(key) ?? -1) < d.confidence) best.set(key, d.confidence);
+      }
+    }
+  }
+
+  // Pass 2: keep exactly one instance per key — the first with best confidence.
+  const taken = new Set<string>();
+  const sections: RawSection[] = [];
   for (const { label, menu } of named) {
     restaurantName = restaurantName ?? menu.restaurantName;
     language = language ?? menu.language;
     for (const section of menu.sections) {
-      const name = multi ? `${label} — ${section.name}` : section.name;
       const dishes = section.dishes.filter((d) => {
-        const key = `${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
-        const prev = seen.get(key);
-        if (prev !== undefined && prev >= d.confidence) return false; // keep higher-confidence one
-        seen.set(key, d.confidence);
+        const key = dishKey(label, d);
+        if (taken.has(key) || d.confidence < (best.get(key) ?? 0)) return false;
+        taken.add(key);
         return true;
       });
-      if (dishes.length > 0) sections.push({ name, dishes });
+      if (dishes.length > 0) sections.push({ name: section.name, dishes, menuLabel: multi ? label : null });
     }
   }
 

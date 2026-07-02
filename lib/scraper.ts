@@ -11,6 +11,7 @@ export interface ScrapeResult {
   menuImages?: string[];
   menuPdfUrls?: string[];
   menuLinks?: string[]; // candidate menu sub-page links (for discovery)
+  navLinks?: string[]; // scored same-domain nav links — deep-discovery fallback when no menu link exists
   screenshotUrl?: string; // hosted full-page screenshot from the reader, if any
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
@@ -18,8 +19,21 @@ export interface ScrapeResult {
 
 const MENU_LINK_KEYWORDS = [
   'menu', 'food', 'eat', 'dishes', 'cuisine', 'carte',
-  'speisekarte', 'kaart', 'menukaart',
+  'speisekarte', 'kaart', 'menukaart', 'order',
 ];
+
+// Hosted ordering platforms host the restaurant's live menu. As MENU SOURCES
+// they are first-class (unlike homepage resolution, where they're excluded).
+const ORDERING_HOST_RE =
+  /(^|\.)((order|orders|ordering)\.[a-z0-9-]+\.[a-z]{2,}|toasttab\.com|square\.site|mryum\.com|bopple\.com|storekit\.com|flipdish\.[a-z.]+)$/i;
+
+function isOrderingHost(url: string): boolean {
+  try {
+    return ORDERING_HOST_RE.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
 const PDF_EXTENSIONS = ['.pdf'];
@@ -40,6 +54,9 @@ function isPdfUrl(url: string): boolean {
 
 const MENU_IMAGE_KEYWORDS = ['menu', 'food', 'carte', 'speise', 'dish', 'notions'];
 const SKIP_IMAGE_KEYWORDS = ['logo', 'icon', 'favicon', 'avatar', 'banner', 'social', 'twitter', 'facebook', 'instagram'];
+// Photography-gallery style images are decoration, not menus — demote (not
+// drop: on image-only sites they may still be the only lead we have).
+const PHOTO_IMAGE_KEYWORDS = ['gallery', 'hero', 'slide', 'carousel', 'photo', 'interior', 'team', 'staff', 'event'];
 
 export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
   const candidates: Array<{ url: string; score: number }> = [];
@@ -58,6 +75,9 @@ export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[]
     for (const kw of MENU_IMAGE_KEYWORDS) {
       if (srcLower.includes(kw)) score += 10;
       if (alt.includes(kw)) score += 5;
+    }
+    for (const kw of PHOTO_IMAGE_KEYWORDS) {
+      if (srcLower.includes(kw) || alt.includes(kw)) score -= 5;
     }
     const w = parseInt($(el).attr('width') ?? '0', 10);
     const h = parseInt($(el).attr('height') ?? '0', 10);
@@ -280,9 +300,12 @@ export function findMenuLinks(
       return;
     }
 
-    if (isExternal) return;
+    // External HTML links are only menu candidates when they point at a hosted
+    // ordering platform (Toast, Square, order.* subdomains) — those pages ARE
+    // the restaurant's live menu.
+    if (isExternal && !isOrderingHost(resolvedHref)) return;
 
-    let score = 0;
+    let score = isExternal ? 2 : 0;
     for (const keyword of MENU_LINK_KEYWORDS) {
       if (text.includes(keyword)) score += 2;
       if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
@@ -312,6 +335,63 @@ export function findMenuLinks(
   };
 
   return { htmlLinks: dedup(htmlCandidates, 3), pdfLinks: dedup(pdfCandidates, 2) };
+}
+
+// Nav slugs that plausibly lead to a page that links the menus (multi-venue
+// groups, "Restaurants"/"Dining" sections) — used only by deep discovery when
+// the homepage itself yields no menu source.
+const NAV_BOOST_RE = /\b(restaurant|restaurants|dining|dine|food|eat|kitchen|cafe|bistro|venue|venues|location|locations)\b/i;
+const NAV_EXCLUDE_RE =
+  /\b(contact|about|gallery|book|booking|reservation|career|job|voucher|gift|privacy|terms|cookie|news|blog|press|event|faq|login|account|cart|checkout|shop|store|sitemap)\b/i;
+
+/**
+ * Scored same-domain navigation links — the deep-discovery fallback for sites
+ * whose menu is nested behind a non-menu-keyword nav item (e.g. under
+ * "Restaurants"). Shallow paths first, boosted food-adjacent slugs, capped.
+ */
+export function findNavLinks($: cheerio.CheerioAPI, baseUrl: string, limit = 8): string[] {
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
+
+  const candidates: Array<{ url: string; score: number }> = [];
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const text = ($(el).text() + ' ' + ($(el).attr('title') ?? '')).toLowerCase();
+    const resolved = resolveUrl(href, baseUrl);
+    if (!resolved || !resolved.startsWith(baseOrigin)) return;
+    if (EXCLUDED_EXTENSIONS.some((ext) => resolved.toLowerCase().endsWith(ext))) return;
+
+    let path: string;
+    try {
+      path = new URL(resolved).pathname;
+    } catch {
+      return;
+    }
+    if (path === '/' || resolved === baseUrl) return;
+    const slug = decodeURIComponent(path).toLowerCase();
+    if (NAV_EXCLUDE_RE.test(slug) || NAV_EXCLUDE_RE.test(text)) return;
+
+    const depth = slug.split('/').filter(Boolean).length;
+    let score = depth <= 1 ? 3 : depth === 2 ? 1 : 0;
+    if (NAV_BOOST_RE.test(slug) || NAV_BOOST_RE.test(text)) score += 5;
+    candidates.push({ url: resolved, score });
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  return candidates
+    .filter((c) => {
+      const key = c.url.replace(/[#?].*$/, '').replace(/\/$/, '');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .map((c) => c.url);
 }
 
 // Extract a restaurant's own website from a review site page (Yelp, TripAdvisor, etc.)
@@ -772,6 +852,7 @@ type HtmlPageResult = {
   menuImages: string[];
   menuPdfUrls: string[];
   menuLinks: string[];
+  navLinks: string[];
   screenshotUrl?: string;
 };
 
@@ -796,6 +877,7 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
   // Find links and images BEFORE extractText
   const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs } =
     depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
+  const navLinks = depth === 0 ? findNavLinks($, finalUrl) : [];
   const cheerioImages = findMenuImages($, finalUrl);
 
   // Merge reader-discovered sources with cheerio-discovered ones. Reader image
@@ -838,6 +920,7 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
       menuImages,
       menuPdfUrls,
       menuLinks,
+      navLinks,
       screenshotUrl: reader?.screenshotUrl,
     };
   }
@@ -854,6 +937,7 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
           menuImages: menuRes.menuImages.length ? menuRes.menuImages : menuImages,
           menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : menuPdfUrls,
           menuLinks,
+          navLinks,
           screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
         };
       }
@@ -870,6 +954,7 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
     menuImages,
     menuPdfUrls,
     menuLinks,
+    navLinks,
     screenshotUrl: reader?.screenshotUrl,
   };
 }
@@ -893,6 +978,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
         menuLinks: result.menuLinks,
+        navLinks: result.navLinks,
         screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
@@ -926,6 +1012,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
         menuLinks: result.menuLinks,
+        navLinks: result.navLinks,
         screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
@@ -983,7 +1070,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, screenshotUrl } =
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, screenshotUrl } =
     await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
@@ -998,6 +1085,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: menuPdfUrls[0],
         menuPdfUrls,
         menuLinks,
+        navLinks,
         screenshotUrl,
         urlType: 'pdf',
       };
@@ -1012,6 +1100,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: null,
         menuImages,
         menuLinks,
+        navLinks,
         screenshotUrl,
         urlType: 'html',
       };
@@ -1026,6 +1115,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuText: '',
         menuUrl: null,
         menuLinks,
+        navLinks,
         screenshotUrl,
         urlType: 'html',
       };
@@ -1044,6 +1134,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     menuImages,
     menuPdfUrls,
     menuLinks,
+    navLinks,
     screenshotUrl,
     urlType: 'html',
   };
