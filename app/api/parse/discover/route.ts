@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { scrapeRestaurant } from '@/lib/scraper';
 import { discoverMenus } from '@/lib/menu-discovery';
-import { extractAndMerge, ExtractContext } from '@/lib/menu-extract';
+import { extractAndMerge, ExtractionError, ExtractContext } from '@/lib/menu-extract';
 import {
   findExistingRestaurant,
   resetRestaurantForReparse,
@@ -10,6 +10,7 @@ import {
   saveClassifiedMenu,
   saveMenuCandidates,
   markRestaurantError,
+  logUsage,
 } from '@/lib/db';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
@@ -190,6 +191,10 @@ export async function POST(request: NextRequest) {
           usage = result.usage;
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
+          // Failed retry ladders still spent tokens — record them.
+          if (err instanceof ExtractionError && err.usage) {
+            await logUsage(restaurantId, discovery.finalUrl, err.usage, ctx.title);
+          }
           await markRestaurantError(restaurantId, msg);
           send({ type: 'error', error: msg });
           return close();

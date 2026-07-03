@@ -4,7 +4,7 @@
  * names the bug it would reintroduce.
  */
 import { describe, it, expect } from 'vitest';
-import { SYSTEM_PROMPT, IMAGE_OCR_INSTRUCTION, buildLabelPrompt } from '@/lib/ai';
+import { SYSTEM_PROMPT, IMAGE_OCR_INSTRUCTION, buildLabelPrompt, buildVerifyPrompt } from '@/lib/ai';
 
 describe('SYSTEM_PROMPT', () => {
   it('excludes all beverages (drinks-in-results bug)', () => {
@@ -68,5 +68,36 @@ describe('buildLabelPrompt (incoherent picker bug)', () => {
 
   it('treats online-ordering pages as menus (Notions-class sites)', () => {
     expect(prompt).toMatch(/online-ordering pages[\s\S]*ARE menus/i);
+  });
+});
+
+describe('buildVerifyPrompt (Sonnet audit that makes Haiku extraction safe)', () => {
+  const prompt = buildVerifyPrompt(
+    [
+      { section: 'Mains', name: 'Pad Thai', description: 'rice noodles, peanuts', classification: 'vegetarian', confidence: 0.7 },
+      { section: 'Desserts', name: 'Panna Cotta', classification: 'vegetarian', confidence: 0.8 },
+    ],
+    'Test Restaurant'
+  );
+
+  it('warns about hidden animal ingredients (fish sauce, gelatin, stock)', () => {
+    expect(prompt).toMatch(/fish sauce/i);
+    expect(prompt).toMatch(/gelatin/i);
+    expect(prompt).toMatch(/stock/i);
+  });
+
+  it('instructs conservative downgrading rather than benefit of the doubt', () => {
+    expect(prompt).toMatch(/Be conservative/i);
+    expect(prompt).toMatch(/downgrade/i);
+  });
+
+  it('includes every dish with its current label', () => {
+    expect(prompt).toContain('Pad Thai');
+    expect(prompt).toContain('Panna Cotta');
+    expect(prompt).toMatch(/currently vegetarian/);
+  });
+
+  it('asks for JSON keyed by index so corrections map back to dishes', () => {
+    expect(prompt).toMatch(/"index": 0/);
   });
 });

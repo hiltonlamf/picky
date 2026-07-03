@@ -7,6 +7,7 @@ import {
   classifyMenuFromScreenshot,
   countFoodItems,
   isBillingError,
+  verifyVegClassifications,
   ESCALATION_MODEL,
 } from './ai';
 import { scrapeRestaurant } from './scraper';
@@ -28,6 +29,21 @@ export interface ExtractContext {
 }
 
 type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
+
+/**
+ * "No menu found" failure that still carries what the failed attempts COST.
+ * Failed retry ladders are the most expensive path in the pipeline (every rung
+ * is a full-price AI call), so losing their usage made spend reports blind to
+ * the worst spenders — callers must record `usage` before surfacing the error.
+ */
+export class ExtractionError extends Error {
+  usage?: AIUsage;
+  constructor(message: string, usage?: AIUsage) {
+    super(message);
+    this.name = 'ExtractionError';
+    this.usage = usage;
+  }
+}
 
 const HEADER_ITEM_RE =
   /\b(menu|selection|set\s*menu|set\s*lunch|set\s*dinner|tasting|à la carte|a la carte|platter|board|sample)\b/i;
@@ -310,15 +326,24 @@ export async function extractAndMerge(
   if (named.length === 0) {
     // Every source (text, PDF, images, screenshot, escalation) came back with
     // nothing — either the menu is unreadable or the site doesn't really have
-    // one. Be honest about both possibilities.
-    throw new Error(
-      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again."
+    // one. Be honest about both possibilities — and carry the cost of all
+    // those failed attempts so it lands in the spend accounting.
+    throw new ExtractionError(
+      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.",
+      usage
     );
   }
 
-  const menu = mergeMenus(named);
+  const merged = mergeMenus(named);
+
+  // Strong-model audit of the veg/vegan labels users actually filter by —
+  // the guardrail that makes cheap Haiku extraction safe.
+  ctx.onProgress?.('Double-checking the vegetarian and vegan labels...');
+  const verified = await verifyVegClassifications(merged, ctx.title);
+  usage = sumUsage(usage, verified.usage);
+
   return {
-    menu,
+    menu: verified.menu,
     usage: usage ?? { model: EXTRACTION_USAGE_FALLBACK, tokensIn: 0, tokensOut: 0, costUsd: 0 },
   };
 }

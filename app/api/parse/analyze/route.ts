@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
-import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError } from '@/lib/db';
+import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage } from '@/lib/db';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
-import type { AIUsage } from '@/lib/ai';
+import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
 
 // Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
 // and, if unfinished, persists its progress and asks the client to call back
@@ -151,18 +151,30 @@ export async function POST(request: NextRequest) {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
+          // Failed attempts still spent tokens — record them before erroring.
+          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
           await markRestaurantError(restaurantId, msg);
           send({ type: 'error', error: msg });
           return close();
         }
 
         if (state.done.length === 0) {
+          // The full retry ladder ran and found nothing — that's the most
+          // expensive failure mode, so its spend must land in the log.
+          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
           await markRestaurantError(restaurantId, NO_MENU_MSG);
           send({ type: 'error', error: NO_MENU_MSG });
           return close();
         }
 
-        const menu = mergeMenus(state.done);
+        const merged = mergeMenus(state.done);
+
+        // Strong-model audit of the veg/vegan labels users filter by — the
+        // guardrail that makes cheap Haiku extraction safe. Never throws.
+        send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
+        const verified = await verifyVegClassifications(merged, payload.title);
+        const menu = verified.menu;
+        state.usage = sumUsage(state.usage ?? undefined, verified.usage);
         if (!menu.restaurantName && payload.title) menu.restaurantName = payload.title;
 
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
