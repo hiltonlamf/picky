@@ -6,6 +6,7 @@ import {
   classifyMenuFromImages,
   classifyMenuFromScreenshot,
   countFoodItems,
+  isBillingError,
   ESCALATION_MODEL,
 } from './ai';
 import { scrapeRestaurant } from './scraper';
@@ -21,6 +22,9 @@ export interface ExtractContext {
   pdfUrls?: string[];
   imageUrls?: string[];
   pageUrl?: string; // the menu page URL — used to fetch a screenshot as last resort
+  /** Live status callback — long analyses stream these to the user so a slow
+   *  extraction doesn't look like a frozen app. */
+  onProgress?: (message: string) => void;
 }
 
 type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
@@ -43,7 +47,7 @@ function isValid(extraction: Extraction): boolean {
   return countFoodItems(extraction.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(extraction.menu);
 }
 
-function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
+export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
   const base = a ?? { model: '', tokensIn: 0, tokensOut: 0, costUsd: 0 };
   if (!b) return base;
   return {
@@ -54,24 +58,41 @@ function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
   };
 }
 
-/** Lazily scrape a sub-page and classify whichever source it yields. */
+/**
+ * Lazily scrape a sub-page and classify whichever source it yields. Tries each
+ * available source in order and keeps the best — a nav-heavy page whose TEXT
+ * is just venue blurb must still fall through to its PDF/images/screenshot.
+ */
 async function extractSubpage(url: string, title?: string, model?: string): Promise<Extraction> {
   try {
     const sub = await scrapeRestaurant(url);
+    const t = title ?? sub.title;
+
+    const attempts: Array<() => Promise<Extraction>> = [];
     if (sub.menuText && sub.menuText.length >= 100) {
-      return classifyMenuWithAI(sub.menuText, title ?? sub.title, model);
+      attempts.push(() => classifyMenuWithAI(sub.menuText, t, model));
     }
     if (sub.menuPdfUrls && sub.menuPdfUrls.length > 0) {
-      return classifyMenuFromPdf(sub.menuPdfUrls[0], title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromPdf(sub.menuPdfUrls![0], t, model));
     }
     if (sub.menuImages && sub.menuImages.length > 0) {
-      return classifyMenuFromImages(sub.menuImages, title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 6), t, model));
     }
     if (sub.screenshotUrl) {
-      return classifyMenuFromScreenshot(sub.screenshotUrl, title ?? sub.title, model);
+      attempts.push(() => classifyMenuFromScreenshot(sub.screenshotUrl!, t, model));
     }
-    return null;
-  } catch {
+
+    let best: Extraction = null;
+    let usage: AIUsage | undefined;
+    for (const attempt of attempts) {
+      const res = await attemptOrNull(attempt);
+      usage = sumUsage(usage, res?.usage);
+      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
+      if (isValid(res)) break;
+    }
+    return best ? { menu: best.menu, usage: usage! } : null;
+  } catch (err) {
+    if (isBillingError(err)) throw err;
     return null;
   }
 }
@@ -85,9 +106,10 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
     case 'pdf':
       return classifyMenuFromPdf(candidate.ref, title, model);
     case 'image':
-      // Include sibling page images for better context.
+      // Include sibling page images — menu boards are often split across
+      // several photos and the food menu may not be the first image.
       return classifyMenuFromImages(
-        Array.from(new Set([candidate.ref, ...(ctx.imageUrls ?? [])])).slice(0, 4),
+        Array.from(new Set([candidate.ref, ...(ctx.imageUrls ?? [])])).slice(0, 6),
         title,
         model
       );
@@ -103,82 +125,164 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * primary source → alternate sources (pdf/image/screenshot) → Opus escalation.
  * Returns the attempt with the most food items, with summed usage/cost.
  */
-export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
-  let best: Extraction = await runPrimary(candidate, ctx);
-  let usage = best?.usage;
-  if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
+/**
+ * Run one extraction attempt: hard failures (e.g. truncated JSON) become null
+ * so the retry chain continues — except API-billing failures, which must
+ * surface as such; retrying other sources just burns more calls and ends in a
+ * misleading "couldn't read the menu".
+ */
+async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isBillingError(err)) {
+      // Keep the underlying cause in server logs; users get the generic line.
+      console.error('[extract] API access error:', err instanceof Error ? err.message : err);
+      throw new Error('Our AI service is temporarily unavailable. Please try again later.');
+    }
+    return null;
+  }
+}
 
-  // Alternate sources not already tried, in priority order.
-  const altAttempts: Array<() => Promise<Extraction>> = [];
+/** Human phrasing for the start of a candidate's extraction. */
+function startMessage(candidate: MenuCandidate): string {
+  switch (candidate.type) {
+    case 'pdf':
+      return `Reading the ${candidate.label} PDF...`;
+    case 'image':
+      return 'Found the menu in an image — scanning it for dishes...';
+    case 'subpage':
+      return `Opening the ${candidate.label} page...`;
+    default:
+      return 'Reading the menu text...';
+  }
+}
+
+/** The ordered retry chain for one candidate. Static so extraction can be
+ *  resumed from any attempt index in a later request (serverless time caps). */
+function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): Array<{ note: string; run: () => Promise<Extraction> }> {
+  const plan: Array<{ note: string; run: () => Promise<Extraction> }> = [
+    { note: startMessage(candidate), run: () => runPrimary(candidate, ctx) },
+  ];
   if (candidate.type !== 'pdf' && ctx.pdfUrls?.length) {
-    altAttempts.push(() => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title));
+    plan.push({
+      note: 'That source was unclear — reading the menu PDF instead...',
+      run: () => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title),
+    });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
-    altAttempts.push(() => classifyMenuFromImages(ctx.imageUrls!.slice(0, 4), ctx.title));
+    plan.push({
+      note: 'Scanning the menu images for dishes...',
+      run: () => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title),
+    });
   }
-  if (ctx.screenshotUrl) {
-    altAttempts.push(() => classifyMenuFromScreenshot(ctx.screenshotUrl!, ctx.title));
-  }
+  // Universal vision fallback: read a full-page screenshot (existing one, or
+  // rendered on demand). Catches image-only and JS/canvas menus.
+  plan.push({
+    note: 'Taking a snapshot of the page to read it visually...',
+    run: async () => {
+      const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
+      const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
+      return shot ? classifyMenuFromScreenshot(shot, ctx.title) : null;
+    },
+  });
+  // Last resort: escalate the original source to the strongest model.
+  plan.push({
+    note: 'Double-checking with our strongest AI model...',
+    run: () => runPrimary(candidate, ctx, ESCALATION_MODEL),
+  });
+  return plan;
+}
 
-  for (const attempt of altAttempts) {
-    const res = await attempt().catch(() => null);
+export interface ResumableResult {
+  best: Extraction;
+  usage?: AIUsage;
+  /** Attempt index to resume from, or null when the chain is finished. */
+  nextIndex: number | null;
+}
+
+/**
+ * Run a candidate's retry chain starting at `startIndex`, stopping early when
+ * a valid menu is found or `deadline` (ms epoch) approaches. Lets serverless
+ * callers split one long extraction across several short requests.
+ */
+export async function extractMenuResumable(
+  candidate: MenuCandidate,
+  ctx: ExtractContext,
+  startIndex = 0,
+  deadline = Number.POSITIVE_INFINITY,
+  carried: Extraction = null,
+  carriedUsage?: AIUsage
+): Promise<ResumableResult> {
+  const progress = ctx.onProgress ?? (() => {});
+  const plan = attemptPlan(candidate, ctx);
+  let best: Extraction = carried;
+  let usage: AIUsage | undefined = carriedUsage ?? carried?.usage;
+
+  for (let i = startIndex; i < plan.length; i++) {
+    if (isValid(best)) break;
+    if (Date.now() >= deadline) {
+      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i };
+    }
+    progress(plan[i].note);
+    const res = await attemptOrNull(plan[i].run);
     usage = sumUsage(usage, res?.usage);
     if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-    if (isValid(res)) break;
   }
 
-  // Universal vision fallback: render the page to a full-page screenshot and
-  // read it. Catches image-only menus and JS-embedded/canvas menus that yield
-  // no usable text, PDF, or discrete images (works on Jina's keyless tier).
-  if (!isValid(best)) {
-    // Screenshot the candidate's own page when it's a sub-page; otherwise the
-    // menu page we landed on.
-    const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
-    const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
-    if (shot) {
-      const res = await classifyMenuFromScreenshot(shot, ctx.title).catch(() => null);
-      usage = sumUsage(usage, res?.usage);
-      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-    }
-  }
+  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null };
+}
 
-  // Last resort: escalate the original source to the strongest model.
-  if (!isValid(best)) {
-    const escalated = await runPrimary(candidate, ctx, ESCALATION_MODEL).catch(() => null);
-    usage = sumUsage(usage, escalated?.usage);
-    if (escalated && (!best || countFoodItems(escalated.menu) > countFoodItems(best.menu))) best = escalated;
-  }
-
-  return best ? { menu: best.menu, usage: usage! } : null;
+export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
+  const { best } = await extractMenuResumable(candidate, ctx);
+  return best;
 }
 
 function normName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
 }
 
-/** Merge several labeled menus into one, prefixing sections and de-duping dishes. */
+/**
+ * Merge several labeled menus into one, tagging each section with its source
+ * menu (menuLabel) so the UI can present one menu at a time.
+ *
+ * Dishes are de-duped only WITHIN a menu: a dish on both Lunch and Dinner must
+ * still appear when the user views either menu, so cross-menu de-dup would be
+ * wrong. Single-menu results carry no menuLabel and render as before.
+ */
 export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>): ClassifiedMenu {
-  const sections: RawSection[] = [];
-  // Track best (highest-confidence) instance of each dish across all menus.
-  const seen = new Map<string, number>(); // key → confidence kept
-
   const multi = named.length > 1;
   let restaurantName: string | undefined;
   let language: string | undefined;
 
+  const dishKey = (label: string, d: { name: string; price?: string }) =>
+    `${label.toLowerCase()}|${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
+
+  // Pass 1: best confidence per dish within each menu.
+  const best = new Map<string, number>();
+  for (const { label, menu } of named) {
+    for (const section of menu.sections) {
+      for (const d of section.dishes) {
+        const key = dishKey(label, d);
+        if ((best.get(key) ?? -1) < d.confidence) best.set(key, d.confidence);
+      }
+    }
+  }
+
+  // Pass 2: keep exactly one instance per key — the first with best confidence.
+  const taken = new Set<string>();
+  const sections: RawSection[] = [];
   for (const { label, menu } of named) {
     restaurantName = restaurantName ?? menu.restaurantName;
     language = language ?? menu.language;
     for (const section of menu.sections) {
-      const name = multi ? `${label} — ${section.name}` : section.name;
       const dishes = section.dishes.filter((d) => {
-        const key = `${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
-        const prev = seen.get(key);
-        if (prev !== undefined && prev >= d.confidence) return false; // keep higher-confidence one
-        seen.set(key, d.confidence);
+        const key = dishKey(label, d);
+        if (taken.has(key) || d.confidence < (best.get(key) ?? 0)) return false;
+        taken.add(key);
         return true;
       });
-      if (dishes.length > 0) sections.push({ name, dishes });
+      if (dishes.length > 0) sections.push({ name: section.name, dishes, menuLabel: multi ? label : null });
     }
   }
 
@@ -198,12 +302,17 @@ export async function extractAndMerge(
     .filter((r) => r.res && r.res.menu.sections.length > 0)
     .map((r) => ({ label: r.label, menu: r.res!.menu }));
 
+  if (named.length > 1) ctx.onProgress?.('Combining the menus and classifying every dish...');
+
   let usage: AIUsage | undefined;
   for (const r of results) usage = sumUsage(usage, r.res?.usage);
 
   if (named.length === 0) {
+    // Every source (text, PDF, images, screenshot, escalation) came back with
+    // nothing — either the menu is unreadable or the site doesn't really have
+    // one. Be honest about both possibilities.
     throw new Error(
-      "We found the menu but couldn't read the dishes clearly. Try pasting a direct link to the menu page or a clearer menu source."
+      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again."
     );
   }
 

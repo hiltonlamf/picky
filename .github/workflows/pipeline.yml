@@ -1,0 +1,102 @@
+# Live pipeline QA — real restaurant websites + real Claude API calls.
+#
+# NON-BLOCKING by design: this suite has failure modes unrelated to code
+# correctness (API credits, restaurant sites changing/going down, reader rate
+# limits). It runs nightly and on demand, and posts results as signal:
+#   - workflow_dispatch on a branch with an open PR → comments the summary on it
+#   - scheduled run failure → opens/updates a "Nightly pipeline QA" issue
+# The blocking merge gate is the deterministic `CI` workflow.
+#
+# Requires repo secret: ANTHROPIC_API_KEY (optional: FIRECRAWL_API_KEY for a
+# more reliable JS reader than keyless Jina).
+name: Live pipeline QA
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1' # weekly (Mondays 03:00 UTC) — ~$1.80/run; dispatch on demand
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: API key sanity check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "key length: ${#ANTHROPIC_API_KEY}"
+          echo -n "API HTTP status: "
+          curl -s -o /tmp/api-check.json -w '%{http_code}\n' https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
+          grep -o '"type":"[a-z_]*"' /tmp/api-check.json | head -2 || true
+      - name: Run live pipeline suite
+        run: npm run test:pipeline 2>&1 | tee pipeline-log.txt
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+      - name: Summary
+        if: always()
+        run: |
+          echo '## Live pipeline QA' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-log-${{ github.run_number }}
+          path: pipeline-log.txt
+          retention-days: 30
+      - name: Comment results on the branch's open PR
+        if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Live pipeline QA — ${{ job.status }}"
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt
+            echo '```'
+            echo "_Non-blocking signal. Full log: run #${{ github.run_number }} artifacts._"
+          } > pr-comment.md
+          gh pr comment "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md || echo "no open PR for this branch — skipping comment"
+      - name: File issue on scheduled failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Nightly live pipeline QA failed on $(date -u +%F)."
+            echo
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt
+            echo '```'
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > issue-body.md
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'Nightly live pipeline QA failures in:title' --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Nightly live pipeline QA failures" --body-file issue-body.md
+          fi

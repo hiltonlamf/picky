@@ -1,0 +1,43 @@
+{
+  "recordedAt": "2026-07-02T16:20:03.352Z",
+  "sourceUrl": "https://www.jaru.ie",
+  "scrape": {
+    "url": "https://www.jaru.ie",
+    "canonicalUrl": "https://www.jaru.ie/menu",
+    "title": "Dinner Menu",
+    "menuText": "top of pageDinner MenuAppetizersThese dishes are great for sharingBread & dipsSourdough bread accompanied by hummus, beetroot & whipped feta dips€4.50VegetarianGreen saladA garden-fresh salad with seasonal greens and roasted almondsSmall€3.50Medium€5.50Dairy freeMildTuna sashimiSeared fresh tuna, fresh herbs, and a touch of chili€4.50CorianderMainsA diverse range of flavorful dishes which are all sourced daily and locallyHand-made ravioliArtisanal hand-made ravioli, filled with a blend of cheeses in a basil pesto sauce€6.50Tofu skewersGrilled tofu skewers, marinated in a blend of soy and sesame with seasonal roast vegetables€7.50VeganFish of the dayFresh catch of the day paired with asparagus & a cream of sweet potato€8.00FishShellfishPeanut crusted steakJuicy, tender steak cooked to your liking, served with steamed vegetables€8.00PeanutsRawClassic burgerOur classic burger with lettuce, pickles, heirloom tomatoes, served with a side of friesMushroom€7.00Chicken€7.50Beef€9.00SchnitzelCrisp and golden on the outside, in a herb and parmesan crumb€4.00DessertsOur desserts are made in house by our pastry chefSticky date & ice creamServed with vanilla ice cream, toffee sauce & a peanut crumble€7.00VegetarianClassic cheesecakeTopped with a layer of raspberry jam & sliced strawberries€6.50Lemon meringue pieZesty lemon meringue, a pistachio crumble, served with a chantilly cream€5.50Tree nutsChocolate mousseOur delicate, yet rich signature chocolate mousse dessertSingle serve€4.00Double serve€7.00Carrot cakeLightly spiced carrot cake layered with cream cheese frosting€5.50BrownieFresh out the oven brownie filled with dark chocolate chips & walnuts€5.00Dairy freeDrinksHealthy smoothieNourish your body with our selection of healthy smoothies€3.00Fresh juiceA refreshing blend of freshly squeezed orange, watermelon, carrot, and gingerSmall€2.00Medium€3.00Large€4.00WineChoice of red, white, or rosé€2.00Soft drinkSoda, Sprite, Pepsi & Diet Coke€1.50CoffeeLocally roasted coffee, brewed in-house€2.50CocktailsAperol Spritz, Gin & Tonic, Mojito€1.50bottom of page",
+    "menuUrl": "https://www.jaru.ie/menu",
+    "menuImages": [
+      "https://static.parastorage.com/services/restaurant-menus-showcase-ooi/1ab943dc5edf49dc483bd47f61248346a676d697e02f0a66aa7d7457/media/menus_side_image.7077f229.jpeg",
+      "https://static.wixstatic.com/media/ec845c_bfcda5f9249c4229b29012f98be80c7f~mv2.jpg/v1/fill/w_147,h_98,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_auto/ec845c_bfcda5f9249c4229b29012f98be80c7f~mv2.jpg",
+      "https://static.wixstatic.com/media/ec845c_a6e150add26341928a59a4a2210d76be~mv2.jpg/v1/fill/w_147,h_98,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_auto/ec845c_a6e150add26341928a59a4a2210d76be~mv2.jpg"
+    ],
+    "menuPdfUrls": [
+      "https://www.jaru.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf",
+      "https://www.jaru.ie/_files/ugd/aab7fb_666a12d78f854a339706f57c23786c74.pdf",
+      "https://www.jaru.ie/_files/ugd/aab7fb_29f19dd9768f4d018af53609039d7726.pdf",
+      "https://www.jaru.ie/_files/ugd/aab7fb_82988574a2ac4535b532e0f313bf8303.pdf"
+    ],
+    "menuLinks": [
+      "https://www.jaru.ie/menu"
+    ],
+    "navLinks": [
+      "https://www.jaru.ie/products",
+      "https://www.jaru.ie/story",
+      "https://www.jaru.ie/stockists",
+      "https://www.jaru.ie/kimchi",
+      "https://www.jaru.ie/recipes",
+      "https://www.jaru.ie/korean",
+      "https://www.jaru.ie/menu",
+      "https://www.jaru.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf"
+    ],
+    "linkLabels": {
+      "https://www.jaru.ie/menu": "Menus (New)",
+      "https://www.jaru.ie/_files/ugd/aab7fb_dbea9641da354abcb84218dca7c1e035.pdf": "LUNCH",
+      "https://www.jaru.ie/_files/ugd/aab7fb_666a12d78f854a339706f57c23786c74.pdf": "DRINKS",
+      "https://www.jaru.ie/_files/ugd/aab7fb_29f19dd9768f4d018af53609039d7726.pdf": "SHARING PLATES",
+      "https://www.jaru.ie/_files/ugd/aab7fb_82988574a2ac4535b532e0f313bf8303.pdf": "DINNER"
+    },
+    "urlType": "html"
+  }
+}

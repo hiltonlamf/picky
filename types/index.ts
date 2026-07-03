@@ -1,3 +1,5 @@
+import type { AIUsage } from '@/lib/ai';
+
 export type DietaryClassification = 'vegan' | 'vegetarian' | 'neither' | 'unknown';
 
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
@@ -20,6 +22,8 @@ export interface MenuSection {
   name: string;
   displayOrder: number;
   dishes: Dish[];
+  /** Which source menu this section came from (e.g. "Lunch"); null for single-menu restaurants. */
+  menuLabel?: string | null;
 }
 
 export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error';
@@ -48,6 +52,29 @@ export interface MenuCandidate {
   source: 'homepage' | 'subpage';
 }
 
+/**
+ * Resumable analysis progress. Serverless functions have hard time caps
+ * (60s on Vercel Hobby), so a long extraction is split across requests:
+ * each request runs attempts until its budget nears, persists this state,
+ * and the client immediately calls back to continue.
+ */
+export interface AnalysisState {
+  /** Candidate ids not yet started. */
+  queue: string[];
+  /** Candidate currently mid-retry-chain, if any. */
+  currentId?: string | null;
+  /** Attempt index to resume from within the current candidate. */
+  attemptIndex?: number;
+  /** Best extraction so far for the current candidate. */
+  bestSoFar?: { menu: ClassifiedMenu; usage: AIUsage } | null;
+  /** Cost accumulated on the current candidate (incl. failed attempts). */
+  candidateUsage?: AIUsage | null;
+  /** Finished menus awaiting the final merge. */
+  done: Array<{ label: string; menu: ClassifiedMenu }>;
+  /** Cost accumulated across finished candidates. */
+  usage?: AIUsage | null;
+}
+
 /** Persisted between the discover and analyze phases (keyed by restaurantId). */
 export interface DiscoveryPayload {
   candidates: MenuCandidate[];
@@ -57,6 +84,7 @@ export interface DiscoveryPayload {
   screenshotUrl?: string;
   pdfUrls?: string[];
   imageUrls?: string[];
+  analysis?: AnalysisState;
 }
 
 export type ParseEventType =
@@ -64,7 +92,8 @@ export type ParseEventType =
   | 'cached'
   | 'result'
   | 'error'
-  | 'candidates';
+  | 'candidates'
+  | 'continue';
 
 export interface ParseProgressEvent {
   type: 'progress';
@@ -94,12 +123,19 @@ export interface ParseCandidatesEvent {
   candidates: MenuCandidate[];
 }
 
+/** Analysis ran out of serverless time budget — call analyze again to resume. */
+export interface ParseContinueEvent {
+  type: 'continue';
+  restaurantId: string;
+}
+
 export type ParseEvent =
   | ParseProgressEvent
   | ParseCachedEvent
   | ParseResultEvent
   | ParseErrorEvent
-  | ParseCandidatesEvent;
+  | ParseCandidatesEvent
+  | ParseContinueEvent;
 
 export interface RawDish {
   name: string;
@@ -113,6 +149,8 @@ export interface RawDish {
 export interface RawSection {
   name: string;
   dishes: RawDish[];
+  /** Which source menu this section came from (e.g. "Lunch"); absent for single-menu results. */
+  menuLabel?: string | null;
 }
 
 export interface ClassifiedMenu {

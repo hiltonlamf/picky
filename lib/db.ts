@@ -6,7 +6,7 @@ import { REPORT_COUNT_WARNING_THRESHOLD } from './dietary-config';
 let _client: ReturnType<typeof createClient> | null = null;
 
 // Typed as any to avoid Supabase schema inference errors (no generated types)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line
 function db(): any {
   if (!_client) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -138,6 +138,7 @@ export async function fetchRestaurantWithDishes(id: string): Promise<Restaurant 
     id: s.id as string,
     name: s.name as string,
     displayOrder: s.display_order as number,
+    menuLabel: (s.menu_label as string | null) ?? null,
     dishes: dishes.filter((d) => d.section_id === s.id).map(mapDish),
   }));
 
@@ -216,11 +217,21 @@ export async function saveClassifiedMenu(
   for (let i = 0; i < menu.sections.length; i++) {
     const section: RawSection = menu.sections[i];
 
-    const { data: sectionRow } = await db()
+    let { data: sectionRow } = await db()
       .from('menu_sections')
-      .insert({ restaurant_id: restaurantId, name: section.name, display_order: i })
+      .insert({ restaurant_id: restaurantId, name: section.name, display_order: i, menu_label: section.menuLabel ?? null })
       .select('id')
       .single();
+
+    // Degrade gracefully when the menu_label column is unmigrated.
+    if (!sectionRow) {
+      const retry = await db()
+        .from('menu_sections')
+        .insert({ restaurant_id: restaurantId, name: section.name, display_order: i })
+        .select('id')
+        .single();
+      sectionRow = retry.data;
+    }
 
     if (!sectionRow) continue;
 

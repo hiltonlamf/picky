@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:pipeline": "tsx scripts/run-pipeline-tests.ts"
+    "test:pipeline": "tsx scripts/run-pipeline-tests.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test:smoke": "tsx scripts/run-pipeline-tests.ts --smoke",
+    "record:fixture": "tsx scripts/record-fixture.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
@@ -30,6 +35,7 @@
     "supabase": "^2.109.0",
     "tailwindcss": "^3.4.11",
     "tsx": "^4.22.4",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.9"
   }
 }

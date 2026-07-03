@@ -5,7 +5,7 @@ const MAX_PER_HOUR = parseInt(process.env.RATE_LIMIT_MAX_PER_HOUR ?? '5', 10);
 
 let _supabase: ReturnType<typeof createClient> | null = null;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line
 function getSupabase(): any | null {
   if (!_supabase) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

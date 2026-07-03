@@ -11,6 +11,8 @@ export interface ScrapeResult {
   menuImages?: string[];
   menuPdfUrls?: string[];
   menuLinks?: string[]; // candidate menu sub-page links (for discovery)
+  navLinks?: string[]; // scored same-domain nav links — deep-discovery fallback when no menu link exists
+  linkLabels?: Record<string, string>; // anchor text per menu link/PDF URL (human hints for labeling)
   screenshotUrl?: string; // hosted full-page screenshot from the reader, if any
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
@@ -18,8 +20,21 @@ export interface ScrapeResult {
 
 const MENU_LINK_KEYWORDS = [
   'menu', 'food', 'eat', 'dishes', 'cuisine', 'carte',
-  'speisekarte', 'kaart', 'menukaart',
+  'speisekarte', 'kaart', 'menukaart', 'order',
 ];
+
+// Hosted ordering platforms host the restaurant's live menu. As MENU SOURCES
+// they are first-class (unlike homepage resolution, where they're excluded).
+const ORDERING_HOST_RE =
+  /(^|\.)((order|orders|ordering)\.[a-z0-9-]+\.[a-z]{2,}|toasttab\.com|square\.site|mryum\.com|bopple\.com|storekit\.com|flipdish\.[a-z.]+)$/i;
+
+function isOrderingHost(url: string): boolean {
+  try {
+    return ORDERING_HOST_RE.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 const EXCLUDED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4'];
 const PDF_EXTENSIONS = ['.pdf'];
@@ -40,6 +55,9 @@ function isPdfUrl(url: string): boolean {
 
 const MENU_IMAGE_KEYWORDS = ['menu', 'food', 'carte', 'speise', 'dish', 'notions'];
 const SKIP_IMAGE_KEYWORDS = ['logo', 'icon', 'favicon', 'avatar', 'banner', 'social', 'twitter', 'facebook', 'instagram'];
+// Photography-gallery style images are decoration, not menus — demote (not
+// drop: on image-only sites they may still be the only lead we have).
+const PHOTO_IMAGE_KEYWORDS = ['gallery', 'hero', 'slide', 'carousel', 'photo', 'interior', 'team', 'staff', 'event'];
 
 export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
   const candidates: Array<{ url: string; score: number }> = [];
@@ -58,6 +76,9 @@ export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[]
     for (const kw of MENU_IMAGE_KEYWORDS) {
       if (srcLower.includes(kw)) score += 10;
       if (alt.includes(kw)) score += 5;
+    }
+    for (const kw of PHOTO_IMAGE_KEYWORDS) {
+      if (srcLower.includes(kw) || alt.includes(kw)) score -= 5;
     }
     const w = parseInt($(el).attr('width') ?? '0', 10);
     const h = parseInt($(el).attr('height') ?? '0', 10);
@@ -243,22 +264,30 @@ function extractText($: cheerio.CheerioAPI): string {
   return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
 }
 
+// Gift cards / vouchers are never menus, even on ordering platforms
+// (e.g. order.toasttab.com/egiftcards/...).
+const GIFT_LINK_RE = /\b(gift|giftcard|egift|voucher)/i;
+
 export function findMenuLinks(
   $: cheerio.CheerioAPI,
   baseUrl: string
-): { htmlLinks: string[]; pdfLinks: string[] } {
+): { htmlLinks: string[]; pdfLinks: string[]; linkLabels: Record<string, string> } {
   const htmlCandidates: Array<{ url: string; score: number }> = [];
   const pdfCandidates: Array<{ url: string; score: number }> = [];
+  // Anchor text per URL — often the only human-readable name for opaque links
+  // (Wix/Squarespace PDFs have hash filenames; the button says "Lunch").
+  const linkLabels: Record<string, string> = {};
   let baseOrigin: string;
   try {
     baseOrigin = new URL(baseUrl).origin;
   } catch {
-    return { htmlLinks: [], pdfLinks: [] };
+    return { htmlLinks: [], pdfLinks: [], linkLabels };
   }
 
   $('a[href]').each((_, el) => {
     const href = $(el).attr('href') ?? '';
-    const text = ($(el).text() + ' ' + ($(el).attr('title') ?? '')).toLowerCase();
+    const rawText = ($(el).text().trim() || $(el).attr('title') || $(el).attr('aria-label') || '').trim();
+    const text = rawText.toLowerCase();
     const resolvedHref = resolveUrl(href, baseUrl);
 
     if (!resolvedHref) return;
@@ -266,6 +295,11 @@ export function findMenuLinks(
     const isExternal = !resolvedHref.startsWith(baseOrigin);
     if (EXCLUDED_EXTENSIONS.some((ext) => resolvedHref.toLowerCase().endsWith(ext))) return;
     if (resolvedHref === baseUrl) return;
+    if (GIFT_LINK_RE.test(resolvedHref) || GIFT_LINK_RE.test(text)) return;
+
+    const remember = (url: string) => {
+      if (rawText && rawText.length <= 60 && !linkLabels[url]) linkLabels[url] = rawText;
+    };
 
     if (isPdfUrl(resolvedHref)) {
       let score = 0;
@@ -276,18 +310,25 @@ export function findMenuLinks(
       // Any PDF linked from a menu keyword anchor is a good candidate
       if (score > 0 || text.includes('download') || text.includes('pdf')) {
         pdfCandidates.push({ url: resolvedHref, score: score || 1 });
+        remember(resolvedHref);
       }
       return;
     }
 
-    if (isExternal) return;
+    // External HTML links are only menu candidates when they point at a hosted
+    // ordering platform (Toast, Square, order.* subdomains) — those pages ARE
+    // the restaurant's live menu.
+    if (isExternal && !isOrderingHost(resolvedHref)) return;
 
-    let score = 0;
+    let score = isExternal ? 2 : 0;
     for (const keyword of MENU_LINK_KEYWORDS) {
       if (text.includes(keyword)) score += 2;
       if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
     }
-    if (score > 0) htmlCandidates.push({ url: resolvedHref, score });
+    if (score > 0) {
+      htmlCandidates.push({ url: resolvedHref, score });
+      remember(resolvedHref);
+    }
   });
 
   // PDFs are frequently embedded via <embed>/<iframe>/<object> (PDF viewers,
@@ -311,7 +352,66 @@ export function findMenuLinks(
       .map((c) => c.url);
   };
 
-  return { htmlLinks: dedup(htmlCandidates, 3), pdfLinks: dedup(pdfCandidates, 2) };
+  // Limits: a restaurant can genuinely have 4-6 menu PDFs (lunch/dinner/...);
+  // the discovery picker has its own cap.
+  return { htmlLinks: dedup(htmlCandidates, 5), pdfLinks: dedup(pdfCandidates, 6), linkLabels };
+}
+
+// Nav slugs that plausibly lead to a page that links the menus (multi-venue
+// groups, "Restaurants"/"Dining" sections) — used only by deep discovery when
+// the homepage itself yields no menu source.
+const NAV_BOOST_RE = /\b(restaurant|restaurants|dining|dine|food|eat|kitchen|cafe|bistro|venue|venues|location|locations)\b/i;
+const NAV_EXCLUDE_RE =
+  /\b(contact|about|gallery|book|booking|reservation|career|job|voucher|gift|privacy|terms|cookie|news|blog|press|event|faq|login|account|cart|checkout|shop|store|sitemap)\b/i;
+
+/**
+ * Scored same-domain navigation links — the deep-discovery fallback for sites
+ * whose menu is nested behind a non-menu-keyword nav item (e.g. under
+ * "Restaurants"). Shallow paths first, boosted food-adjacent slugs, capped.
+ */
+export function findNavLinks($: cheerio.CheerioAPI, baseUrl: string, limit = 8): string[] {
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
+
+  const candidates: Array<{ url: string; score: number }> = [];
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    const text = ($(el).text() + ' ' + ($(el).attr('title') ?? '')).toLowerCase();
+    const resolved = resolveUrl(href, baseUrl);
+    if (!resolved || !resolved.startsWith(baseOrigin)) return;
+    if (EXCLUDED_EXTENSIONS.some((ext) => resolved.toLowerCase().endsWith(ext))) return;
+
+    let path: string;
+    try {
+      path = new URL(resolved).pathname;
+    } catch {
+      return;
+    }
+    if (path === '/' || resolved === baseUrl) return;
+    const slug = decodeURIComponent(path).toLowerCase();
+    if (NAV_EXCLUDE_RE.test(slug) || NAV_EXCLUDE_RE.test(text)) return;
+
+    const depth = slug.split('/').filter(Boolean).length;
+    let score = depth <= 1 ? 3 : depth === 2 ? 1 : 0;
+    if (NAV_BOOST_RE.test(slug) || NAV_BOOST_RE.test(text)) score += 5;
+    candidates.push({ url: resolved, score });
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  return candidates
+    .filter((c) => {
+      const key = c.url.replace(/[#?].*$/, '').replace(/\/$/, '');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit)
+    .map((c) => c.url);
 }
 
 // Extract a restaurant's own website from a review site page (Yelp, TripAdvisor, etc.)
@@ -772,11 +872,30 @@ type HtmlPageResult = {
   menuImages: string[];
   menuPdfUrls: string[];
   menuLinks: string[];
+  navLinks: string[];
+  linkLabels: Record<string, string>;
   screenshotUrl?: string;
 };
 
 function dedupeStrings(arr: string[]): string[] {
   return Array.from(new Set(arr.filter(Boolean)));
+}
+
+/**
+ * Pull link labels out of reader markdown ("[Dinner Menu](https://…/x.pdf)").
+ * JS-rendered sites (Wix/Squarespace) hide anchors from cheerio, and their PDF
+ * URLs are hash-named — the markdown link text is the only human name we get.
+ */
+function extractMarkdownLinkLabels(markdown: string): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const re = /\[([^\]]{1,60})\]\((https?:\/\/[^)\s]+)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(markdown))) {
+    const label = m[1].replace(/[*_`#!]/g, '').trim();
+    const url = m[2];
+    if (label && !/^https?:\/\//i.test(label) && !labels[url]) labels[url] = label;
+  }
+  return labels;
 }
 
 async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
@@ -794,22 +913,43 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
   const $ = cheerio.load(reader?.html && reader.html.length > staticHtml.length ? reader.html : staticHtml);
 
   // Find links and images BEFORE extractText
-  const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs } =
-    depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [] };
+  const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs, linkLabels } =
+    depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [], linkLabels: {} };
+  const navLinks = depth === 0 ? findNavLinks($, finalUrl) : [];
   const cheerioImages = findMenuImages($, finalUrl);
 
   // Merge reader-discovered sources with cheerio-discovered ones. Reader image
   // URLs bypass cheerio's logo/icon heuristic, so re-apply the skip filter here.
   const readerImages = (reader?.imageUrls ?? []).filter(
-    (u) => !SKIP_IMAGE_KEYWORDS.some((k) => u.toLowerCase().includes(k)) && !/\.(gif|svg)(\?|$)/i.test(u)
+    (u) =>
+      !SKIP_IMAGE_KEYWORDS.some((k) => u.toLowerCase().includes(k)) &&
+      !/\.(gif|svg|html?|php|aspx?)(\?|$)/i.test(u) // readers sometimes report page URLs as "images"
   );
   const menuPdfUrls = dedupeStrings([...cheerioPdfs, ...(reader?.pdfLinks ?? [])]);
   const menuImages = dedupeStrings([...cheerioImages, ...readerImages]).slice(0, 6);
-  // Augment scored cheerio sub-page links with reader links that mention a menu.
-  const readerMenuLinks = (reader?.links ?? []).filter((l) =>
-    MENU_LINK_KEYWORDS.some((k) => l.toLowerCase().includes(k))
+  // Augment scored cheerio sub-page links with reader links that mention a
+  // menu. Apply the same guards as findMenuLinks: no gift/voucher pages, and
+  // external links only for hosted ordering platforms.
+  let pageOrigin = '';
+  try {
+    pageOrigin = new URL(finalUrl).origin;
+  } catch {}
+  const readerMenuLinks = (reader?.links ?? []).filter(
+    (l) =>
+      MENU_LINK_KEYWORDS.some((k) => l.toLowerCase().includes(k)) &&
+      !GIFT_LINK_RE.test(l) &&
+      (l.startsWith(pageOrigin) || isOrderingHost(l))
   );
   const menuLinks = dedupeStrings([...cheerioLinks, ...readerMenuLinks]);
+
+  // Merge reader-markdown link labels (JS-rendered anchors invisible to
+  // cheerio) under the cheerio ones, keeping only labels for kept URLs.
+  if (reader?.markdown) {
+    const mdLabels = extractMarkdownLinkLabels(reader.markdown);
+    for (const url of [...menuPdfUrls, ...menuLinks]) {
+      if (!linkLabels[url] && mdLabels[url]) linkLabels[url] = mdLabels[url];
+    }
+  }
 
   // Prefer the reader's clean rendered text when it looks substantive.
   const cheerioText = extractText($);
@@ -838,6 +978,8 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
       menuImages,
       menuPdfUrls,
       menuLinks,
+      navLinks,
+      linkLabels,
       screenshotUrl: reader?.screenshotUrl,
     };
   }
@@ -854,6 +996,8 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
           menuImages: menuRes.menuImages.length ? menuRes.menuImages : menuImages,
           menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : menuPdfUrls,
           menuLinks,
+          navLinks,
+          linkLabels,
           screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
         };
       }
@@ -870,6 +1014,8 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
     menuImages,
     menuPdfUrls,
     menuLinks,
+    navLinks,
+    linkLabels,
     screenshotUrl: reader?.screenshotUrl,
   };
 }
@@ -893,6 +1039,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
         menuLinks: result.menuLinks,
+        navLinks: result.navLinks,
+        linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
@@ -926,6 +1074,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuImages: result.menuImages,
         menuPdfUrls: result.menuPdfUrls,
         menuLinks: result.menuLinks,
+        navLinks: result.navLinks,
+        linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
         urlType: 'html',
       };
@@ -983,7 +1133,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, screenshotUrl } =
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, linkLabels, screenshotUrl } =
     await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
@@ -998,6 +1148,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: menuPdfUrls[0],
         menuPdfUrls,
         menuLinks,
+        navLinks,
+        linkLabels,
         screenshotUrl,
         urlType: 'pdf',
       };
@@ -1012,6 +1164,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuUrl: null,
         menuImages,
         menuLinks,
+        navLinks,
+        linkLabels,
         screenshotUrl,
         urlType: 'html',
       };
@@ -1026,6 +1180,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         menuText: '',
         menuUrl: null,
         menuLinks,
+        navLinks,
+        linkLabels,
         screenshotUrl,
         urlType: 'html',
       };
@@ -1044,6 +1200,8 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     menuImages,
     menuPdfUrls,
     menuLinks,
+    navLinks,
+    linkLabels,
     screenshotUrl,
     urlType: 'html',
   };

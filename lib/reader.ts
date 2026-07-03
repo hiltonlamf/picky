@@ -146,11 +146,21 @@ async function readWithJina(url: string): Promise<ReaderResult | null> {
     };
     if (process.env.JINA_API_KEY) headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
 
-    const res = await fetch(`https://r.jina.ai/${url}`, {
+    let res = await fetch(`https://r.jina.ai/${url}`, {
       headers,
       signal: AbortSignal.timeout(25000),
       redirect: 'follow',
     });
+    // Keyless tier is ~20 rpm — long QA runs hit 429s. One bounded backoff
+    // retry keeps batch runs alive without blowing the API route time budget.
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 12000));
+      res = await fetch(`https://r.jina.ai/${url}`, {
+        headers,
+        signal: AbortSignal.timeout(25000),
+        redirect: 'follow',
+      });
+    }
     if (!res.ok) return null;
 
     const json = (await res.json()) as {
