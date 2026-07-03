@@ -1,19 +1,25 @@
-# Tier 2 — live pipeline QA. Runs the full E2E suite (real restaurant
-# websites + real Claude API calls) on every PR push and gates the merge.
+# Live pipeline QA — real restaurant websites + real Claude API calls.
 #
-# Costs real money (~$0.10–0.50/run) and depends on live websites, so:
-#   - concurrency cancels superseded runs on rapid pushes
-#   - the full log is always uploaded as an artifact (pass or fail)
-#   - once the product is live, consider switching `pull_request` to a
-#     nightly `schedule:` trigger and keeping workflow_dispatch for on-demand.
+# NON-BLOCKING by design: this suite has failure modes unrelated to code
+# correctness (API credits, restaurant sites changing/going down, reader rate
+# limits). It runs nightly and on demand, and posts results as signal:
+#   - workflow_dispatch on a branch with an open PR → comments the summary on it
+#   - scheduled run failure → opens/updates a "Nightly pipeline QA" issue
+# The blocking merge gate is the deterministic `CI` workflow.
 #
 # Requires repo secret: ANTHROPIC_API_KEY (optional: FIRECRAWL_API_KEY for a
 # more reliable JS reader than keyless Jina).
 name: Live pipeline QA
 
 on:
-  pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *' # nightly, 03:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -22,7 +28,7 @@ concurrency:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,3 +68,35 @@ jobs:
           name: pipeline-log-${{ github.run_number }}
           path: pipeline-log.txt
           retention-days: 30
+      - name: Comment results on the branch's open PR
+        if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Live pipeline QA — ${{ job.status }}"
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt
+            echo '```'
+            echo "_Non-blocking signal. Full log: run #${{ github.run_number }} artifacts._"
+          } > pr-comment.md
+          gh pr comment "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md || echo "no open PR for this branch — skipping comment"
+      - name: File issue on scheduled failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Nightly live pipeline QA failed on $(date -u +%F)."
+            echo
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' pipeline-log.txt
+            echo '```'
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > issue-body.md
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'Nightly live pipeline QA failures in:title' --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Nightly live pipeline QA failures" --body-file issue-body.md
+          fi
