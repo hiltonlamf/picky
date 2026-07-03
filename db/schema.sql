@@ -89,6 +89,23 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS tokens_out  INTEGER,
   ADD COLUMN IF NOT EXISTS cost_usd    NUMERIC(10, 6);
 
+-- Append-only API-spend log (mirrors supabase/migrations/20260703183500_add_ai_usage_log.sql).
+-- One row per completed analysis. Deliberately NO foreign key to restaurants:
+-- wiping restaurants for fresh testing must never delete the cost history.
+CREATE TABLE IF NOT EXISTS ai_usage_log (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  restaurant_id   UUID,        -- reference only; intentionally NOT a FK
+  restaurant_name TEXT,
+  url             TEXT,
+  model_used      TEXT,
+  tokens_in       INTEGER,
+  tokens_out      INTEGER,
+  cost_usd        NUMERIC(10, 6),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log (created_at);
+
 -- Multi-menu disambiguation: discovered candidate menus held between the
 -- discover and analyze phases (the analyze step references these by id only).
 ALTER TABLE restaurants

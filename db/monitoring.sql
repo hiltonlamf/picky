@@ -3,7 +3,29 @@
 -- Run these in Supabase → SQL Editor
 -- ============================================================
 
--- ── Total spend and parse volume (all time) ─────────────────
+-- ── Total spend and parse volume (all time, wipe-proof) ─────
+-- ai_usage_log is append-only and survives restaurant wipes — this is the
+-- authoritative spend history (includes backfilled pre-wipe rows).
+SELECT
+  COUNT(*)                          AS total_parses,
+  SUM(cost_usd)                     AS total_cost_usd,
+  AVG(cost_usd)                     AS avg_cost_per_parse,
+  SUM(tokens_in)                    AS total_tokens_in,
+  SUM(tokens_out)                   AS total_tokens_out
+FROM ai_usage_log;
+
+
+-- ── Spend by week from the wipe-proof log ────────────────────
+SELECT
+  DATE_TRUNC('week', created_at)::date AS week,
+  COUNT(*)                             AS parses,
+  ROUND(SUM(cost_usd)::numeric, 4)     AS cost_usd
+FROM ai_usage_log
+GROUP BY 1
+ORDER BY 1 DESC;
+
+
+-- ── Total spend on CURRENT restaurant rows (does not survive wipes) ──
 SELECT
   COUNT(*)                          AS total_parses,
   SUM(cost_usd)                     AS total_cost_usd,

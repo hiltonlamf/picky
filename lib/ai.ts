@@ -1,18 +1,28 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ClassifiedMenu } from '@/types';
+import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
   'claude-sonnet-4-6':         { input: 3.00, output: 15.00 },
-  'claude-opus-4-8':           { input: 5.00, output: 25.00 },
+  'claude-opus-4-8':           { input: 5.00, output: 25.00 }, // kept for historical cost rows
 };
 
-// Model tiers (reliability-first): cheap discovery, strong extraction, escalation on retry.
+// Model tiers (cost-first with a quality guardrail):
+// - Haiku does discovery AND extraction — reading dish names off a menu is
+//   mechanical OCR-style work it handles well, at ~1/3 of Sonnet's price.
+// - Sonnet is the escalation when Haiku's extraction fails validation, and it
+//   also double-checks every vegan/vegetarian label before results are saved
+//   (verifyVegClassifications below) — misclassifying a meat dish as
+//   vegetarian is a trust-breaking bug, so the strong model keeps the final
+//   say on those labels while touching only a fraction of the tokens.
+// - Opus is no longer in the pipeline: for menu OCR it rarely beat Sonnet and
+//   cost 1.7x more per token.
 export const DISCOVERY_MODEL = 'claude-haiku-4-5-20251001';
-export const EXTRACTION_MODEL = 'claude-sonnet-4-6';
-export const ESCALATION_MODEL = 'claude-opus-4-8';
+export const EXTRACTION_MODEL = 'claude-haiku-4-5-20251001';
+export const ESCALATION_MODEL = 'claude-sonnet-4-6';
+export const VERIFICATION_MODEL = 'claude-sonnet-4-6';
 
 export type AIUsage = {
   model: string;
@@ -83,7 +93,7 @@ Confidence score (0.0 to 1.0):
 - 0.3–0.5: uncertain, could go either way
 - 0.1–0.3: very uncertain, needs confirmation
 
-Always include a brief "reason" explaining your classification decision.
+Always include a brief "reason" (under 12 words) explaining your classification decision.
 
 Return ONLY valid JSON in this exact structure:
 {
@@ -116,8 +126,9 @@ export async function classifyMenuWithAI(
   restaurantName?: string,
   modelOverride?: string
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> {
-  // Reliability-first: default extraction to the strong model regardless of
-  // language; an explicit override (e.g. escalation) wins.
+  // Cost-first: extraction defaults to Haiku; an explicit override (e.g.
+  // Sonnet escalation when validation fails) wins. Veg labels get a Sonnet
+  // double-check downstream regardless of which model extracted.
   const model = modelOverride ?? EXTRACTION_MODEL;
 
   const message = await anthropic().messages.create({
@@ -499,6 +510,113 @@ export async function classifyMenuFromPdf(
   } catch (err) {
     if (isBillingError(err)) throw err;
     return null;
+  }
+}
+
+/** Exported for prompt-regression tests. */
+export function buildVerifyPrompt(
+  dishes: Array<{ section: string; name: string; description?: string; classification: string; confidence: number }>,
+  restaurantName?: string
+): string {
+  const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n` : '';
+  const list = dishes
+    .map(
+      (d, i) =>
+        `${i}. [${d.section}] "${d.name}"${d.description ? ` — ${d.description}` : ''} → currently ${d.classification} (confidence ${d.confidence})`
+    )
+    .join('\n');
+
+  return `${nameHint}You are auditing dietary labels for a restaurant app whose vegetarian and vegan users trust it to keep meat, poultry, fish, and seafood off their plate. A wrong "vegetarian" or "vegan" label is a serious failure. Below are dishes a first-pass classifier labeled vegan, vegetarian, or unknown. For EACH dish, confirm or correct the label:
+
+- "vegan": only plant-based ingredients, no animal products whatsoever
+- "vegetarian": no meat, poultry, fish, or seafood, but may contain dairy, eggs, or honey
+- "neither": contains meat, poultry, fish, or seafood — including hidden animal ingredients
+- "unknown": genuinely unclear from the name and description
+
+Watch for hidden animal ingredients: fish sauce, oyster sauce, or worcestershire sauce (Asian and Italian dishes); meat or fish stock in soups, risottos, and stews; anchovies in Caesar dressing or puttanesca; gelatin in desserts and panna cotta; lard or suet in pastry; prawn crackers or prawn toast. Be conservative: if a dish very likely contains one of these, downgrade the label and lower the confidence rather than giving it the benefit of the doubt.
+
+Dishes:
+${list}
+
+Return ONLY a JSON array with one object per dish, in index order:
+[{"index": 0, "classification": "vegan|vegetarian|neither|unknown", "confidence": 0.85, "reason": "brief, under 12 words"}]`;
+}
+
+const VALID_CLASSIFICATIONS = new Set(['vegan', 'vegetarian', 'neither', 'unknown']);
+
+/**
+ * Sonnet second opinion on the trust-critical labels. Haiku does the cheap
+ * extraction; this pass re-checks ONLY dishes labeled vegan/vegetarian/unknown
+ * (compact text, no images/PDFs) so the strong model has the final say on what
+ * users filter by, at ~a cent per menu. Never throws — on any failure the
+ * original menu is returned unchanged so a finished analysis is never lost.
+ */
+export async function verifyVegClassifications(
+  menu: ClassifiedMenu,
+  restaurantName?: string
+): Promise<{ menu: ClassifiedMenu; usage?: AIUsage }> {
+  const flagged: Array<{ s: number; d: number }> = [];
+  menu.sections.forEach((sec, s) =>
+    sec.dishes.forEach((dish, d) => {
+      if (dish.classification === 'vegan' || dish.classification === 'vegetarian' || dish.classification === 'unknown') {
+        flagged.push({ s, d });
+      }
+    })
+  );
+  if (flagged.length === 0) return { menu };
+
+  // Bound the audit (and its cost) on pathological menus.
+  const audit = flagged.slice(0, 100);
+  const dishes = audit.map(({ s, d }) => {
+    const dish = menu.sections[s].dishes[d];
+    return {
+      section: menu.sections[s].name,
+      name: dish.name,
+      description: dish.description ?? undefined,
+      classification: dish.classification,
+      confidence: dish.confidence,
+    };
+  });
+
+  try {
+    const message = await anthropic().messages.create({
+      model: VERIFICATION_MODEL,
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: buildVerifyPrompt(dishes, restaurantName) }],
+    });
+
+    const content = message.content[0];
+    if (content.type !== 'text') return { menu };
+
+    const raw = content.text.trim();
+    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, raw];
+    const parsed = JSON.parse(jsonMatch[1]?.trim() ?? raw) as Array<{
+      index: number;
+      classification: string;
+      confidence: number;
+      reason?: string;
+    }>;
+
+    const verified: ClassifiedMenu = structuredClone(menu);
+    for (const p of parsed) {
+      const loc = audit[p.index];
+      if (!loc || !VALID_CLASSIFICATIONS.has(p.classification)) continue;
+      const dish = verified.sections[loc.s].dishes[loc.d];
+      if (p.classification !== dish.classification && p.reason) dish.reason = p.reason;
+      dish.classification = p.classification as DietaryClassification;
+      if (typeof p.confidence === 'number' && p.confidence >= 0 && p.confidence <= 1) dish.confidence = p.confidence;
+    }
+
+    const tokensIn = message.usage.input_tokens;
+    const tokensOut = message.usage.output_tokens;
+    return {
+      menu: verified,
+      usage: { model: VERIFICATION_MODEL, tokensIn, tokensOut, costUsd: calcCost(VERIFICATION_MODEL, tokensIn, tokensOut) },
+    };
+  } catch (err) {
+    // A failed audit must not lose a finished analysis — keep the Haiku labels.
+    console.error('[verify] dietary double-check failed:', err instanceof Error ? err.message : err);
+    return { menu };
   }
 }
 

@@ -187,6 +187,34 @@ export async function createRestaurantRecord(url: string, city = 'dublin'): Prom
   return (data as { id: string }).id;
 }
 
+/**
+ * Record API spend in the append-only ai_usage_log — called on successful
+ * saves AND on failed analyses (failed retry ladders are the most expensive
+ * path, so skipping them made spend reports undercount badly).
+ * Best-effort: a logging failure must never fail the analysis itself.
+ */
+export async function logUsage(
+  restaurantId: string | null,
+  url: string | null,
+  usage: AIUsage,
+  restaurantName?: string | null
+): Promise<void> {
+  if (!usage.costUsd && !usage.tokensIn && !usage.tokensOut) return;
+  try {
+    await db().from('ai_usage_log').insert({
+      restaurant_id: restaurantId,
+      restaurant_name: restaurantName ?? null,
+      url,
+      model_used: usage.model,
+      tokens_in: usage.tokensIn,
+      tokens_out: usage.tokensOut,
+      cost_usd: usage.costUsd,
+    });
+  } catch (err) {
+    console.error('[db] ai_usage_log insert failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+}
+
 export async function saveClassifiedMenu(
   restaurantId: string,
   url: string,
@@ -210,6 +238,9 @@ export async function saveClassifiedMenu(
       }),
     })
     .eq('id', restaurantId);
+
+  // Append-only spend log — survives restaurant wipes (no FK by design).
+  if (usage) await logUsage(restaurantId, url, usage, menu.restaurantName || null);
 
   await db().from('dishes').delete().eq('restaurant_id', restaurantId);
   await db().from('menu_sections').delete().eq('restaurant_id', restaurantId);

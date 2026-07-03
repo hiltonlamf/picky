@@ -19,7 +19,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { scrapeRestaurant } from '../lib/scraper';
 import { discoverMenus, DRINK_SOURCE_RE, MAX_PICKER_CANDIDATES } from '../lib/menu-discovery';
-import { extractAndMerge, ExtractContext, looksLikeHeaderItems, MIN_FOOD_ITEMS } from '../lib/menu-extract';
+import { extractAndMerge, ExtractionError, ExtractContext, looksLikeHeaderItems, MIN_FOOD_ITEMS } from '../lib/menu-extract';
 import { countFoodItems } from '../lib/ai';
 import { isReaderEnabled } from '../lib/reader';
 import type { ClassifiedMenu } from '../types';
@@ -62,7 +62,14 @@ function dupCount(menu: ClassifiedMenu): number {
 let totalCostUsd = 0;
 
 /** Per-attempt result — lets main() retry a flaky case and keep the better run. */
-type CaseResult = { pass: number; fail: number; skip: number; row: string };
+type CaseResult = {
+  pass: number;
+  fail: number;
+  skip: number;
+  row: string;
+  /** Full retry ladder ran and found no menu — deterministic, don't re-run it. */
+  noMenu?: boolean;
+};
 let cur: CaseResult = { pass: 0, fail: 0, skip: 0, row: '' };
 
 function check(label: string, cond: boolean): boolean {
@@ -152,8 +159,18 @@ async function runCase(c: Case): Promise<CaseResult> {
   } catch (err) {
     cur.fail++;
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`    ✗ ERROR: ${msg}`);
-    cur.row = `${c.name.padEnd(20)} ERROR: ${msg}`;
+    // Failed retry ladders are the most expensive path — count their spend
+    // too, or the cost total silently undercounts the worst sites.
+    if (err instanceof ExtractionError && err.usage) {
+      totalCostUsd += err.usage.costUsd;
+      cur.noMenu = true; // full ladder already ran — a re-run won't change this
+      console.error(`    ✗ ERROR: ${msg}`);
+      console.error(`      (failed attempts still cost $${err.usage.costUsd.toFixed(4)})`);
+      cur.row = `${c.name.padEnd(20)} ERROR ($${err.usage.costUsd.toFixed(4)} spent): ${msg}`;
+    } else {
+      console.error(`    ✗ ERROR: ${msg}`);
+      cur.row = `${c.name.padEnd(20)} ERROR: ${msg}`;
+    }
   }
   return cur;
 }
@@ -186,7 +203,10 @@ async function main() {
     // Live sites + keyless reader tiers are flaky: one retry after a cooldown
     // absorbs transient 429s/site hiccups so only PERSISTENT failures gate a
     // merge. Real spend on both attempts is still counted in the cost total.
-    if (result.fail > 0) {
+    // EXCEPTION: "no menu found" after the full retry ladder is deterministic
+    // and the priciest failure there is — re-running it doubles the bill for
+    // the same answer, so don't.
+    if (result.fail > 0 && !result.noMenu) {
       console.log(`    ↻ retrying ${c.name} after a 60s cooldown (transient site/reader flakiness?)...`);
       await new Promise((r) => setTimeout(r, 60000));
       const second = await runCase(c);
