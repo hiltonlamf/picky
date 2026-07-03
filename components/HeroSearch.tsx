@@ -25,10 +25,11 @@ export default function HeroSearch() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
 
-  // Consume an SSE stream from a fetch Response. Returns when the stream ends
-  // or an outcome (redirect / candidates / error) is reached.
+  // Consume an SSE stream from a fetch Response. Resolves 'done' on a terminal
+  // outcome (redirect / candidates / error), or the restaurantId to continue
+  // with when the server ran out of serverless time budget mid-analysis.
   const consumeStream = useCallback(
-    async (response: Response): Promise<void> => {
+    async (response: Response): Promise<'done' | { continueWith: string }> => {
       if (!response.body) throw new Error('No response body');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -68,14 +69,16 @@ export default function HeroSearch() {
             setCandidates(event.candidates);
             setSelectedIds(event.candidates.map((c) => c.id)); // default: all selected
             setState('selecting');
-            return;
+            return 'done';
+          } else if (event.type === 'continue') {
+            return { continueWith: event.restaurantId };
           } else if (event.type === 'result' || event.type === 'cached') {
             router.push(`/restaurant/${event.restaurantId}`);
-            return;
+            return 'done';
           } else if (event.type === 'error') {
             setError(event.error ?? 'An error occurred');
             setState('error');
-            return;
+            return 'done';
           }
         }
       }
@@ -87,6 +90,27 @@ export default function HeroSearch() {
       );
     },
     [router]
+  );
+
+  // Follow a stream through any number of 'continue' hops: each hop resumes
+  // the stored analysis in a fresh (time-capped) serverless request.
+  const followStream = useCallback(
+    async (response: Response): Promise<void> => {
+      let outcome = await consumeStream(response);
+      let hops = 0;
+      while (outcome !== 'done') {
+        if (++hops > 20) {
+          throw new Error('The analysis is taking much longer than expected. Please try again later.');
+        }
+        const next = await fetch('/api/parse/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ restaurantId: outcome.continueWith }),
+        });
+        outcome = await consumeStream(next);
+      }
+    },
+    [consumeStream]
   );
 
   const handleSubmit = useCallback(
@@ -109,13 +133,13 @@ export default function HeroSearch() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}` }),
         });
-        await consumeStream(response);
+        await followStream(response);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
         setState('error');
       }
     },
-    [url, consumeStream]
+    [url, followStream]
   );
 
   const handleAnalyzeSelected = useCallback(async () => {
@@ -131,12 +155,12 @@ export default function HeroSearch() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ restaurantId, candidateIds: selectedIds }),
       });
-      await consumeStream(response);
+      await followStream(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
       setState('error');
     }
-  }, [restaurantId, selectedIds, consumeStream]);
+  }, [restaurantId, selectedIds, followStream]);
 
   const toggle = (id: string) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));

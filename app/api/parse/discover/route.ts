@@ -15,9 +15,9 @@ import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
 
-// Heavy sites (image-board menus, subpage + vision retries) legitimately need
-// more than 60s; Vercel kills the function at maxDuration and the stream dies.
-export const maxDuration = 300;
+// Vercel Hobby caps functions at 60s. This route only scrapes + discovers
+// (analysis is handed to the resumable /analyze endpoint), which fits.
+export const maxDuration = 60;
 
 const schema = z.object({ url: z.string().url('Please provide a valid URL') });
 
@@ -148,29 +148,37 @@ export async function POST(request: NextRequest) {
           pageUrl: discovery.finalUrl,
         };
 
-        // Multiple distinct menus → ask the user which to analyze. If we can't
-        // persist the candidate list (e.g. the menu_candidates column hasn't
-        // been migrated yet), degrade gracefully to analysing all menus inline
-        // rather than showing a picker we can't follow through on.
-        if (discovery.candidates.length >= 2) {
-          try {
-            await saveMenuCandidates(restaurantId, {
-              candidates: discovery.candidates,
-              finalUrl: discovery.finalUrl,
-              title: ctx.title,
-              inlineText: ctx.inlineText,
-              screenshotUrl: ctx.screenshotUrl,
-              pdfUrls: ctx.pdfUrls,
-              imageUrls: ctx.imageUrls,
-            });
+        // Hand analysis to the resumable /analyze endpoint (serverless time
+        // caps: extraction may span several short requests). Multiple distinct
+        // menus → the user picks first; a single menu → seed the analysis
+        // state ourselves and tell the client to proceed straight away.
+        // If we can't persist state (e.g. the menu_candidates column hasn't
+        // been migrated yet), degrade gracefully to analysing inline.
+        try {
+          await saveMenuCandidates(restaurantId, {
+            candidates: discovery.candidates,
+            finalUrl: discovery.finalUrl,
+            title: ctx.title,
+            inlineText: ctx.inlineText,
+            screenshotUrl: ctx.screenshotUrl,
+            pdfUrls: ctx.pdfUrls,
+            imageUrls: ctx.imageUrls,
+            ...(discovery.candidates.length === 1 && {
+              analysis: { queue: discovery.candidates.map((c) => c.id), done: [] },
+            }),
+          });
+          if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
-            return close();
-          } catch {
-            // fall through to inline analysis of all discovered menus
+          } else {
+            send({ type: 'continue', restaurantId });
           }
+          return close();
+        } catch {
+          // fall through to inline analysis of all discovered menus
         }
 
-        // Single menu (or candidates couldn't be persisted) → analyze inline.
+        // Candidates couldn't be persisted → analyze inline (may exceed the
+        // serverless cap on heavy sites; this is a degraded path only).
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 4, totalSteps: 4 });
         // Stream live extraction status so long analyses don't look frozen.
         ctx.onProgress = (message) => send({ type: 'progress', step: message, stepNumber: 4, totalSteps: 4 });

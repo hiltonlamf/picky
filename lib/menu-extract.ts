@@ -47,7 +47,7 @@ function isValid(extraction: Extraction): boolean {
   return countFoodItems(extraction.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(extraction.menu);
 }
 
-function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
+export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
   const base = a ?? { model: '', tokensIn: 0, tokensOut: 0, costUsd: 0 };
   if (!b) return base;
   return {
@@ -158,68 +158,84 @@ function startMessage(candidate: MenuCandidate): string {
   }
 }
 
-export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
-  const progress = ctx.onProgress ?? (() => {});
-
-  progress(startMessage(candidate));
-  let best: Extraction = await attemptOrNull(() => runPrimary(candidate, ctx));
-  let usage = best?.usage;
-  if (isValid(best)) return best ? { menu: best.menu, usage: usage! } : null;
-
-  // Alternate sources not already tried, in priority order.
-  const altAttempts: Array<{ note: string; run: () => Promise<Extraction> }> = [];
+/** The ordered retry chain for one candidate. Static so extraction can be
+ *  resumed from any attempt index in a later request (serverless time caps). */
+function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): Array<{ note: string; run: () => Promise<Extraction> }> {
+  const plan: Array<{ note: string; run: () => Promise<Extraction> }> = [
+    { note: startMessage(candidate), run: () => runPrimary(candidate, ctx) },
+  ];
   if (candidate.type !== 'pdf' && ctx.pdfUrls?.length) {
-    altAttempts.push({
+    plan.push({
       note: 'That source was unclear — reading the menu PDF instead...',
       run: () => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title),
     });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
-    altAttempts.push({
+    plan.push({
       note: 'Scanning the menu images for dishes...',
       run: () => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title),
     });
   }
-  if (ctx.screenshotUrl) {
-    altAttempts.push({
-      note: 'Reading a full snapshot of the page...',
-      run: () => classifyMenuFromScreenshot(ctx.screenshotUrl!, ctx.title),
-    });
-  }
+  // Universal vision fallback: read a full-page screenshot (existing one, or
+  // rendered on demand). Catches image-only and JS/canvas menus.
+  plan.push({
+    note: 'Taking a snapshot of the page to read it visually...',
+    run: async () => {
+      const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
+      const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
+      return shot ? classifyMenuFromScreenshot(shot, ctx.title) : null;
+    },
+  });
+  // Last resort: escalate the original source to the strongest model.
+  plan.push({
+    note: 'Double-checking with our strongest AI model...',
+    run: () => runPrimary(candidate, ctx, ESCALATION_MODEL),
+  });
+  return plan;
+}
 
-  for (const attempt of altAttempts) {
-    progress(attempt.note);
-    const res = await attemptOrNull(attempt.run);
+export interface ResumableResult {
+  best: Extraction;
+  usage?: AIUsage;
+  /** Attempt index to resume from, or null when the chain is finished. */
+  nextIndex: number | null;
+}
+
+/**
+ * Run a candidate's retry chain starting at `startIndex`, stopping early when
+ * a valid menu is found or `deadline` (ms epoch) approaches. Lets serverless
+ * callers split one long extraction across several short requests.
+ */
+export async function extractMenuResumable(
+  candidate: MenuCandidate,
+  ctx: ExtractContext,
+  startIndex = 0,
+  deadline = Number.POSITIVE_INFINITY,
+  carried: Extraction = null,
+  carriedUsage?: AIUsage
+): Promise<ResumableResult> {
+  const progress = ctx.onProgress ?? (() => {});
+  const plan = attemptPlan(candidate, ctx);
+  let best: Extraction = carried;
+  let usage: AIUsage | undefined = carriedUsage ?? carried?.usage;
+
+  for (let i = startIndex; i < plan.length; i++) {
+    if (isValid(best)) break;
+    if (Date.now() >= deadline) {
+      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i };
+    }
+    progress(plan[i].note);
+    const res = await attemptOrNull(plan[i].run);
     usage = sumUsage(usage, res?.usage);
     if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-    if (isValid(res)) break;
   }
 
-  // Universal vision fallback: render the page to a full-page screenshot and
-  // read it. Catches image-only menus and JS-embedded/canvas menus that yield
-  // no usable text, PDF, or discrete images (works on Jina's keyless tier).
-  if (!isValid(best)) {
-    // Screenshot the candidate's own page when it's a sub-page; otherwise the
-    // menu page we landed on.
-    const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
-    progress('Taking a snapshot of the page to read it visually...');
-    const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
-    if (shot) {
-      const res = await attemptOrNull(() => classifyMenuFromScreenshot(shot, ctx.title));
-      usage = sumUsage(usage, res?.usage);
-      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-    }
-  }
+  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null };
+}
 
-  // Last resort: escalate the original source to the strongest model.
-  if (!isValid(best)) {
-    progress('Double-checking with our strongest AI model...');
-    const escalated = await attemptOrNull(() => runPrimary(candidate, ctx, ESCALATION_MODEL));
-    usage = sumUsage(usage, escalated?.usage);
-    if (escalated && (!best || countFoodItems(escalated.menu) > countFoodItems(best.menu))) best = escalated;
-  }
-
-  return best ? { menu: best.menu, usage: usage! } : null;
+export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
+  const { best } = await extractMenuResumable(candidate, ctx);
+  return best;
 }
 
 function normName(name: string): string {

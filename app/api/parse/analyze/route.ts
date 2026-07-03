@@ -1,17 +1,24 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { extractAndMerge, ExtractContext } from '@/lib/menu-extract';
-import { getMenuCandidates, saveClassifiedMenu, markRestaurantError } from '@/lib/db';
+import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
+import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError } from '@/lib/db';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
-import type { ParseEvent } from '@/types';
+import type { AnalysisState, ParseEvent } from '@/types';
+import type { AIUsage } from '@/lib/ai';
 
-// Heavy sites (image-board menus, subpage + vision retries) legitimately need
-// more than 60s; Vercel kills the function at maxDuration and the stream dies.
-export const maxDuration = 300;
+// Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
+// and, if unfinished, persists its progress and asks the client to call back
+// (a 'continue' event). One long analysis = several short requests.
+export const maxDuration = 60;
+const TIME_BUDGET_MS = 40_000;
+const NO_MENU_MSG =
+  "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.";
 
 const schema = z.object({
   restaurantId: z.string().uuid('Invalid restaurant id'),
-  candidateIds: z.array(z.string()).min(1, 'Pick at least one menu'),
+  // Present on the first call (starts a fresh analysis, rate-limited);
+  // absent on 'continue' callbacks (resumes stored state, not rate-limited).
+  candidateIds: z.array(z.string()).min(1).optional(),
 });
 
 function sseEncoder() {
@@ -51,23 +58,33 @@ export async function POST(request: NextRequest) {
         }
         const { restaurantId, candidateIds } = parsed.data;
 
-        const { allowed } = await checkRateLimit(ip);
-        if (!allowed) {
-          send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
-          return close();
-        }
-
         const payload = await getMenuCandidates(restaurantId).catch(() => null);
         if (!payload || !payload.candidates?.length) {
           send({ type: 'error', error: 'This selection expired — please search the restaurant again.' });
           return close();
         }
 
-        // Resolve selected ids against the SERVER-STORED candidate list only.
-        // No client-supplied URL is ever fetched (prevents SSRF).
-        const selected = payload.candidates.filter((c) => candidateIds.includes(c.id));
-        if (selected.length === 0) {
-          send({ type: 'error', error: 'None of the selected menus could be found — please try again.' });
+        // Resolve state: a fresh selection starts a new analysis (and counts
+        // against the rate limit); a bare call resumes stored progress.
+        let state: AnalysisState;
+        if (candidateIds?.length) {
+          const { allowed } = await checkRateLimit(ip);
+          if (!allowed) {
+            send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
+            return close();
+          }
+          // Resolve selected ids against the SERVER-STORED candidate list only.
+          // No client-supplied URL is ever fetched (prevents SSRF).
+          const selected = payload.candidates.filter((c) => candidateIds.includes(c.id));
+          if (selected.length === 0) {
+            send({ type: 'error', error: 'None of the selected menus could be found — please try again.' });
+            return close();
+          }
+          state = { queue: selected.map((c) => c.id), done: [] };
+        } else if (payload.analysis) {
+          state = payload.analysis;
+        } else {
+          send({ type: 'error', error: 'Nothing to resume — please search the restaurant again.' });
           return close();
         }
 
@@ -84,12 +101,54 @@ export async function POST(request: NextRequest) {
           onProgress: (message) => send({ type: 'progress', step: message, stepNumber: 1, totalSteps: 2 }),
         };
 
-        let menu;
-        let usage;
+        const byId = new Map(payload.candidates.map((c) => [c.id, c]));
+        const deadline = Date.now() + TIME_BUDGET_MS;
+
         try {
-          const result = await extractAndMerge(selected, ctx);
-          menu = result.menu;
-          usage = result.usage;
+          while (state.currentId || state.queue.length > 0) {
+            if (!state.currentId) {
+              state.currentId = state.queue.shift()!;
+              state.attemptIndex = 0;
+              state.bestSoFar = null;
+              state.candidateUsage = null;
+            }
+            const candidate = byId.get(state.currentId);
+            if (!candidate) {
+              state.currentId = null;
+              continue;
+            }
+
+            const r = await extractMenuResumable(
+              candidate,
+              ctx,
+              state.attemptIndex ?? 0,
+              deadline,
+              state.bestSoFar ?? null,
+              state.candidateUsage ?? undefined
+            );
+
+            if (r.nextIndex !== null) {
+              // Time budget reached mid-chain — persist and hand back to the client.
+              state.attemptIndex = r.nextIndex;
+              state.bestSoFar = r.best;
+              state.candidateUsage = r.usage ?? null;
+              payload.analysis = state;
+              await saveMenuCandidates(restaurantId, payload);
+              send({ type: 'progress', step: 'Still reading the menu — continuing...', stepNumber: 1, totalSteps: 2 });
+              send({ type: 'continue', restaurantId });
+              return close();
+            }
+
+            // Candidate finished.
+            if (r.best && r.best.menu.sections.length > 0) {
+              state.done.push({ label: candidate.label, menu: r.best.menu });
+            }
+            state.usage = sumUsage(state.usage ?? undefined, r.usage);
+            state.currentId = null;
+            state.attemptIndex = 0;
+            state.bestSoFar = null;
+            state.candidateUsage = null;
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           await markRestaurantError(restaurantId, msg);
@@ -97,9 +156,17 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
+        if (state.done.length === 0) {
+          await markRestaurantError(restaurantId, NO_MENU_MSG);
+          send({ type: 'error', error: NO_MENU_MSG });
+          return close();
+        }
+
+        const menu = mergeMenus(state.done);
         if (!menu.restaurantName && payload.title) menu.restaurantName = payload.title;
 
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
+        const usage: AIUsage = state.usage ?? { model: 'unknown', tokensIn: 0, tokensOut: 0, costUsd: 0 };
         await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
         send({ type: 'result', restaurantId });
       } catch (err) {
