@@ -311,6 +311,22 @@ export async function reportDish(
     .eq('id', dishId);
 }
 
+export async function submitFeedback(
+  restaurantId: string,
+  restaurantName: string | null,
+  feedbackType: string,
+  notes: string,
+  ipHash: string
+): Promise<void> {
+  await db().from('restaurant_feedback').insert({
+    restaurant_id: restaurantId,
+    restaurant_name: restaurantName,
+    feedback_type: feedbackType,
+    notes: notes || null,
+    ip_hash: ipHash,
+  });
+}
+
 export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]> {
   const { data } = await db()
     .from('featured_restaurants')

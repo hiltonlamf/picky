@@ -1,0 +1,31 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
+import { submitFeedback } from '@/lib/db';
+import { hashIp, getClientIp } from '@/lib/rate-limit';
+
+const schema = z.object({
+  restaurantId: z.string().uuid(),
+  restaurantName: z.string().max(200).optional().nullable(),
+  feedbackType: z.string().min(1).max(64),
+  notes: z.string().max(1000).optional().default(''),
+});
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    }
+
+    const { restaurantId, restaurantName, feedbackType, notes } = parsed.data;
+    const ip = getClientIp(request);
+    const ipHash = hashIp(ip);
+
+    await submitFeedback(restaurantId, restaurantName ?? null, feedbackType, notes, ipHash);
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Server error';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}

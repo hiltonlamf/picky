@@ -8,8 +8,9 @@ import MenuSection from '@/components/MenuSection';
 import FreshnessIndicator from '@/components/FreshnessIndicator';
 import Disclaimer from '@/components/Disclaimer';
 import ShareButton from '@/components/ShareButton';
+import FeedbackModal from '@/components/FeedbackModal';
 import { useHeader } from '@/lib/header-context';
-import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon } from '@/components/icons';
+import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
 
@@ -43,6 +44,7 @@ export default function RestaurantPage() {
   // 'all' or a specific source-menu label (Lunch/Dinner/...) when the
   // restaurant has multiple analysed menus.
   const [menuFilter, setMenuFilter] = useState<string>('all');
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { setRestaurantName } = useHeader();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -172,7 +174,14 @@ export default function RestaurantPage() {
           <h1 className="text-2xl font-bold text-evergreen">
             {restaurant.name ?? 'Restaurant Menu'}
           </h1>
-          <div className="shrink-0 pt-0.5">
+          <div className="shrink-0 pt-0.5 flex items-center gap-2">
+            <button
+              onClick={() => setFeedbackOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
+            >
+              <ChatIcon className="w-4 h-4" />
+              Feedback
+            </button>
             <ShareButton restaurant={restaurant} />
           </div>
         </div>
@@ -302,6 +311,14 @@ export default function RestaurantPage() {
       <div className="mt-8">
         <Disclaimer />
       </div>
+
+      {feedbackOpen && (
+        <FeedbackModal
+          restaurantId={restaurant.id}
+          restaurantName={restaurant.name ?? null}
+          onClose={() => setFeedbackOpen(false)}
+        />
+      )}
     </div>
   );
 }

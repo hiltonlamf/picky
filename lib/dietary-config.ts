@@ -58,6 +58,15 @@ export const REPORT_ISSUE_TYPES = [
   { value: 'other', label: 'Something else' },
 ];
 
+// General, page-level feedback — distinct from REPORT_ISSUE_TYPES, which is
+// always about one specific dish's label.
+export const GENERAL_FEEDBACK_TYPES = [
+  { value: 'missing_dish', label: "A dish is missing — it's on the menu but not in our results" },
+  { value: 'wrong_menu', label: 'This looks like the wrong menu, or the wrong restaurant entirely' },
+  { value: 'feature_request', label: 'I have an idea for a feature' },
+  { value: 'other', label: 'Something else' },
+];
+
 export const CONFIDENCE_THRESHOLD_WARNING = 0.6;
 export const STALENESS_DAYS = 30;
 export const REPORT_COUNT_WARNING_THRESHOLD = 3;
