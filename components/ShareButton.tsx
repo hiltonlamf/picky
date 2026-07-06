@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { Restaurant } from '@/types';
+import { CheckIcon, CopyIcon } from './icons';
 
 function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
   const allDishes = restaurant.sections.flatMap((s) => s.dishes);
@@ -11,24 +12,24 @@ function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
   const name = restaurant.name ?? 'this restaurant';
 
   const lines: string[] = [
-    `🥦 Good news about *${name}*!`,
+    `Good news about *${name}*! Our AI already checked the menu 🌱`,
     ``,
   ];
 
   if (veganDishes.length > 0) {
-    lines.push(`🥦 *Vegan (${veganDishes.length}):*`);
+    lines.push(`*Vegan (${veganDishes.length}):*`);
     veganDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
 
   if (vegDishes.length > 0) {
-    lines.push(`🍳 *Vegetarian (${vegDishes.length}):*`);
+    lines.push(`*Veggie (${vegDishes.length}):*`);
     vegDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
 
   lines.push(
-    `I checked with *Picky* — it reads restaurant menus and instantly shows everything vegetarians can eat. Super handy before a night out 🙌`,
+    `Found with *Picky* — AI reads restaurant menus and instantly shows everything vegetarians can eat. Super handy before a night out 🙌`,
     ``,
     `See the full menu with prices → ${pageUrl}`
   );
@@ -71,16 +72,15 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
       <button
         onClick={handleCopy}
         title="Copy share message"
-        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-gray-200 text-sm text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors"
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
       >
         {copied ? (
-          <>✓ Copied</>
+          <>
+            <CheckIcon className="w-4 h-4" /> Copied
+          </>
         ) : (
           <>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-            </svg>
+            <CopyIcon className="w-4 h-4" />
             Copy
           </>
         )}

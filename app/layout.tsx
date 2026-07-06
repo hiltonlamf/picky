@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Sora, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import CookieConsent from '@/components/CookieConsent';
 import SiteHeader from '@/components/SiteHeader';
 import { HeaderProvider } from '@/lib/header-context';
 import Link from 'next/link';
+import { SproutIcon } from '@/components/icons';
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
+const sora = Sora({ subsets: ['latin'], variable: '--font-sora' });
+const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
   title: {
@@ -25,26 +27,26 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${sora.variable} ${mono.variable}`}>
       <body className="min-h-screen flex flex-col">
         <HeaderProvider>
           <SiteHeader />
           <main className="flex-1">{children}</main>
-          <footer className="border-t border-gray-100 bg-white mt-16">
+          <footer className="border-t-[1.5px] border-mint-200 mt-16">
             <div className="max-w-5xl mx-auto px-4 py-8">
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-evergreen/80">
                 <div className="flex items-center gap-2">
-                  <span className="text-picky-600">🥦</span>
-                  <span className="font-medium text-gray-700">Picky</span>
-                  <span>— Find your food, your way.</span>
+                  <SproutIcon className="w-5 h-5 text-picky-600" />
+                  <span className="font-bold text-evergreen">Picky</span>
+                  <span>— Find what you can eat. Instantly.</span>
                 </div>
                 <div className="flex gap-4">
-                  <Link href="/dublin" className="hover:text-gray-700 transition-colors">Dublin Guide</Link>
-                  <a href="#" className="hover:text-gray-700 transition-colors">Privacy</a>
-                  <a href="#" className="hover:text-gray-700 transition-colors">Legal</a>
+                  <Link href="/dublin" className="hover:text-evergreen transition-colors">Dublin Guide</Link>
+                  <span className="text-evergreen/80 cursor-default" title="Coming soon">Privacy</span>
+                  <span className="text-evergreen/80 cursor-default" title="Coming soon">Legal</span>
                 </div>
               </div>
-              <p className="mt-4 text-xs text-gray-400 text-center sm:text-left">
+              <p className="mt-4 text-xs text-evergreen/80 text-center sm:text-left">
                 Always confirm dietary information with the restaurant. AI classification may not catch all ingredients.
               </p>
             </div>

@@ -4,4 +4,4 @@
 import { config } from 'dotenv';
 // override: the shell may export empty values (e.g. ANTHROPIC_API_KEY=) that
 // would otherwise shadow the real values in .env.local.
-config({ path: '.env.local', override: true });
+config({ path: '.env.local', override: true, quiet: true });

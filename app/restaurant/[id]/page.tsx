@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { Restaurant, DietaryClassification, MenuSection as MenuSectionType } from '@/types';
@@ -8,9 +8,13 @@ import MenuSection from '@/components/MenuSection';
 import FreshnessIndicator from '@/components/FreshnessIndicator';
 import Disclaimer from '@/components/Disclaimer';
 import ShareButton from '@/components/ShareButton';
+import FeedbackModal from '@/components/FeedbackModal';
 import { useHeader } from '@/lib/header-context';
+import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
+
+const PENDING_POLL_MS = 4000;
 
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
   const dishes = sections.flatMap((s) => s.dishes);
@@ -40,9 +44,11 @@ export default function RestaurantPage() {
   // 'all' or a specific source-menu label (Lunch/Dinner/...) when the
   // restaurant has multiple analysed menus.
   const [menuFilter, setMenuFilter] = useState<string>('all');
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { setRestaurantName } = useHeader();
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch(`/api/restaurants/${params.id}`)
       .then((r) => {
         if (!r.ok) throw new Error('Restaurant not found');
@@ -50,32 +56,41 @@ export default function RestaurantPage() {
       })
       .then((data: Restaurant) => {
         setRestaurant(data);
-        // Default to viewing one menu at a time — a combined lunch+dinner+... list isn't helpful.
         const labels = distinctMenuLabels(data);
-        if (labels.length > 1) setMenuFilter(labels[0]);
+        if (labels.length > 1) setMenuFilter((prev) => (prev === 'all' ? labels[0] : prev));
         if (data.name) {
           setRestaurantName(data.name);
           document.title = `${data.name} | Picky`;
         }
         setLoading(false);
+
+        // While the AI is still working, keep checking without asking the
+        // user to refresh manually — DB reads only, no extra AI cost.
+        if (data.status === 'pending' || data.status === 'processing') {
+          pollTimer.current = setTimeout(load, PENDING_POLL_MS);
+        }
       })
       .catch((err) => {
         setError(err.message);
         setLoading(false);
       });
+  }, [params.id, setRestaurantName]);
 
+  useEffect(() => {
+    load();
     return () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
       setRestaurantName(null);
       document.title = 'Picky — Find your food, your way';
     };
-  }, [params.id, setRestaurantName]);
+  }, [load, setRestaurantName]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
         <div className="text-center">
-          <div className="text-4xl mb-3 animate-pulse-gentle">🥦</div>
-          <p className="text-gray-500 text-sm">Loading menu...</p>
+          <SproutIcon className="w-10 h-10 mx-auto mb-3 text-picky-500 animate-pulse-gentle" />
+          <p className="text-evergreen/80 text-sm">Loading menu...</p>
         </div>
       </div>
     );
@@ -84,9 +99,9 @@ export default function RestaurantPage() {
   if (error || !restaurant) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-        <div className="text-5xl mb-4">😕</div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">Restaurant not found</h1>
-        <p className="text-gray-500 mb-6">{error ?? 'This restaurant doesn\'t exist or was removed.'}</p>
+        <QuestionMark />
+        <h1 className="text-xl font-bold text-evergreen mb-2">Restaurant not found</h1>
+        <p className="text-evergreen/80 mb-6">{error ?? "This restaurant doesn't exist or was removed."}</p>
         <Link href="/" className="btn-primary text-sm">
           ← Back to search
         </Link>
@@ -97,12 +112,12 @@ export default function RestaurantPage() {
   if (restaurant.status === 'error') {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-        <div className="text-5xl mb-4">⚠️</div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">Couldn&apos;t analyse this menu</h1>
-        <p className="text-gray-500 mb-2">
+        <AlertIcon className="w-12 h-12 mx-auto mb-4 text-sun-400" />
+        <h1 className="text-xl font-bold text-evergreen mb-2">Couldn&apos;t read this menu</h1>
+        <p className="text-evergreen/80 mb-2">
           {restaurant.errorMessage ?? 'An error occurred while parsing this restaurant.'}
         </p>
-        <p className="text-sm text-gray-400 mb-6">
+        <p className="text-sm text-evergreen/80 mb-6">
           The menu may be temporarily unavailable, or this website may require JavaScript to load.
         </p>
         <Link href="/" className="btn-primary text-sm">
@@ -115,13 +130,12 @@ export default function RestaurantPage() {
   if (restaurant.status === 'pending' || restaurant.status === 'processing') {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
-        <div className="text-5xl mb-4 animate-pulse">🌱</div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">
-          Analysing {restaurant.name ?? 'this menu'}&hellip;
+        <SproutIcon className="w-12 h-12 mx-auto mb-4 text-picky-500 animate-pulse-gentle" />
+        <h1 className="text-xl font-bold text-evergreen mb-2">
+          Our AI is reading {restaurant.name ?? 'this menu'}&hellip;
         </h1>
-        <p className="text-gray-500 mb-6">
-          Our AI is reading and classifying the menu right now. This usually takes under a minute.
-          Refresh the page to see results.
+        <p className="text-evergreen/80 mb-6">
+          Usually under a minute — this page updates itself the moment it&apos;s ready.
         </p>
         <Link href="/dublin" className="btn-primary text-sm">
           ← Back to Dublin Guide
@@ -142,28 +156,36 @@ export default function RestaurantPage() {
   const totalDishes = visibleSections.flatMap((s) => s.dishes).length;
 
   const filters: { value: Filter; label: string; count: number }[] = [
-    { value: 'all', label: 'All dishes', count: totalDishes },
-    { value: 'vegetarian', label: '🍳 Vegetarian', count: vegCount },
-    { value: 'vegan', label: '🥦 Vegan', count: veganCount },
+    { value: 'all', label: '🍽️ Everything', count: totalDishes },
+    { value: 'vegetarian', label: '🥚 Veggie', count: vegCount },
+    { value: 'vegan', label: '🌱 Vegan', count: veganCount },
   ];
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
       {/* Back */}
-      <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-6">
+      <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-evergreen/80 hover:text-evergreen mb-6">
         ← Back to search
       </Link>
 
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-bold text-evergreen">
             {restaurant.name ?? 'Restaurant Menu'}
           </h1>
-          <div className="shrink-0 pt-0.5">
+          <div className="shrink-0 pt-0.5 flex items-center gap-2">
+            <button
+              onClick={() => setFeedbackOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
+            >
+              <ChatIcon className="w-4 h-4" />
+              Feedback
+            </button>
             <ShareButton restaurant={restaurant} />
           </div>
         </div>
+        <p className="text-xs text-evergreen/80 mt-1">AI-read &amp; verified today</p>
         {restaurant.menuUrl && (
           <a
             href={restaurant.menuUrl}
@@ -182,32 +204,44 @@ export default function RestaurantPage() {
         </div>
       </div>
 
+      {/* Second-pass AI audit ribbon */}
+      <div className="flex items-center gap-3 rounded-2xl bg-mint-100 text-picky-700 px-4 py-3 mb-6 text-sm">
+        <ShieldIcon className="w-4 h-4 flex-shrink-0" />
+        <span>
+          Second-pass AI verification: fish sauce, gelatine and hidden stock get caught before this page reaches you.
+        </span>
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-6">
-        {[
-          { label: 'Vegan', count: veganCount, emoji: '🥦', color: 'text-picky-700' },
-          { label: 'Vegetarian', count: vegCount, emoji: '🍳', color: 'text-picky-600' },
-          { label: 'Total dishes', count: totalDishes, emoji: '🥩', color: 'text-gray-600' },
-        ].map((stat) => (
-          <div key={stat.label} className="card p-3 text-center">
-            <div className="text-xl mb-0.5">{stat.emoji}</div>
-            <div className={`text-2xl font-bold ${stat.color}`}>{stat.count}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{stat.label}</div>
-          </div>
-        ))}
+        <div className="card p-3 text-center">
+          <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
+          <div className="text-2xl font-bold bg-solar-gradient bg-clip-text text-transparent">{veganCount}</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Vegan</div>
+        </div>
+        <div className="card p-3 text-center">
+          <div className="text-lg mb-0.5" aria-hidden="true">🥚</div>
+          <div className="text-2xl font-bold text-picky-600">{vegCount}</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Veggie</div>
+        </div>
+        <div className="card p-3 text-center">
+          <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
+          <div className="text-2xl font-bold text-evergreen/80">{totalDishes}</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Dishes read</div>
+        </div>
       </div>
 
       {/* Menu selector — only when multiple menus were analysed */}
       {menuLabels.length > 1 && (
         <div className="mb-4">
-          <label htmlFor="menu-select" className="block text-xs font-medium text-gray-500 mb-1.5">
+          <label htmlFor="menu-select" className="block text-xs font-medium text-evergreen/80 mb-1.5">
             Menu
           </label>
           <select
             id="menu-select"
             value={menuFilter}
             onChange={(e) => setMenuFilter(e.target.value)}
-            className="w-full sm:w-auto px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-picky-500"
+            className="w-full sm:w-auto px-4 py-2 rounded-full border-2 border-mint-200 bg-white text-sm font-medium text-evergreen focus:outline-none focus:ring-4 focus:ring-picky-500/15 focus:border-picky-500"
           >
             {menuLabels.map((label) => (
               <option key={label} value={label}>
@@ -225,18 +259,14 @@ export default function RestaurantPage() {
           <button
             key={f.value}
             onClick={() => setFilter(f.value)}
-            className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 ${
+            className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 border-2 ${
               filter === f.value
-                ? 'bg-picky-600 text-white'
-                : 'bg-white border border-gray-200 text-gray-600 hover:border-picky-300'
+                ? 'bg-evergreen border-evergreen text-white'
+                : 'bg-white border-mint-200 text-evergreen/80 hover:border-picky-300'
             }`}
           >
             {f.label}
-            <span
-              className={`ml-1.5 text-xs ${
-                filter === f.value ? 'text-picky-100' : 'text-gray-400'
-              }`}
-            >
+            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-lime' : 'text-evergreen/80'}`}>
               {f.count}
             </span>
           </button>
@@ -246,8 +276,7 @@ export default function RestaurantPage() {
       {/* Menu sections */}
       {visibleSections.length === 0 ? (
         <div className="card p-8 text-center">
-          <div className="text-4xl mb-3">🤔</div>
-          <p className="text-gray-600">No menu sections found for this restaurant.</p>
+          <p className="text-evergreen/80">No menu sections found for this restaurant.</p>
         </div>
       ) : menuLabels.length > 1 && menuFilter === 'all' ? (
         // "All menus" view: group sections under a heading per source menu.
@@ -257,7 +286,7 @@ export default function RestaurantPage() {
             if (group.length === 0) return null;
             return (
               <div key={label} className="mb-8">
-                <h2 className="text-lg font-bold text-gray-900 mb-3 pb-2 border-b border-gray-200">{label}</h2>
+                <h2 className="text-lg font-bold text-evergreen mb-3 pb-2 border-b-[1.5px] border-mint-200">{label}</h2>
                 {group.map((section) => (
                   <MenuSection key={section.id} section={section} activeFilter={filter} />
                 ))}
@@ -282,6 +311,22 @@ export default function RestaurantPage() {
       <div className="mt-8">
         <Disclaimer />
       </div>
+
+      {feedbackOpen && (
+        <FeedbackModal
+          restaurantId={restaurant.id}
+          restaurantName={restaurant.name ?? null}
+          onClose={() => setFeedbackOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuestionMark() {
+  return (
+    <div className="mx-auto mb-4 w-12 h-12 rounded-full bg-mint-100 flex items-center justify-center">
+      <LeafOutlineIcon className="w-6 h-6 text-evergreen/80" />
     </div>
   );
 }

@@ -4,7 +4,8 @@
 
 @layer base {
   :root {
-    --font-inter: 'Inter', system-ui, sans-serif;
+    --font-sora: 'Sora', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
   html {
@@ -14,7 +15,11 @@
   }
 
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-mint-50 text-evergreen;
+    background-image:
+      radial-gradient(60% 40% at 8% 0%, rgba(198, 245, 66, 0.14), transparent 60%),
+      radial-gradient(55% 38% at 96% 4%, rgba(47, 216, 196, 0.12), transparent 60%);
+    background-attachment: fixed;
   }
 
   * {
@@ -24,49 +29,76 @@
 
 @layer components {
   .card {
-    @apply bg-white rounded-2xl shadow-sm border border-gray-100;
+    @apply bg-white rounded-2xl shadow-card-soft border-[1.5px] border-mint-200;
   }
 
   .btn-primary {
-    @apply bg-picky-600 hover:bg-picky-700 active:bg-picky-800
-           text-white font-semibold rounded-xl px-6 py-3
-           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-solar-gradient text-evergreen font-bold rounded-full px-6 py-3
+           shadow-glow transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98]
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100;
+  }
+
+  .btn-secondary {
+    @apply bg-evergreen text-lime font-semibold rounded-full px-6 py-3
+           transition-colors duration-150 hover:bg-evergreen-light
+           disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-ghost {
-    @apply text-gray-600 hover:text-gray-900 hover:bg-gray-100
-           rounded-xl px-4 py-2 transition-colors duration-150;
+    @apply text-evergreen/80 hover:text-evergreen hover:bg-mint-100
+           rounded-full px-4 py-2 transition-colors duration-150;
   }
 
   .input-url {
-    @apply w-full rounded-xl border border-gray-200 bg-white
-           px-4 py-3 text-gray-900 placeholder-gray-400
-           focus:border-picky-500 focus:ring-2 focus:ring-picky-200
-           focus:outline-none transition-all duration-150;
+    @apply w-full rounded-full border-2 border-mint-200 bg-white
+           px-5 py-3.5 text-evergreen placeholder-evergreen/55
+           focus:border-picky-500 focus:outline-none focus:ring-4 focus:ring-picky-500/15
+           transition-all duration-150;
   }
 
+  /* Mono "AI layer" — badges, eyebrows, timestamps, source chips */
+  .eyebrow {
+    @apply font-mono text-[11px] tracking-[0.14em] uppercase text-picky-700;
+  }
+
+  .live-dot {
+    @apply inline-block w-1.5 h-1.5 rounded-full bg-lime animate-blink;
+  }
+
+  /* Dietary badges — one hue family per diet (lib/dietary-config.ts drives which) */
   .badge-vegan {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
-           text-xs font-semibold bg-picky-600 text-white;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-bold bg-solar-gradient text-evergreen;
   }
 
   .badge-vegetarian {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
-           text-xs font-semibold bg-picky-400 text-white;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-bold bg-mint-100 text-picky-700;
   }
 
   .badge-neither {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
-           text-xs font-semibold bg-gray-200 text-gray-700;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-semibold bg-mint-100 text-evergreen/80;
   }
 
   .badge-unknown {
-    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full
-           text-xs font-semibold bg-amber-100 text-amber-800;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-bold bg-sun-50 text-sun-800;
+  }
+
+  /* Reserved for the future pescatarian filter — same shape, ocean hue */
+  .badge-pescatarian {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-bold bg-ocean-50 text-ocean-700;
+  }
+
+  /* Dark evergreen terminal panel — the live AI trace */
+  .ai-trace {
+    @apply bg-evergreen rounded-2xl border border-evergreen-line font-mono text-[13px];
   }
 }
 
-/* Progress bar animation */
+/* Progress bar animation (legacy hook still referenced by older markup) */
 @keyframes progress-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -74,4 +106,20 @@
 
 .progress-active {
   animation: progress-pulse 1.5s ease-in-out infinite;
+}
+
+/* Respect the OS-level reduce-motion preference: the AI trace panel and
+   several loading indicators otherwise animate indefinitely. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

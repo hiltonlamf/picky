@@ -295,6 +295,8 @@ export async function classifyMenuFromScreenshot(
 export interface LabeledCandidate {
   ref: string;
   label: string;
+  /** One-line, diner-facing description (e.g. "Mains, sharing plates & desserts") for the menu picker. */
+  description?: string;
   isDistinctMenu: boolean;
   isDrinkOnly: boolean;
   duplicateOf: number | null;
@@ -313,15 +315,16 @@ export function buildLabelPrompt(
   return `${nameHint}Below is a list of candidate menu sources found on a restaurant website (each is a link, PDF, image, or the page text itself). For EACH item decide:
 
 1. "label": a short, human-distinguishable name a diner would recognise, e.g. "Lunch", "Dinner", "À la carte", "Weekend Brunch", "Set Menu", "Mon–Thu", "Fri–Sun". Use the hint and URL slug. NEVER use meta-labels like "Menu images", "Menus", "Main website", "Page text" — describe WHICH menu it is. If you genuinely can't tell, use "Menu".
-2. "isDistinctMenu": true only if it is a real menu a diner would choose between. False for navigation/about/contact/gallery/booking/gift-voucher links, social media, login/account/checkout pages, or anything that is not actually a menu. Note: online-ordering pages (Toast, Square, etc.) usually contain the restaurant's live menu — those ARE menus.
-3. "isDrinkOnly": true if the source is exclusively drinks (wine list, cocktail list, beverages, bar list). This app analyses FOOD only — drink lists are discarded. A menu that includes both food and drinks is NOT drink-only.
-4. "duplicateOf": if this candidate is the SAME menu as an earlier candidate in a different format (e.g. the same dinner menu as both a PDF and a web page, or the same URL twice), give that earlier candidate's index; otherwise null.
+2. "description": a short one-line description (under 8 words) of what's likely on this menu, e.g. "Mains, sharing plates & desserts" or "Roasts, sides & the veg board" — inferred from the label/hint/URL. Helps a diner pick between similar-sounding menus. Keep it plain and concrete, not marketing copy.
+3. "isDistinctMenu": true only if it is a real menu a diner would choose between. False for navigation/about/contact/gallery/booking/gift-voucher links, social media, login/account/checkout pages, or anything that is not actually a menu. Note: online-ordering pages (Toast, Square, etc.) usually contain the restaurant's live menu — those ARE menus.
+4. "isDrinkOnly": true if the source is exclusively drinks (wine list, cocktail list, beverages, bar list). This app analyses FOOD only — drink lists are discarded. A menu that includes both food and drinks is NOT drink-only.
+5. "duplicateOf": if this candidate is the SAME menu as an earlier candidate in a different format (e.g. the same dinner menu as both a PDF and a web page, or the same URL twice), give that earlier candidate's index; otherwise null.
 
 Candidates:
 ${list}
 
 Return ONLY a JSON array, one object per candidate index, in order:
-[{"index": 0, "label": "Dinner", "isDistinctMenu": true, "isDrinkOnly": false, "duplicateOf": null}, ...]`;
+[{"index": 0, "label": "Dinner", "description": "Mains, sharing plates & desserts", "isDistinctMenu": true, "isDrinkOnly": false, "duplicateOf": null}, ...]`;
 }
 
 /**
@@ -354,6 +357,7 @@ export async function labelMenuCandidates(
     const parsed = JSON.parse(jsonText) as Array<{
       index: number;
       label: string;
+      description?: string;
       isDistinctMenu: boolean;
       isDrinkOnly?: boolean;
       duplicateOf?: number | null;
@@ -363,6 +367,7 @@ export async function labelMenuCandidates(
       return {
         ref: c.ref,
         label: match?.label?.trim() || c.hint || 'Menu',
+        description: match?.description?.trim() || undefined,
         isDistinctMenu: match?.isDistinctMenu ?? true,
         isDrinkOnly: match?.isDrinkOnly ?? false,
         duplicateOf: typeof match?.duplicateOf === 'number' && match.duplicateOf >= 0 && match.duplicateOf < i ? match.duplicateOf : null,

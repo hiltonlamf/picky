@@ -113,10 +113,11 @@ function isOpaqueHint(hint: string): boolean {
  * is often nav/hero copy the labeler mistakes for "the menu"). */
 const FORMAT_PREFERENCE: Record<MenuCandidateType, number> = { pdf: 0, subpage: 1, text: 2, image: 3 };
 
-function toCandidate(r: Raw, label: string): MenuCandidate {
+function toCandidate(r: Raw, label: string, description?: string): MenuCandidate {
   return {
     id: candidateId(r.type, r.ref),
     label,
+    description,
     type: r.type,
     ref: r.ref,
     source: r.source,
@@ -263,7 +264,9 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
       labelCount.set(norm, n);
       unique.push({ j, label: n === 1 ? base : `${base} ${n}` });
     }
-    finalCandidates = unique.slice(0, MAX_PICKER_CANDIDATES).map(({ j, label }) => toCandidate(j.raw, label));
+    finalCandidates = unique
+      .slice(0, MAX_PICKER_CANDIDATES)
+      .map(({ j, label }) => toCandidate(j.raw, label, j.verdict.description));
 
     // De-dupe by id (defensive against hash collisions).
     const byId = new Map<string, MenuCandidate>();
