@@ -68,12 +68,12 @@ export default function ParseProgress({ log, startedAt, error }: Props) {
           {elapsed}
         </span>
       </div>
-      <p className="text-xs text-mint-200/70 mb-4">
+      <p className="text-xs text-mint-200/80 mb-4">
         Usually under a minute — this is the model actually working, narrated live below.
       </p>
 
       {error ? (
-        <div className="rounded-xl bg-sun-50 p-4">
+        <div role="alert" className="rounded-xl bg-sun-50 p-4">
           <p className="text-sm font-semibold text-sun-800 mb-1 flex items-center gap-2">
             <AlertIcon className="w-4 h-4" />
             The AI hit a snag
@@ -91,7 +91,7 @@ export default function ParseProgress({ log, startedAt, error }: Props) {
                     ? 'border-picky-500/40 text-picky-500'
                     : i === activePhase
                     ? 'border-lime text-lime'
-                    : 'border-evergreen-line text-mint-200/40'
+                    : 'border-evergreen-line text-mint-200/80'
                 }`}
               >
                 <span
@@ -104,22 +104,31 @@ export default function ParseProgress({ log, startedAt, error }: Props) {
             ))}
           </div>
 
-          <div ref={feedRef} className="max-h-52 overflow-y-auto space-y-2 pr-1">
+          <div
+            ref={feedRef}
+            role="log"
+            aria-live="polite"
+            aria-atomic="false"
+            aria-relevant="additions"
+            className="max-h-52 overflow-y-auto space-y-2 pr-1"
+          >
             {log.length === 0 && (
-              <p className="text-mint-200/50 text-xs">Connecting…</p>
+              <p className="text-mint-200/80 text-xs">Connecting…</p>
             )}
             {log.map((line, i) => (
               <p
                 key={i}
                 className={`animate-rise text-[13px] leading-relaxed ${
-                  i === log.length - 1 ? 'text-lime font-medium' : 'text-mint-200/60'
+                  i === log.length - 1 ? 'text-lime font-medium' : 'text-mint-200/80'
                 }`}
               >
-                <span className="text-aqua/70 mr-2 tabular-nums">
+                <span className="text-aqua mr-2 tabular-nums">
                   {String(i + 1).padStart(2, '0')}
                 </span>
                 {line}
-                {i === log.length - 1 && <span className="inline-block w-1.5 h-3.5 bg-lime ml-1 align-middle animate-blink" />}
+                {i === log.length - 1 && (
+                  <span className="inline-block w-1.5 h-3.5 bg-lime ml-1 align-middle animate-blink" aria-hidden="true" />
+                )}
               </p>
             ))}
           </div>

@@ -49,7 +49,7 @@ export default function HomePage() {
             <span className="bg-solar-gradient bg-clip-text text-transparent">Instantly.</span>
           </h1>
 
-          <p className="text-lg text-evergreen/60 mb-8 max-w-lg mx-auto">
+          <p className="text-lg text-evergreen/80 mb-8 max-w-lg mx-auto">
             Drop a restaurant link. Our AI reads the whole menu — PDFs, photo boards, the lot —
             and shows you every plant-powered dish before you&apos;ve found your coat.
           </p>
@@ -60,16 +60,24 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* How it works */}
-      <section className="px-4 py-12 border-y-[1.5px] border-mint-200">
+      {/* How it works — a connected pipeline (drop link → AI reads → AI verifies),
+          not a generic 3-card grid: the middle step is offset and the nodes sit
+          on a gradient thread, reflecting the real order the AI works in. */}
+      <section className="px-4 py-14 border-y-[1.5px] border-mint-200">
         <div className="max-w-3xl mx-auto">
-          <h2 className="eyebrow text-center mb-8">{'/// Plant-finding, automated'}</h2>
-          <div className="grid sm:grid-cols-3 gap-6">
-            {HOW_IT_WORKS.map(({ Icon, title, desc }) => (
-              <div key={title} className="card p-5 text-center">
-                <Icon className="w-7 h-7 mx-auto mb-3 text-picky-600" />
-                <h3 className="font-semibold text-evergreen mb-2">{title}</h3>
-                <p className="text-sm text-evergreen/60">{desc}</p>
+          <h2 className="eyebrow text-center mb-10">{'/// Plant-finding, automated'}</h2>
+          <div className="relative grid sm:grid-cols-3 gap-10 sm:gap-6">
+            <div
+              className="hidden sm:block absolute top-7 left-[16.6%] right-[16.6%] h-0.5 bg-solar-gradient opacity-50"
+              aria-hidden="true"
+            />
+            {HOW_IT_WORKS.map(({ Icon, title, desc }, i) => (
+              <div key={title} className={`relative text-center ${i === 1 ? 'sm:mt-8' : ''}`}>
+                <div className="relative z-10 w-14 h-14 mx-auto mb-4 rounded-full bg-white border-[1.5px] border-mint-200 shadow-card-soft flex items-center justify-center">
+                  <Icon className="w-6 h-6 text-picky-600" />
+                </div>
+                <h3 className="font-semibold text-evergreen mb-1.5">{title}</h3>
+                <p className="text-sm text-evergreen/80 max-w-[220px] mx-auto">{desc}</p>
               </div>
             ))}
           </div>
@@ -106,7 +114,7 @@ export default function HomePage() {
             {TRUST_SIGNALS.map((item) => (
               <div key={item.label} className="p-3">
                 <p className="text-sm font-semibold text-evergreen">{item.label}</p>
-                <p className="text-xs text-evergreen/50 mt-0.5">{item.sub}</p>
+                <p className="text-xs text-evergreen/80 mt-0.5">{item.sub}</p>
               </div>
             ))}
           </div>

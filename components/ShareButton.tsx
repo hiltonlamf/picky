@@ -72,7 +72,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
       <button
         onClick={handleCopy}
         title="Copy share message"
-        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/60 hover:border-picky-300 hover:text-evergreen transition-colors"
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
       >
         {copied ? (
           <>

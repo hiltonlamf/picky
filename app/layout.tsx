@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <main className="flex-1">{children}</main>
           <footer className="border-t-[1.5px] border-mint-200 mt-16">
             <div className="max-w-5xl mx-auto px-4 py-8">
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-evergreen/60">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-evergreen/80">
                 <div className="flex items-center gap-2">
                   <SproutIcon className="w-5 h-5 text-picky-600" />
                   <span className="font-bold text-evergreen">Picky</span>
@@ -42,11 +42,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </div>
                 <div className="flex gap-4">
                   <Link href="/dublin" className="hover:text-evergreen transition-colors">Dublin Guide</Link>
-                  <span className="text-evergreen/30 cursor-default" title="Coming soon">Privacy</span>
-                  <span className="text-evergreen/30 cursor-default" title="Coming soon">Legal</span>
+                  <span className="text-evergreen/80 cursor-default" title="Coming soon">Privacy</span>
+                  <span className="text-evergreen/80 cursor-default" title="Coming soon">Legal</span>
                 </div>
               </div>
-              <p className="mt-4 text-xs text-evergreen/40 text-center sm:text-left">
+              <p className="mt-4 text-xs text-evergreen/80 text-center sm:text-left">
                 Always confirm dietary information with the restaurant. AI classification may not catch all ingredients.
               </p>
             </div>

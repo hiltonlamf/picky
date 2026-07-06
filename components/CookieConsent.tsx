@@ -24,7 +24,7 @@ export default function CookieConsent() {
       role="dialog"
       aria-label="Cookie consent"
     >
-      <p className="text-sm text-evergreen/70 mb-3">
+      <p className="text-sm text-evergreen/80 mb-3">
         Picky uses minimal cookies to remember your preferences. We don&apos;t track you for advertising.
       </p>
       <div className="flex gap-2">

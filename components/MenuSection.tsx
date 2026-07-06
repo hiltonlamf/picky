@@ -21,7 +21,7 @@ export default function MenuSection({ section, activeFilter }: Props) {
     <section className="mb-8">
       <h2 className="eyebrow mb-3 flex items-center gap-2 text-evergreen">
         <span className="normal-case font-bold text-base tracking-normal">{section.name}</span>
-        <span className="text-xs font-mono font-normal text-evergreen/40 bg-mint-100 px-2 py-0.5 rounded-full">
+        <span className="text-xs font-mono font-normal text-evergreen/80 bg-mint-100 px-2 py-0.5 rounded-full">
           {visibleDishes.length}
         </span>
       </h2>

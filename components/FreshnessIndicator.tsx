@@ -48,7 +48,7 @@ export default function FreshnessIndicator({ lastScrapedAt, restaurantId }: Prop
   }
 
   return (
-    <p className="text-xs text-evergreen/40 flex items-center gap-1">
+    <p className="text-xs text-evergreen/80 flex items-center gap-1">
       <CheckIcon className="w-3 h-3" />
       Menu checked {ageText}
     </p>

@@ -2,7 +2,7 @@ import { AlertIcon } from './icons';
 
 export default function Disclaimer() {
   return (
-    <div className="rounded-2xl bg-mint-100 p-4 text-sm text-evergreen/60">
+    <div className="rounded-2xl bg-mint-100 p-4 text-sm text-evergreen/80">
       <p className="font-semibold text-evergreen mb-1 flex items-center gap-2">
         <AlertIcon className="w-4 h-4" />
         Always check with the restaurant

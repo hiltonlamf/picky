@@ -40,7 +40,7 @@ export default async function DublinPage() {
         <h1 className="text-3xl sm:text-4xl font-bold text-evergreen mb-3 tracking-tight">
           Dublin, pre-scouted by AI
         </h1>
-        <p className="text-evergreen/60 max-w-2xl sm:text-lg">
+        <p className="text-evergreen/80 max-w-2xl sm:text-lg">
           Our AI has already read and verified the menus at these Dublin restaurants, so you can
           see exactly which dishes are veggie or vegan before you visit.
         </p>
@@ -54,7 +54,7 @@ export default async function DublinPage() {
             <p className="text-sm font-semibold text-evergreen mb-0.5">
               Our AI is scouting Dublin menus&hellip;
             </p>
-            <p className="text-sm text-evergreen/60">
+            <p className="text-sm text-evergreen/80">
               This page updates itself automatically as each restaurant finishes.
             </p>
           </div>
@@ -130,7 +130,7 @@ export default async function DublinPage() {
       </div>
 
       {/* SEO content */}
-      <section className="mt-12 prose prose-sm max-w-none text-evergreen/60">
+      <section className="mt-12 prose prose-sm max-w-none text-evergreen/80">
         <h2 className="text-lg font-semibold text-evergreen not-prose mb-3">
           About vegetarian dining in Dublin
         </h2>

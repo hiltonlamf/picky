@@ -45,13 +45,13 @@
   }
 
   .btn-ghost {
-    @apply text-evergreen/60 hover:text-evergreen hover:bg-mint-100
+    @apply text-evergreen/80 hover:text-evergreen hover:bg-mint-100
            rounded-full px-4 py-2 transition-colors duration-150;
   }
 
   .input-url {
     @apply w-full rounded-full border-2 border-mint-200 bg-white
-           px-5 py-3.5 text-evergreen placeholder-evergreen/40
+           px-5 py-3.5 text-evergreen placeholder-evergreen/55
            focus:border-picky-500 focus:outline-none focus:ring-4 focus:ring-picky-500/15
            transition-all duration-150;
   }
@@ -78,7 +78,7 @@
 
   .badge-neither {
     @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
-           text-xs font-semibold bg-mint-100 text-evergreen/50;
+           text-xs font-semibold bg-mint-100 text-evergreen/80;
   }
 
   .badge-unknown {
@@ -106,4 +106,20 @@
 
 .progress-active {
   animation: progress-pulse 1.5s ease-in-out infinite;
+}
+
+/* Respect the OS-level reduce-motion preference: the AI trace panel and
+   several loading indicators otherwise animate indefinitely. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

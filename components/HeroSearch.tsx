@@ -175,7 +175,7 @@ export default function HeroSearch() {
         <div className="text-center">
           <p className="eyebrow mb-2">AI scout · {candidates.length} menus found</p>
           <h2 className="text-lg font-bold text-evergreen">Three menus. Your call.</h2>
-          <p className="text-sm text-evergreen/60">Pick what matters, or let the AI read them all.</p>
+          <p className="text-sm text-evergreen/80">Pick what matters, or let the AI read them all.</p>
         </div>
         <ul className="flex flex-col gap-2.5">
           {candidates.map((c) => {
@@ -197,9 +197,9 @@ export default function HeroSearch() {
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm font-semibold text-evergreen">{c.label}</span>
                     {c.description && (
-                      <span className="block text-xs text-evergreen/55 mt-0.5">{c.description}</span>
+                      <span className="block text-xs text-evergreen/80 mt-0.5">{c.description}</span>
                     )}
-                    <span className="inline-block text-[10px] font-mono uppercase tracking-wide text-evergreen/40 bg-mint-100 rounded px-1.5 py-0.5 mt-1.5">
+                    <span className="inline-block text-[10px] font-mono uppercase tracking-wide text-evergreen/80 bg-mint-100 rounded px-1.5 py-0.5 mt-1.5">
                       {source}
                     </span>
                   </span>
@@ -231,7 +231,7 @@ export default function HeroSearch() {
             ← Start over
           </button>
         </div>
-        <p className="text-xs text-evergreen/40 font-mono">~20–40s per menu · narrated live</p>
+        <p className="text-xs text-evergreen/80 font-mono">~20–40s per menu · narrated live</p>
       </div>
     );
   }
@@ -267,7 +267,7 @@ export default function HeroSearch() {
             <button
               type="button"
               onClick={() => setUrl('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-evergreen/30 hover:text-evergreen/60 p-1"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-evergreen/80 hover:text-evergreen p-1"
               aria-label="Clear"
             >
               <CloseIcon className="w-4 h-4" />
@@ -283,7 +283,7 @@ export default function HeroSearch() {
         </button>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-evergreen/40">
+      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-evergreen/80">
         <span>Works with any restaurant website — the AI finds the menu itself.</span>
       </div>
     </form>

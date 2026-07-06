@@ -88,7 +88,7 @@ export default function RestaurantPage() {
       <div className="flex items-center justify-center min-h-96">
         <div className="text-center">
           <SproutIcon className="w-10 h-10 mx-auto mb-3 text-picky-500 animate-pulse-gentle" />
-          <p className="text-evergreen/50 text-sm">Loading menu...</p>
+          <p className="text-evergreen/80 text-sm">Loading menu...</p>
         </div>
       </div>
     );
@@ -99,7 +99,7 @@ export default function RestaurantPage() {
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <QuestionMark />
         <h1 className="text-xl font-bold text-evergreen mb-2">Restaurant not found</h1>
-        <p className="text-evergreen/50 mb-6">{error ?? "This restaurant doesn't exist or was removed."}</p>
+        <p className="text-evergreen/80 mb-6">{error ?? "This restaurant doesn't exist or was removed."}</p>
         <Link href="/" className="btn-primary text-sm">
           ← Back to search
         </Link>
@@ -112,10 +112,10 @@ export default function RestaurantPage() {
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <AlertIcon className="w-12 h-12 mx-auto mb-4 text-sun-400" />
         <h1 className="text-xl font-bold text-evergreen mb-2">Couldn&apos;t read this menu</h1>
-        <p className="text-evergreen/50 mb-2">
+        <p className="text-evergreen/80 mb-2">
           {restaurant.errorMessage ?? 'An error occurred while parsing this restaurant.'}
         </p>
-        <p className="text-sm text-evergreen/35 mb-6">
+        <p className="text-sm text-evergreen/80 mb-6">
           The menu may be temporarily unavailable, or this website may require JavaScript to load.
         </p>
         <Link href="/" className="btn-primary text-sm">
@@ -132,7 +132,7 @@ export default function RestaurantPage() {
         <h1 className="text-xl font-bold text-evergreen mb-2">
           Our AI is reading {restaurant.name ?? 'this menu'}&hellip;
         </h1>
-        <p className="text-evergreen/50 mb-6">
+        <p className="text-evergreen/80 mb-6">
           Usually under a minute — this page updates itself the moment it&apos;s ready.
         </p>
         <Link href="/dublin" className="btn-primary text-sm">
@@ -162,7 +162,7 @@ export default function RestaurantPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
       {/* Back */}
-      <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-evergreen/50 hover:text-evergreen mb-6">
+      <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-evergreen/80 hover:text-evergreen mb-6">
         ← Back to search
       </Link>
 
@@ -176,7 +176,7 @@ export default function RestaurantPage() {
             <ShareButton restaurant={restaurant} />
           </div>
         </div>
-        <p className="text-xs text-evergreen/40 mt-1">AI-read &amp; verified today</p>
+        <p className="text-xs text-evergreen/80 mt-1">AI-read &amp; verified today</p>
         {restaurant.menuUrl && (
           <a
             href={restaurant.menuUrl}
@@ -208,24 +208,24 @@ export default function RestaurantPage() {
         <div className="card p-3 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
           <div className="text-2xl font-bold bg-solar-gradient bg-clip-text text-transparent">{veganCount}</div>
-          <div className="text-xs text-evergreen/50 mt-0.5">Vegan</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Vegan</div>
         </div>
         <div className="card p-3 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🥚</div>
           <div className="text-2xl font-bold text-picky-600">{vegCount}</div>
-          <div className="text-xs text-evergreen/50 mt-0.5">Veggie</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Veggie</div>
         </div>
         <div className="card p-3 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
-          <div className="text-2xl font-bold text-evergreen/70">{totalDishes}</div>
-          <div className="text-xs text-evergreen/50 mt-0.5">Dishes read</div>
+          <div className="text-2xl font-bold text-evergreen/80">{totalDishes}</div>
+          <div className="text-xs text-evergreen/80 mt-0.5">Dishes read</div>
         </div>
       </div>
 
       {/* Menu selector — only when multiple menus were analysed */}
       {menuLabels.length > 1 && (
         <div className="mb-4">
-          <label htmlFor="menu-select" className="block text-xs font-medium text-evergreen/50 mb-1.5">
+          <label htmlFor="menu-select" className="block text-xs font-medium text-evergreen/80 mb-1.5">
             Menu
           </label>
           <select
@@ -253,11 +253,11 @@ export default function RestaurantPage() {
             className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 border-2 ${
               filter === f.value
                 ? 'bg-evergreen border-evergreen text-white'
-                : 'bg-white border-mint-200 text-evergreen/60 hover:border-picky-300'
+                : 'bg-white border-mint-200 text-evergreen/80 hover:border-picky-300'
             }`}
           >
             {f.label}
-            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-lime' : 'text-evergreen/35'}`}>
+            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-lime' : 'text-evergreen/80'}`}>
               {f.count}
             </span>
           </button>
@@ -267,7 +267,7 @@ export default function RestaurantPage() {
       {/* Menu sections */}
       {visibleSections.length === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-evergreen/60">No menu sections found for this restaurant.</p>
+          <p className="text-evergreen/80">No menu sections found for this restaurant.</p>
         </div>
       ) : menuLabels.length > 1 && menuFilter === 'all' ? (
         // "All menus" view: group sections under a heading per source menu.
@@ -309,7 +309,7 @@ export default function RestaurantPage() {
 function QuestionMark() {
   return (
     <div className="mx-auto mb-4 w-12 h-12 rounded-full bg-mint-100 flex items-center justify-center">
-      <LeafOutlineIcon className="w-6 h-6 text-evergreen/30" />
+      <LeafOutlineIcon className="w-6 h-6 text-evergreen/80" />
     </div>
   );
 }

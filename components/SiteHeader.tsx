@@ -16,7 +16,7 @@ export default function SiteHeader() {
         </Link>
 
         {restaurantName && (
-          <span className="text-sm font-medium text-evergreen/60 truncate mx-4 max-w-[200px] sm:max-w-xs">
+          <span className="text-sm font-medium text-evergreen/80 truncate mx-4 max-w-[200px] sm:max-w-xs">
             {restaurantName}
           </span>
         )}
