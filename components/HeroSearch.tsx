@@ -3,15 +3,16 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
-import type { ParseEvent, ParseProgressEvent, MenuCandidate } from '@/types';
+import type { ParseEvent, MenuCandidate } from '@/types';
+import { CloseIcon, DocIcon, CameraIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
 
 type AppState = 'idle' | 'parsing' | 'selecting' | 'error';
 
-const TYPE_EMOJI: Record<MenuCandidate['type'], string> = {
-  text: '📝',
-  pdf: '📄',
-  image: '🖼️',
-  subpage: '🔗',
+const TYPE_META: Record<MenuCandidate['type'], { Icon: typeof DocIcon; source: string }> = {
+  text: { Icon: PageIcon, source: 'Menu text' },
+  pdf: { Icon: DocIcon, source: 'PDF menu' },
+  image: { Icon: CameraIcon, source: 'Photo' },
+  subpage: { Icon: LinkIcon, source: 'Menu page' },
 };
 
 export default function HeroSearch() {
@@ -19,8 +20,8 @@ export default function HeroSearch() {
   const [url, setUrl] = useState('');
   const [state, setState] = useState<AppState>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [currentStep, setCurrentStep] = useState<ParseProgressEvent | null>(null);
-  const [completedSteps, setCompletedSteps] = useState<string[]>([]);
+  const [log, setLog] = useState<string[]>([]);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [candidates, setCandidates] = useState<MenuCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
@@ -34,13 +35,6 @@ export default function HeroSearch() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-
-      const allSteps = [
-        'Checking our database...',
-        'Fetching the restaurant page...',
-        'Finding the menus...',
-        'Analysing dishes with AI...',
-      ];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -62,8 +56,7 @@ export default function HeroSearch() {
           }
 
           if (event.type === 'progress') {
-            setCurrentStep(event);
-            setCompletedSteps(allSteps.slice(0, event.stepNumber - 1));
+            setLog((prev) => (prev[prev.length - 1] === event.step ? prev : [...prev, event.step]));
           } else if (event.type === 'candidates') {
             setRestaurantId(event.restaurantId);
             setCandidates(event.candidates);
@@ -121,8 +114,8 @@ export default function HeroSearch() {
 
       setState('parsing');
       setError(null);
-      setCurrentStep(null);
-      setCompletedSteps([]);
+      setLog([]);
+      setStartedAt(Date.now());
       setCandidates([]);
       setSelectedIds([]);
       setRestaurantId(null);
@@ -146,8 +139,8 @@ export default function HeroSearch() {
     if (!restaurantId || selectedIds.length === 0) return;
     setState('parsing');
     setError(null);
-    setCurrentStep(null);
-    setCompletedSteps([]);
+    setLog([]);
+    setStartedAt(Date.now());
 
     try {
       const response = await fetch('/api/parse/analyze', {
@@ -168,57 +161,77 @@ export default function HeroSearch() {
   const reset = () => {
     setState('idle');
     setError(null);
-    setCurrentStep(null);
-    setCompletedSteps([]);
+    setLog([]);
+    setStartedAt(null);
     setCandidates([]);
     setSelectedIds([]);
     setRestaurantId(null);
   };
 
   if (state === 'selecting') {
+    const allSelected = selectedIds.length === candidates.length;
     return (
       <div className="w-full max-w-xl flex flex-col gap-4">
         <div className="text-center">
-          <h2 className="text-lg font-semibold text-gray-800">This place has more than one menu</h2>
-          <p className="text-sm text-gray-500">Pick the menu(s) you want us to analyse.</p>
+          <p className="eyebrow mb-2">AI scout · {candidates.length} menus found</p>
+          <h2 className="text-lg font-bold text-evergreen">Three menus. Your call.</h2>
+          <p className="text-sm text-evergreen/60">Pick what matters, or let the AI read them all.</p>
         </div>
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-2.5">
           {candidates.map((c) => {
             const checked = selectedIds.includes(c.id);
+            const { Icon, source } = TYPE_META[c.type];
             return (
               <li key={c.id}>
-                <label
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition ${
-                    checked ? 'border-picky-500 bg-picky-50' : 'border-gray-200 hover:border-gray-300'
+                <button
+                  type="button"
+                  onClick={() => toggle(c.id)}
+                  aria-pressed={checked}
+                  className={`w-full flex items-start gap-3.5 rounded-2xl border-2 px-4 py-3.5 text-left transition ${
+                    checked ? 'border-picky-500 bg-picky-50' : 'border-mint-200 hover:border-mint-200/70 bg-white'
                   }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(c.id)}
-                    className="h-4 w-4 accent-picky-600"
-                  />
-                  <span className="text-lg" aria-hidden>
-                    {TYPE_EMOJI[c.type]}
+                  <span className="w-9 h-9 rounded-xl bg-mint-100 text-picky-600 flex items-center justify-center flex-shrink-0">
+                    <Icon className="w-4 h-4" />
                   </span>
-                  <span className="text-sm font-medium text-gray-800">{c.label}</span>
-                </label>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-semibold text-evergreen">{c.label}</span>
+                    {c.description && (
+                      <span className="block text-xs text-evergreen/55 mt-0.5">{c.description}</span>
+                    )}
+                    <span className="inline-block text-[10px] font-mono uppercase tracking-wide text-evergreen/40 bg-mint-100 rounded px-1.5 py-0.5 mt-1.5">
+                      {source}
+                    </span>
+                  </span>
+                  <span
+                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                      checked ? 'border-picky-500 bg-picky-500 text-white' : 'border-mint-200 text-transparent'
+                    }`}
+                  >
+                    <CheckIcon className="w-3 h-3" />
+                  </span>
+                </button>
               </li>
             );
           })}
         </ul>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={handleAnalyzeSelected}
             disabled={selectedIds.length === 0}
             className="btn-primary text-base"
           >
-            Analyse {selectedIds.length > 1 ? `${selectedIds.length} menus` : 'menu'} →
+            {allSelected
+              ? `Read all ${candidates.length} menus`
+              : selectedIds.length === 0
+              ? 'Pick at least one menu'
+              : `Read ${selectedIds.length} ${selectedIds.length === 1 ? 'menu' : 'menus'}`}
           </button>
           <button onClick={reset} className="btn-ghost text-sm">
             ← Start over
           </button>
         </div>
+        <p className="text-xs text-evergreen/40 font-mono">~20–40s per menu · narrated live</p>
       </div>
     );
   }
@@ -226,11 +239,7 @@ export default function HeroSearch() {
   if (state === 'parsing' || state === 'error') {
     return (
       <div className="flex flex-col items-center gap-6">
-        <ParseProgress
-          currentStep={currentStep}
-          completedSteps={completedSteps}
-          error={state === 'error' ? error : null}
-        />
+        <ParseProgress log={log} startedAt={startedAt} error={state === 'error' ? error : null} />
         {state === 'error' && (
           <button onClick={reset} className="btn-ghost text-sm">
             ← Try a different link
@@ -248,7 +257,7 @@ export default function HeroSearch() {
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="www.restaurant.com"
+            placeholder="drop a restaurant link…"
             className="input-url pr-12 text-base"
             autoComplete="url"
             autoFocus
@@ -258,10 +267,10 @@ export default function HeroSearch() {
             <button
               type="button"
               onClick={() => setUrl('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-evergreen/30 hover:text-evergreen/60 p-1"
               aria-label="Clear"
             >
-              ✕
+              <CloseIcon className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -274,8 +283,8 @@ export default function HeroSearch() {
         </button>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
-        <span>✓ Restaurant websites</span>
+      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-evergreen/40">
+        <span>Works with any restaurant website — the AI finds the menu itself.</span>
       </div>
     </form>
   );

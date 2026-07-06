@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { REPORT_ISSUE_TYPES } from '@/lib/dietary-config';
+import { CheckIcon, CloseIcon } from './icons';
 
 interface Props {
   dishId: string;
@@ -39,9 +40,11 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
       <div className="card w-full max-w-md p-6 animate-slide-up">
         {state === 'done' ? (
           <div className="text-center py-4">
-            <div className="text-3xl mb-3">✅</div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Thanks for flagging this!</h3>
-            <p className="text-sm text-gray-500 mb-4">
+            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-mint-100 flex items-center justify-center">
+              <CheckIcon className="w-6 h-6 text-picky-600" />
+            </div>
+            <h3 className="text-lg font-semibold text-evergreen mb-2">Thanks for flagging this!</h3>
+            <p className="text-sm text-evergreen/50 mb-4">
               We&apos;ll review your report and update the classification if needed.
             </p>
             <button onClick={onClose} className="btn-primary text-sm py-2 px-6">
@@ -52,16 +55,16 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
           <form onSubmit={submit}>
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-gray-900">Report an issue</h3>
-                <p className="text-sm text-gray-500 mt-0.5 truncate max-w-xs">{dishName}</p>
+                <h3 className="text-base font-semibold text-evergreen">Report an issue</h3>
+                <p className="text-sm text-evergreen/50 mt-0.5 truncate max-w-xs">{dishName}</p>
               </div>
-              <button type="button" onClick={onClose} className="btn-ghost p-2 -mr-2 -mt-2 text-gray-400">
-                ✕
+              <button type="button" onClick={onClose} className="btn-ghost p-2 -mr-2 -mt-2 text-evergreen/40">
+                <CloseIcon className="w-4 h-4" />
               </button>
             </div>
 
             <fieldset className="mb-4">
-              <legend className="text-sm font-medium text-gray-700 mb-2">What&apos;s wrong?</legend>
+              <legend className="text-sm font-medium text-evergreen/70 mb-2">What&apos;s wrong?</legend>
               <div className="space-y-2">
                 {REPORT_ISSUE_TYPES.map((issue) => (
                   <label key={issue.value} className="flex items-start gap-3 cursor-pointer">
@@ -73,15 +76,15 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
                       onChange={() => setIssueType(issue.value)}
                       className="mt-0.5 accent-picky-600"
                     />
-                    <span className="text-sm text-gray-700">{issue.label}</span>
+                    <span className="text-sm text-evergreen/80">{issue.label}</span>
                   </label>
                 ))}
               </div>
             </fieldset>
 
             <div className="mb-4">
-              <label htmlFor="report-notes" className="text-sm font-medium text-gray-700 block mb-1">
-                Additional details <span className="text-gray-400 font-normal">(optional)</span>
+              <label htmlFor="report-notes" className="text-sm font-medium text-evergreen/70 block mb-1">
+                Additional details <span className="text-evergreen/40 font-normal">(optional)</span>
               </label>
               <textarea
                 id="report-notes"
@@ -90,7 +93,7 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
                 placeholder="e.g. The dressing contains anchovies"
                 rows={3}
                 maxLength={500}
-                className="input-url resize-none text-sm"
+                className="input-url resize-none text-sm !rounded-2xl"
               />
             </div>
 

@@ -47,6 +47,8 @@ export type MenuCandidateType = 'text' | 'pdf' | 'image' | 'subpage';
 export interface MenuCandidate {
   id: string;
   label: string;
+  /** One-line diner-facing description shown on the menu picker, e.g. "Mains, sharing plates & desserts". */
+  description?: string;
   type: MenuCandidateType;
   ref: string; // URL for pdf/image/subpage; '' for inline text
   source: 'homepage' | 'subpage';

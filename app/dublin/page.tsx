@@ -3,6 +3,7 @@ import { getFeaturedRestaurants } from '@/lib/db';
 import RestaurantCard from '@/components/RestaurantCard';
 import Link from 'next/link';
 import { DUBLIN_RESTAURANTS as DUBLIN_LIST } from '@/lib/init-dublin';
+import { SproutIcon } from '@/components/icons';
 
 export const metadata: Metadata = {
   title: 'Vegetarian & Vegan Restaurants in Dublin',
@@ -32,30 +33,29 @@ export default async function DublinPage() {
     <div className="max-w-5xl mx-auto px-4 py-10">
       {/* Header */}
       <div className="mb-10 text-center sm:text-left">
-        <div className="inline-flex items-center gap-2 bg-picky-50 text-picky-700 text-sm font-medium px-4 py-1.5 rounded-full mb-4 border border-picky-100">
-          <span>🇮🇪</span>
+        <div className="inline-flex items-center gap-2 bg-evergreen text-lime text-xs font-medium px-4 py-1.5 rounded-full mb-4 font-mono tracking-[0.12em] uppercase">
+          <span className="live-dot" />
           <span>Dublin, Ireland</span>
         </div>
-        <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-3">
-          Vegetarian &amp; Vegan Restaurants in Dublin
+        <h1 className="text-3xl sm:text-4xl font-bold text-evergreen mb-3 tracking-tight">
+          Dublin, pre-scouted by AI
         </h1>
-        <p className="text-gray-500 max-w-2xl sm:text-lg">
-          We&apos;ve analysed the menus at these Dublin restaurants so you can see exactly which
-          dishes are vegetarian or vegan before you visit.
+        <p className="text-evergreen/60 max-w-2xl sm:text-lg">
+          Our AI has already read and verified the menus at these Dublin restaurants, so you can
+          see exactly which dishes are veggie or vegan before you visit.
         </p>
       </div>
 
       {/* Initialising banner */}
       {isInitialising && (
-        <div className="card p-5 border-picky-100 bg-picky-50 mb-6 flex items-start gap-3">
-          <span className="text-picky-600 text-lg mt-0.5 animate-pulse">🌱</span>
+        <div className="card p-5 mb-6 flex items-start gap-3">
+          <SproutIcon className="w-5 h-5 text-picky-600 mt-0.5 animate-pulse-gentle flex-shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-picky-800 mb-0.5">
-              Analysing Dublin menus&hellip;
+            <p className="text-sm font-semibold text-evergreen mb-0.5">
+              Our AI is scouting Dublin menus&hellip;
             </p>
-            <p className="text-sm text-picky-700">
-              Our AI is reading and classifying each restaurant&apos;s menu right now. Refresh in a
-              moment to see the full results.
+            <p className="text-sm text-evergreen/60">
+              This page updates itself automatically as each restaurant finishes.
             </p>
           </div>
         </div>
@@ -74,9 +74,9 @@ export default async function DublinPage() {
       {pendingRestaurants.length > 0 && (
         <div className="grid sm:grid-cols-2 gap-4 mb-6">
           {pendingRestaurants.map((r) => (
-            <div key={r.id} className="card p-5 border-picky-100 bg-picky-50/40">
-              <p className="font-semibold text-gray-700 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
-              <p className="text-xs text-picky-600 animate-pulse">Analysing menu&hellip;</p>
+            <div key={r.id} className="card p-5 bg-mint-50">
+              <p className="font-semibold text-evergreen/80 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
+              <p className="text-xs text-picky-600 animate-pulse-gentle">AI reading the menu&hellip;</p>
             </div>
           ))}
         </div>
@@ -87,9 +87,9 @@ export default async function DublinPage() {
         <div className="mb-12">
           <div className="grid sm:grid-cols-2 gap-4">
             {DUBLIN_LIST.map(({ name }) => (
-              <div key={name} className="card p-5 animate-pulse">
-                <div className="h-4 bg-gray-200 rounded w-3/4 mb-3" />
-                <div className="h-3 bg-gray-100 rounded w-1/2" />
+              <div key={name} className="card p-5 animate-pulse-gentle">
+                <div className="h-4 bg-mint-200 rounded w-3/4 mb-3" />
+                <div className="h-3 bg-mint-100 rounded w-1/2" />
               </div>
             ))}
           </div>
@@ -100,9 +100,9 @@ export default async function DublinPage() {
       {errorRestaurants.length > 0 && (
         <div className="grid sm:grid-cols-2 gap-4 mb-6">
           {errorRestaurants.map((r) => (
-            <div key={r.id} className="card p-5 border-amber-200 bg-amber-50/50">
-              <p className="font-semibold text-gray-700 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
-              <p className="text-xs text-amber-700">
+            <div key={r.id} className="card p-5 bg-sun-50/50">
+              <p className="font-semibold text-evergreen/80 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
+              <p className="text-xs text-sun-800">
                 Menu temporarily unavailable — {r.errorMessage ?? 'could not be read'}
               </p>
             </div>
@@ -111,21 +111,27 @@ export default async function DublinPage() {
       )}
 
       {/* Search CTA */}
-      <div className="card p-6 sm:p-8 bg-gradient-to-br from-picky-50 to-white border-picky-100">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">
-          Don&apos;t see your restaurant?
-        </h2>
-        <p className="text-sm text-gray-600 mb-4">
-          Paste any restaurant link and Picky will analyse the menu for you instantly.
-        </p>
-        <Link href="/" className="btn-primary text-sm">
-          Search a restaurant →
-        </Link>
+      <div className="relative overflow-hidden rounded-3xl bg-evergreen p-6 sm:p-8">
+        <div
+          className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 rounded-full"
+          style={{ background: 'radial-gradient(circle, rgba(198,245,66,0.25), transparent 70%)' }}
+        />
+        <div className="relative">
+          <h2 className="text-xl font-bold text-lime mb-2">
+            Don&apos;t see your restaurant?
+          </h2>
+          <p className="text-sm text-mint-100 mb-4">
+            Drop any restaurant link and our AI will read the menu for you, instantly.
+          </p>
+          <Link href="/" className="btn-primary text-sm">
+            Search a restaurant →
+          </Link>
+        </div>
       </div>
 
       {/* SEO content */}
-      <section className="mt-12 prose prose-sm max-w-none text-gray-600">
-        <h2 className="text-lg font-semibold text-gray-800 not-prose mb-3">
+      <section className="mt-12 prose prose-sm max-w-none text-evergreen/60">
+        <h2 className="text-lg font-semibold text-evergreen not-prose mb-3">
           About vegetarian dining in Dublin
         </h2>
         <p>
