@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory } from '@/lib/telemetry';
+import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
@@ -62,8 +62,9 @@ export async function POST(request: NextRequest) {
           durationMs: Date.now() - startedAt,
         });
       };
+      const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
       const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(hashIp(ip), 'analysis_completed', {
+        captureServer(distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,

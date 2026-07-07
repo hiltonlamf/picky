@@ -15,7 +15,7 @@ import {
   logParseAttempt,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory } from '@/lib/telemetry';
+import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
@@ -80,8 +80,9 @@ export async function POST(request: NextRequest) {
           durationMs: Date.now() - startedAt,
         });
       };
+      const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
       const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(hashIp(ip), 'analysis_completed', {
+        captureServer(distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,

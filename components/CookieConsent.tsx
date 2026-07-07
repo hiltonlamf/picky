@@ -28,7 +28,7 @@ export default function CookieConsent() {
       aria-label="Cookie consent"
     >
       <p className="text-sm text-evergreen/80 mb-3">
-        Picky uses minimal cookies to remember your preferences and measure anonymous usage. We don&apos;t track you for advertising.
+        Picky uses minimal cookies to remember your preferences and measure anonymous usage — a random ID that isn&apos;t linked to your identity. We don&apos;t track you for advertising.
       </p>
       <div className="flex gap-2">
         <button onClick={accept} className="btn-primary text-sm py-2 px-4">

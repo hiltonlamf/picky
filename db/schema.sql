@@ -152,6 +152,16 @@ CREATE TABLE IF NOT EXISTS parse_attempts (
 CREATE INDEX IF NOT EXISTS idx_parse_attempts_created_at ON parse_attempts (created_at);
 CREATE INDEX IF NOT EXISTS idx_parse_attempts_domain ON parse_attempts (domain);
 
+-- Anonymous per-browser usage ID (mirrors
+-- supabase/migrations/20260707000100_add_anon_id.sql). A persistent
+-- 1-year cookie UUID — distinct from ip_hash, which is per-request abuse
+-- control. Monetization groundwork: usage-per-person capture starts now.
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS anon_id TEXT;
+
+ALTER TABLE dish_reports
+  ADD COLUMN IF NOT EXISTS anon_id TEXT;
+
 -- ============================================================
 -- Unique constraints
 -- ============================================================

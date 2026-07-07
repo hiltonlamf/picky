@@ -328,14 +328,21 @@ export async function reportDish(
   dishId: string,
   issueType: string,
   notes: string,
-  ipHash: string
+  ipHash: string,
+  anonId?: string | null
 ): Promise<void> {
-  await db().from('dish_reports').insert({
+  const row = {
     dish_id: dishId,
     issue_type: issueType,
     notes: notes ?? null,
     ip_hash: ipHash,
-  });
+  };
+  const { error } = await db().from('dish_reports').insert({ ...row, anon_id: anonId ?? null });
+  // Degrade gracefully when the anon_id column is unmigrated.
+  if (error) {
+    const retry = await db().from('dish_reports').insert(row);
+    if (retry.error) throw new Error(`Failed to save report: ${retry.error.message}`);
+  }
 
   const { data: dish } = await db().from('dishes').select('report_count').eq('id', dishId).single();
   const newCount = ((dish as DbRow)?.report_count as number ?? 0) + 1;
@@ -350,15 +357,22 @@ export async function submitFeedback(
   restaurantName: string | null,
   feedbackType: string,
   notes: string,
-  ipHash: string
+  ipHash: string,
+  anonId?: string | null
 ): Promise<void> {
-  await db().from('restaurant_feedback').insert({
+  const row = {
     restaurant_id: restaurantId,
     restaurant_name: restaurantName,
     feedback_type: feedbackType,
     notes: notes || null,
     ip_hash: ipHash,
-  });
+  };
+  const { error } = await db().from('restaurant_feedback').insert({ ...row, anon_id: anonId ?? null });
+  // Degrade gracefully when the anon_id column is unmigrated.
+  if (error) {
+    const retry = await db().from('restaurant_feedback').insert(row);
+    if (retry.error) throw new Error(`Failed to save feedback: ${retry.error.message}`);
+  }
 }
 
 export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]> {

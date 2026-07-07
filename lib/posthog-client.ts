@@ -1,4 +1,5 @@
 import posthog from 'posthog-js';
+import { anonIdFromDocument } from './telemetry';
 
 // Same key CookieConsent.tsx writes — analytics only ever starts after the
 // user explicitly accepts the banner. No consent, no PostHog, no cookies.
@@ -17,9 +18,13 @@ export function initPostHogIfConsented(): void {
   const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
   if (!key) return;
 
+  // Use the middleware-set anon ID as the distinct_id so client events,
+  // server events, and DB rows all join on the same per-browser identity.
+  const anonId = anonIdFromDocument();
   posthog.init(key, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://eu.i.posthog.com',
     persistence: 'localStorage+cookie',
+    ...(anonId && { bootstrap: { distinctID: anonId } }),
   });
   initialized = true;
 }
