@@ -9,6 +9,13 @@ import type { MenuCandidate } from '@/types';
  */
 export const ANON_ID_COOKIE = 'picky_anon_id';
 
+/** localStorage key: timestamp (ms) of this browser's first successful
+ *  analysis — the anchor for the day-7+ NPS prompt. */
+export const FIRST_ANALYSIS_KEY = 'picky-first-analysis-at';
+
+/** localStorage key: set once the NPS prompt was answered or dismissed. */
+export const NPS_DONE_KEY = 'picky-nps-done';
+
 /** Read the anon ID from document.cookie (client-side only; null on server). */
 export function anonIdFromDocument(): string | null {
   if (typeof document === 'undefined') return null;

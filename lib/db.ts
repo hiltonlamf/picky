@@ -375,6 +375,19 @@ export async function submitFeedback(
   }
 }
 
+export async function saveNpsResponse(
+  anonId: string | null,
+  score: number,
+  notes: string
+): Promise<void> {
+  const { error } = await db().from('nps_responses').insert({
+    anon_id: anonId,
+    score,
+    notes: notes || null,
+  });
+  if (error) throw new Error(`Failed to save NPS response: ${error.message}`);
+}
+
 export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]> {
   const { data } = await db()
     .from('featured_restaurants')

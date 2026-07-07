@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
 import { capture } from '@/lib/posthog-client';
-import { domainOf } from '@/lib/telemetry';
+import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
 import type { ParseEvent, MenuCandidate } from '@/types';
 import { CloseIcon, DocIcon, CameraIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
 
@@ -68,6 +68,11 @@ export default function HeroSearch() {
           } else if (event.type === 'continue') {
             return { continueWith: event.restaurantId };
           } else if (event.type === 'result' || event.type === 'cached') {
+            // Anchor for the day-7+ NPS prompt: first time this browser
+            // successfully got a menu (fresh analysis or cache hit).
+            if (!localStorage.getItem(FIRST_ANALYSIS_KEY)) {
+              localStorage.setItem(FIRST_ANALYSIS_KEY, String(Date.now()));
+            }
             router.push(`/restaurant/${event.restaurantId}`);
             return 'done';
           } else if (event.type === 'error') {
