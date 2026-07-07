@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { scrapeRestaurant } from '@/lib/scraper';
 import { discoverMenus } from '@/lib/menu-discovery';
@@ -190,6 +191,7 @@ export async function POST(request: NextRequest) {
           menu = result.menu;
           usage = result.usage;
         } catch (err) {
+          Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed retry ladders still spent tokens — record them.
           if (err instanceof ExtractionError && err.usage) {
@@ -205,6 +207,7 @@ export async function POST(request: NextRequest) {
         await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
         send({ type: 'result', restaurantId });
       } catch (err) {
+        Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         send({ type: 'error', error: msg });
       }

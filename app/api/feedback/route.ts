@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { submitFeedback } from '@/lib/db';
 import { hashIp, getClientIp } from '@/lib/rate-limit';
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
     await submitFeedback(restaurantId, restaurantName ?? null, feedbackType, notes, ipHash);
     return NextResponse.json({ success: true });
   } catch (err) {
+    Sentry.captureException(err);
     const msg = err instanceof Error ? err.message : 'Server error';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

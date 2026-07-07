@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage } from '@/lib/db';
@@ -150,6 +151,7 @@ export async function POST(request: NextRequest) {
             state.candidateUsage = null;
           }
         } catch (err) {
+          Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed attempts still spent tokens — record them before erroring.
           if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
@@ -182,6 +184,7 @@ export async function POST(request: NextRequest) {
         await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
         send({ type: 'result', restaurantId });
       } catch (err) {
+        Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         send({ type: 'error', error: msg });
       }
