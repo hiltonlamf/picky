@@ -215,6 +215,40 @@ export async function logUsage(
   }
 }
 
+/**
+ * Passive parse-attempt telemetry — one row at the end of every real
+ * discover/analyze call, success or failure. Every user search becomes
+ * coverage data on which sites work. Best-effort: a logging failure must
+ * never fail the parse itself (and must not fail before the table's
+ * migration has been applied).
+ */
+export async function logParseAttempt(attempt: {
+  url: string;
+  stage: 'discover' | 'analyze';
+  category?: string | null;
+  success: boolean;
+  errorMessage?: string | null;
+  durationMs?: number;
+}): Promise<void> {
+  try {
+    let domain: string | null = null;
+    try {
+      domain = new URL(attempt.url).hostname.replace(/^www\./, '');
+    } catch {}
+    await db().from('parse_attempts').insert({
+      url: attempt.url,
+      domain,
+      stage: attempt.stage,
+      category: attempt.category ?? null,
+      success: attempt.success,
+      error_message: attempt.errorMessage ?? null,
+      duration_ms: attempt.durationMs ?? null,
+    });
+  } catch (err) {
+    console.error('[db] parse_attempts insert failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+}
+
 export async function saveClassifiedMenu(
   restaurantId: string,
   url: string,

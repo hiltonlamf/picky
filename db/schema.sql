@@ -130,6 +130,28 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS menu_candidates JSONB,
   ADD COLUMN IF NOT EXISTS candidates_at   TIMESTAMPTZ;
 
+-- Passive parse-attempt telemetry (mirrors
+-- supabase/migrations/20260707000000_add_parse_attempts.sql).
+-- One row at the end of every real discover/analyze call, success or
+-- failure. Deliberately NO foreign key to restaurants, same reasoning as
+-- ai_usage_log: coverage history must survive test wipes. stage
+-- distinguishes a discovery handoff from a terminal analysis outcome.
+CREATE TABLE IF NOT EXISTS parse_attempts (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  url           TEXT,
+  domain        TEXT,
+  stage         TEXT NOT NULL DEFAULT 'discover'
+                  CHECK (stage IN ('discover', 'analyze')),
+  category      TEXT,        -- pdf | image | js | text | multi (NULL before discovery)
+  success       BOOLEAN NOT NULL,
+  error_message TEXT,
+  duration_ms   INTEGER,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_attempts_created_at ON parse_attempts (created_at);
+CREATE INDEX IF NOT EXISTS idx_parse_attempts_domain ON parse_attempts (domain);
+
 -- ============================================================
 -- Unique constraints
 -- ============================================================

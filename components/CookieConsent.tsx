@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { initPostHogIfConsented } from '@/lib/posthog-client';
 
 export default function CookieConsent() {
   const [visible, setVisible] = useState(false);
@@ -12,6 +13,8 @@ export default function CookieConsent() {
 
   function accept() {
     localStorage.setItem('picky-cookie-consent', '1');
+    // Analytics only ever starts here (or on a later visit) — after consent.
+    initPostHogIfConsented();
     setVisible(false);
   }
 
@@ -25,7 +28,7 @@ export default function CookieConsent() {
       aria-label="Cookie consent"
     >
       <p className="text-sm text-evergreen/80 mb-3">
-        Picky uses minimal cookies to remember your preferences. We don&apos;t track you for advertising.
+        Picky uses minimal cookies to remember your preferences and measure anonymous usage. We don&apos;t track you for advertising.
       </p>
       <div className="flex gap-2">
         <button onClick={accept} className="btn-primary text-sm py-2 px-4">

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { submitFeedback } from '@/lib/db';
+import { captureServer } from '@/lib/posthog-server';
 import { hashIp, getClientIp } from '@/lib/rate-limit';
 
 const schema = z.object({
@@ -24,6 +25,11 @@ export async function POST(request: NextRequest) {
     const ipHash = hashIp(ip);
 
     await submitFeedback(restaurantId, restaurantName ?? null, feedbackType, notes, ipHash);
+    // Mirrors the restaurant_feedback insert so PostHog and the DB agree.
+    await captureServer(ipHash, 'feedback_submitted', {
+      feedback_type: feedbackType,
+      restaurant_id: restaurantId,
+    });
     return NextResponse.json({ success: true });
   } catch (err) {
     Sentry.captureException(err);

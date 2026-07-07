@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { capture } from '@/lib/posthog-client';
 import type { Restaurant } from '@/types';
 import { CheckIcon, CopyIcon } from './icons';
 
@@ -49,6 +50,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
 
   async function handleCopy() {
+    capture('share_clicked', { channel: 'copy', restaurant_id: restaurant.id });
     await navigator.clipboard.writeText(message);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -60,6 +62,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
         href={whatsappUrl}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={() => capture('share_clicked', { channel: 'whatsapp', restaurant_id: restaurant.id })}
         className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#25D366] text-white text-sm font-medium hover:bg-[#1ebe5d] transition-colors"
       >
         <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">

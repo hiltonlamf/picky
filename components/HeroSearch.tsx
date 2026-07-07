@@ -3,6 +3,8 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
+import { capture } from '@/lib/posthog-client';
+import { domainOf } from '@/lib/telemetry';
 import type { ParseEvent, MenuCandidate } from '@/types';
 import { CloseIcon, DocIcon, CameraIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
 
@@ -111,6 +113,10 @@ export default function HeroSearch() {
       e.preventDefault();
       const trimmed = url.trim();
       if (!trimmed) return;
+
+      capture('search_submitted', {
+        domain: domainOf(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`),
+      });
 
       setState('parsing');
       setError(null);

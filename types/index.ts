@@ -75,6 +75,9 @@ export interface AnalysisState {
   done: Array<{ label: string; menu: ClassifiedMenu }>;
   /** Cost accumulated across finished candidates. */
   usage?: AIUsage | null;
+  /** Telemetry category of the analyzed selection (pdf/image/js/text/multi) —
+   *  fixed when the analysis starts so resumed requests report it correctly. */
+  category?: string;
 }
 
 /** Persisted between the discover and analyze phases (keyed by restaurantId). */

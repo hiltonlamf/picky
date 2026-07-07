@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Sora, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import CookieConsent from '@/components/CookieConsent';
+import PostHogProvider from '@/components/PostHogProvider';
 import SiteHeader from '@/components/SiteHeader';
 import { HeaderProvider } from '@/lib/header-context';
 import Link from 'next/link';
@@ -52,6 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
           </footer>
           <CookieConsent />
+          <PostHogProvider />
         </HeaderProvider>
       </body>
     </html>
