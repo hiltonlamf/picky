@@ -10,6 +10,7 @@ import Disclaimer from '@/components/Disclaimer';
 import ShareButton from '@/components/ShareButton';
 import FeedbackModal from '@/components/FeedbackModal';
 import { useHeader } from '@/lib/header-context';
+import { capture } from '@/lib/posthog-client';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -84,6 +85,19 @@ export default function RestaurantPage() {
       document.title = 'Picky — Find your food, your way';
     };
   }, [load, setRestaurantName]);
+
+  // Closes the share loop: shared links carry ?ref=share&src=<channel>
+  // (set in ShareButton), so share → visit → activation is measurable.
+  // window.location instead of useSearchParams to avoid a Suspense boundary.
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    if (search.get('ref') === 'share') {
+      capture('share_landing', {
+        channel: search.get('src') ?? 'unknown',
+        restaurant_id: params.id,
+      });
+    }
+  }, [params.id]);
 
   if (loading) {
     return (

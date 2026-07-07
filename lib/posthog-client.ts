@@ -31,6 +31,9 @@ export function initPostHogIfConsented(): void {
 
 /** Capture a client-side event. Silently a no-op without consent/init. */
 export function capture(event: string, properties?: Record<string, unknown>): void {
+  // Self-initialize so callers don't depend on mount order relative to
+  // PostHogProvider (idempotent, and still a no-op without consent).
+  initPostHogIfConsented();
   if (!initialized) return;
   posthog.capture(event, properties);
 }
