@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { Dish } from '@/types';
 import DietaryBadge from './DietaryBadge';
 import ReportModal from './ReportModal';
+import { capture } from '@/lib/posthog-client';
 import { CONFIDENCE_THRESHOLD_WARNING } from '@/lib/dietary-config';
 import { AlertIcon, QuestionIcon, FlagIcon } from './icons';
 
@@ -102,7 +103,7 @@ export default function DishCard({ dish, activeFilter }: Props) {
           </div>
 
           <button
-            onClick={() => setReportOpen(true)}
+            onClick={() => { setReportOpen(true); capture('report_modal_opened', { dish_id: dish.id, classification: dish.classification }); }}
             className="flex-shrink-0 text-evergreen/80 hover:text-sun-400 transition-colors p-1.5 -mr-1 -mt-1 rounded-lg hover:bg-sun-50"
             aria-label={`Report issue with ${dish.name}`}
             title="Report incorrect label"

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { FIRST_ANALYSIS_KEY, NPS_DONE_KEY } from '@/lib/telemetry';
+import { capture } from '@/lib/posthog-client';
 import { CloseIcon } from './icons';
 
 // Day 7+, not day 1: the score only means something once someone has had
@@ -24,6 +25,9 @@ export default function NPSPrompt() {
   }, []);
 
   function dismiss() {
+    if (score === null) {
+      capture('nps_dismissed');
+    }
     // Answered or waved away, either way: never nag twice.
     localStorage.setItem(NPS_DONE_KEY, '1');
     setVisible(false);

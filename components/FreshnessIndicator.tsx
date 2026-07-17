@@ -1,5 +1,8 @@
+'use client';
+
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import { AlertIcon, CheckIcon } from './icons';
+import { capture } from '@/lib/posthog-client';
 
 interface Props {
   lastScrapedAt: string | null | undefined;
@@ -40,6 +43,7 @@ export default function FreshnessIndicator({ lastScrapedAt, restaurantId }: Prop
         <a
           href={`/restaurant/${restaurantId}?refresh=1`}
           className="flex-shrink-0 text-xs font-semibold text-sun-800 underline hover:no-underline"
+          onClick={() => capture('menu_refresh_clicked', { restaurant_id: restaurantId })}
         >
           Refresh
         </a>
