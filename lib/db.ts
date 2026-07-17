@@ -215,6 +215,40 @@ export async function logUsage(
   }
 }
 
+/**
+ * Passive parse-attempt telemetry — one row at the end of every real
+ * discover/analyze call, success or failure. Every user search becomes
+ * coverage data on which sites work. Best-effort: a logging failure must
+ * never fail the parse itself (and must not fail before the table's
+ * migration has been applied).
+ */
+export async function logParseAttempt(attempt: {
+  url: string;
+  stage: 'discover' | 'analyze';
+  category?: string | null;
+  success: boolean;
+  errorMessage?: string | null;
+  durationMs?: number;
+}): Promise<void> {
+  try {
+    let domain: string | null = null;
+    try {
+      domain = new URL(attempt.url).hostname.replace(/^www\./, '');
+    } catch {}
+    await db().from('parse_attempts').insert({
+      url: attempt.url,
+      domain,
+      stage: attempt.stage,
+      category: attempt.category ?? null,
+      success: attempt.success,
+      error_message: attempt.errorMessage ?? null,
+      duration_ms: attempt.durationMs ?? null,
+    });
+  } catch (err) {
+    console.error('[db] parse_attempts insert failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+}
+
 export async function saveClassifiedMenu(
   restaurantId: string,
   url: string,
@@ -294,14 +328,21 @@ export async function reportDish(
   dishId: string,
   issueType: string,
   notes: string,
-  ipHash: string
+  ipHash: string,
+  anonId?: string | null
 ): Promise<void> {
-  await db().from('dish_reports').insert({
+  const row = {
     dish_id: dishId,
     issue_type: issueType,
     notes: notes ?? null,
     ip_hash: ipHash,
-  });
+  };
+  const { error } = await db().from('dish_reports').insert({ ...row, anon_id: anonId ?? null });
+  // Degrade gracefully when the anon_id column is unmigrated.
+  if (error) {
+    const retry = await db().from('dish_reports').insert(row);
+    if (retry.error) throw new Error(`Failed to save report: ${retry.error.message}`);
+  }
 
   const { data: dish } = await db().from('dishes').select('report_count').eq('id', dishId).single();
   const newCount = ((dish as DbRow)?.report_count as number ?? 0) + 1;
@@ -316,15 +357,35 @@ export async function submitFeedback(
   restaurantName: string | null,
   feedbackType: string,
   notes: string,
-  ipHash: string
+  ipHash: string,
+  anonId?: string | null
 ): Promise<void> {
-  await db().from('restaurant_feedback').insert({
+  const row = {
     restaurant_id: restaurantId,
     restaurant_name: restaurantName,
     feedback_type: feedbackType,
     notes: notes || null,
     ip_hash: ipHash,
+  };
+  const { error } = await db().from('restaurant_feedback').insert({ ...row, anon_id: anonId ?? null });
+  // Degrade gracefully when the anon_id column is unmigrated.
+  if (error) {
+    const retry = await db().from('restaurant_feedback').insert(row);
+    if (retry.error) throw new Error(`Failed to save feedback: ${retry.error.message}`);
+  }
+}
+
+export async function saveNpsResponse(
+  anonId: string | null,
+  score: number,
+  notes: string
+): Promise<void> {
+  const { error } = await db().from('nps_responses').insert({
+    anon_id: anonId,
+    score,
+    notes: notes || null,
   });
+  if (error) throw new Error(`Failed to save NPS response: ${error.message}`);
 }
 
 export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]> {

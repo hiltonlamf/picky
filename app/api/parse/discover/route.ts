@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { scrapeRestaurant } from '@/lib/scraper';
 import { discoverMenus } from '@/lib/menu-discovery';
@@ -11,8 +12,11 @@ import {
   saveMenuCandidates,
   markRestaurantError,
   logUsage,
+  logParseAttempt,
 } from '@/lib/db';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { captureServer } from '@/lib/posthog-server';
+import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
 
@@ -60,6 +64,31 @@ export async function POST(request: NextRequest) {
         } catch {}
       };
 
+      // Telemetry context — set once the URL is known so every terminal
+      // outcome (including the outer catch) can log the attempt.
+      const startedAt = Date.now();
+      let attemptUrl: string | null = null;
+      let attemptCategory: string | null = null;
+      const logAttempt = (success: boolean, errorMessage?: string) => {
+        if (!attemptUrl) return Promise.resolve();
+        return logParseAttempt({
+          url: attemptUrl,
+          stage: 'discover',
+          category: attemptCategory,
+          success,
+          errorMessage: errorMessage ?? null,
+          durationMs: Date.now() - startedAt,
+        });
+      };
+      const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
+        captureServer(distinctId, 'analysis_completed', {
+          success,
+          category: attemptCategory,
+          duration_ms: Date.now() - startedAt,
+          dish_count: dishCount ?? 0,
+        });
+
       try {
         let body: { url: string };
         try {
@@ -82,6 +111,7 @@ export async function POST(request: NextRequest) {
           send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
           return close();
         }
+        attemptUrl = url;
 
         // Cache check
         send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
@@ -106,6 +136,8 @@ export async function POST(request: NextRequest) {
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Could not fetch this page';
           await markRestaurantError(restaurantId, msg);
+          await logAttempt(false, msg);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -121,6 +153,8 @@ export async function POST(request: NextRequest) {
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantError(restaurantId, msg);
+          await logAttempt(false, msg);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -136,9 +170,12 @@ export async function POST(request: NextRequest) {
           const msg =
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
           await markRestaurantError(restaurantId, msg);
+          await logAttempt(false, msg);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: msg });
           return close();
         }
+        attemptCategory = menuCategory(discovery.candidates);
 
         const ctx: ExtractContext = {
           title: discovery.restaurantTitle || scrapeResult.title,
@@ -165,9 +202,12 @@ export async function POST(request: NextRequest) {
             pdfUrls: ctx.pdfUrls,
             imageUrls: ctx.imageUrls,
             ...(discovery.candidates.length === 1 && {
-              analysis: { queue: discovery.candidates.map((c) => c.id), done: [] },
+              analysis: { queue: discovery.candidates.map((c) => c.id), done: [], category: attemptCategory ?? undefined },
             }),
           });
+          // Discovery succeeded — analysis continues in /analyze, which logs
+          // its own terminal outcome (hence no analysis_completed here).
+          await logAttempt(true);
           if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
           } else {
@@ -190,12 +230,15 @@ export async function POST(request: NextRequest) {
           menu = result.menu;
           usage = result.usage;
         } catch (err) {
+          Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed retry ladders still spent tokens — record them.
           if (err instanceof ExtractionError && err.usage) {
             await logUsage(restaurantId, discovery.finalUrl, err.usage, ctx.title);
           }
           await markRestaurantError(restaurantId, msg);
+          await logAttempt(false, msg);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -203,9 +246,14 @@ export async function POST(request: NextRequest) {
         if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
 
         await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
+        await logAttempt(true);
+        await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {
+        Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
+        await logAttempt(false, msg);
+        await emitAnalysisCompleted(false);
         send({ type: 'error', error: msg });
       }
       close();

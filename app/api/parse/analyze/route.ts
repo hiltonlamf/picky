@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
-import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage } from '@/lib/db';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage, logParseAttempt } from '@/lib/db';
+import { captureServer } from '@/lib/posthog-server';
+import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
 
@@ -43,6 +46,31 @@ export async function POST(request: NextRequest) {
         } catch {}
       };
 
+      // Telemetry — logged at terminal outcomes only ('continue' hand-backs
+      // are one analysis spread over several requests, not several attempts).
+      const startedAt = Date.now();
+      let attemptUrl: string | null = null;
+      let attemptCategory: string | null = null;
+      const logAttempt = (success: boolean, errorMessage?: string) => {
+        if (!attemptUrl) return Promise.resolve();
+        return logParseAttempt({
+          url: attemptUrl,
+          stage: 'analyze',
+          category: attemptCategory,
+          success,
+          errorMessage: errorMessage ?? null,
+          durationMs: Date.now() - startedAt,
+        });
+      };
+      const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
+        captureServer(distinctId, 'analysis_completed', {
+          success,
+          category: attemptCategory,
+          duration_ms: Date.now() - startedAt,
+          dish_count: dishCount ?? 0,
+        });
+
       try {
         let body: unknown;
         try {
@@ -80,13 +108,15 @@ export async function POST(request: NextRequest) {
             send({ type: 'error', error: 'None of the selected menus could be found — please try again.' });
             return close();
           }
-          state = { queue: selected.map((c) => c.id), done: [] };
+          state = { queue: selected.map((c) => c.id), done: [], category: menuCategory(selected) };
         } else if (payload.analysis) {
           state = payload.analysis;
         } else {
           send({ type: 'error', error: 'Nothing to resume — please search the restaurant again.' });
           return close();
         }
+        attemptUrl = payload.finalUrl;
+        attemptCategory = state.category ?? menuCategory(payload.candidates);
 
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 1, totalSteps: 2 });
 
@@ -150,10 +180,13 @@ export async function POST(request: NextRequest) {
             state.candidateUsage = null;
           }
         } catch (err) {
+          Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed attempts still spent tokens — record them before erroring.
           if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
           await markRestaurantError(restaurantId, msg);
+          await logAttempt(false, msg);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -163,6 +196,8 @@ export async function POST(request: NextRequest) {
           // expensive failure mode, so its spend must land in the log.
           if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
           await markRestaurantError(restaurantId, NO_MENU_MSG);
+          await logAttempt(false, NO_MENU_MSG);
+          await emitAnalysisCompleted(false);
           send({ type: 'error', error: NO_MENU_MSG });
           return close();
         }
@@ -180,9 +215,14 @@ export async function POST(request: NextRequest) {
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
         const usage: AIUsage = state.usage ?? { model: 'unknown', tokensIn: 0, tokensOut: 0, costUsd: 0 };
         await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
+        await logAttempt(true);
+        await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {
+        Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
+        await logAttempt(false, msg);
+        await emitAnalysisCompleted(false);
         send({ type: 'error', error: msg });
       }
       close();

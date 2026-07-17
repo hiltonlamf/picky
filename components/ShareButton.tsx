@@ -1,10 +1,25 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { capture } from '@/lib/posthog-client';
 import type { Restaurant } from '@/types';
-import { CheckIcon, CopyIcon } from './icons';
+import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
-function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
+type ShareChannel = 'native' | 'whatsapp' | 'copy';
+
+/** Attribution params so share → visit → activation is measurable. */
+function withAttribution(pageUrl: string, src: ShareChannel): string {
+  try {
+    const u = new URL(pageUrl);
+    u.searchParams.set('ref', 'share');
+    u.searchParams.set('src', src);
+    return u.toString();
+  } catch {
+    return pageUrl;
+  }
+}
+
+function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
   const allDishes = restaurant.sections.flatMap((s) => s.dishes);
   const veganDishes = allDishes.filter((d) => d.classification === 'vegan');
   const vegDishes = allDishes.filter((d) => d.classification === 'vegetarian');
@@ -39,20 +54,58 @@ function buildWhatsAppMessage(restaurant: Restaurant, pageUrl: string): string {
 
 export default function ShareButton({ restaurant }: { restaurant: Restaurant }) {
   const [copied, setCopied] = useState(false);
+  // Detected in an effect: navigator isn't available during SSR, and
+  // rendering different buttons on server vs client breaks hydration.
+  const [canNativeShare, setCanNativeShare] = useState(false);
 
+  useEffect(() => {
+    setCanNativeShare(typeof navigator.share === 'function');
+  }, []);
+
+  // origin + pathname (not href): a visitor who themselves arrived from a
+  // shared link shouldn't re-share the inherited ?ref/src attribution.
   const pageUrl =
     typeof window !== 'undefined'
-      ? window.location.href
+      ? window.location.origin + window.location.pathname
       : `https://picky.ie/restaurant/${restaurant.id}`;
 
-  const message = buildWhatsAppMessage(restaurant, pageUrl);
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+  async function handleNativeShare() {
+    capture('share_clicked', { channel: 'native', restaurant_id: restaurant.id });
+    try {
+      await navigator.share({
+        text: buildShareMessage(restaurant, withAttribution(pageUrl, 'native')),
+      });
+    } catch {
+      // user closed the share sheet — the click is still tracked above
+    }
+  }
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(message);
+    capture('share_clicked', { channel: 'copy', restaurant_id: restaurant.id });
+    await navigator.clipboard.writeText(
+      buildShareMessage(restaurant, withAttribution(pageUrl, 'copy'))
+    );
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
+
+  // Native share sheet (iMessage, Instagram, AirDrop...) as the primary
+  // action on devices that support it — mostly mobile, where sharing happens.
+  if (canNativeShare) {
+    return (
+      <button
+        onClick={handleNativeShare}
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-picky-600 text-white text-sm font-medium hover:bg-picky-700 transition-colors"
+      >
+        <ShareIcon className="w-4 h-4" />
+        Share
+      </button>
+    );
+  }
+
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
+    buildShareMessage(restaurant, withAttribution(pageUrl, 'whatsapp'))
+  )}`;
 
   return (
     <div className="flex items-center gap-2">
@@ -60,6 +113,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
         href={whatsappUrl}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={() => capture('share_clicked', { channel: 'whatsapp', restaurant_id: restaurant.id })}
         className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#25D366] text-white text-sm font-medium hover:bg-[#1ebe5d] transition-colors"
       >
         <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">

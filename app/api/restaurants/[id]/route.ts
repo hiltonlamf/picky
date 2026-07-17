@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { fetchRestaurantWithDishes } from '@/lib/db';
 
 export async function GET(
@@ -12,6 +13,7 @@ export async function GET(
     }
     return NextResponse.json(restaurant);
   } catch (err) {
+    Sentry.captureException(err);
     const msg = err instanceof Error ? err.message : 'Server error';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

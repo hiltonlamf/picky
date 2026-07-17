@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { submitFeedback } from '@/lib/db';
+import { saveNpsResponse } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
 import { hashIp, getClientIp } from '@/lib/rate-limit';
 
 const schema = z.object({
-  restaurantId: z.string().uuid(),
-  restaurantName: z.string().max(200).optional().nullable(),
-  feedbackType: z.string().min(1).max(64),
+  score: z.number().int().min(0).max(10),
   notes: z.string().max(1000).optional().default(''),
 });
 
@@ -21,17 +19,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
 
-    const { restaurantId, restaurantName, feedbackType, notes } = parsed.data;
-    const ip = getClientIp(request);
-    const ipHash = hashIp(ip);
+    const { score, notes } = parsed.data;
     const anonId = request.cookies.get(ANON_ID_COOKIE)?.value ?? null;
 
-    await submitFeedback(restaurantId, restaurantName ?? null, feedbackType, notes, ipHash, anonId);
-    // Mirrors the restaurant_feedback insert so PostHog and the DB agree.
-    await captureServer(anonId ?? ipHash, 'feedback_submitted', {
-      feedback_type: feedbackType,
-      restaurant_id: restaurantId,
-    });
+    await saveNpsResponse(anonId, score, notes);
+    // Mirrors the nps_responses insert so PostHog and the DB agree.
+    await captureServer(anonId ?? hashIp(getClientIp(request)), 'nps_submitted', { score });
     return NextResponse.json({ success: true });
   } catch (err) {
     Sentry.captureException(err);

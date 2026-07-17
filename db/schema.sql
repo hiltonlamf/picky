@@ -130,6 +130,52 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS menu_candidates JSONB,
   ADD COLUMN IF NOT EXISTS candidates_at   TIMESTAMPTZ;
 
+-- Passive parse-attempt telemetry (mirrors
+-- supabase/migrations/20260707000000_add_parse_attempts.sql).
+-- One row at the end of every real discover/analyze call, success or
+-- failure. Deliberately NO foreign key to restaurants, same reasoning as
+-- ai_usage_log: coverage history must survive test wipes. stage
+-- distinguishes a discovery handoff from a terminal analysis outcome.
+CREATE TABLE IF NOT EXISTS parse_attempts (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  url           TEXT,
+  domain        TEXT,
+  stage         TEXT NOT NULL DEFAULT 'discover'
+                  CHECK (stage IN ('discover', 'analyze')),
+  category      TEXT,        -- pdf | image | js | text | multi (NULL before discovery)
+  success       BOOLEAN NOT NULL,
+  error_message TEXT,
+  duration_ms   INTEGER,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_parse_attempts_created_at ON parse_attempts (created_at);
+CREATE INDEX IF NOT EXISTS idx_parse_attempts_domain ON parse_attempts (domain);
+
+-- Anonymous per-browser usage ID (mirrors
+-- supabase/migrations/20260707000100_add_anon_id.sql). A persistent
+-- 1-year cookie UUID — distinct from ip_hash, which is per-request abuse
+-- control. Monetization groundwork: usage-per-person capture starts now.
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS anon_id TEXT;
+
+ALTER TABLE dish_reports
+  ADD COLUMN IF NOT EXISTS anon_id TEXT;
+
+-- NPS survey responses (mirrors
+-- supabase/migrations/20260707000200_add_nps_responses.sql). Shown from
+-- day 7 after a browser's first successful analysis, once per browser.
+-- Append-only, no FK — product-signal history must survive test wipes.
+CREATE TABLE IF NOT EXISTS nps_responses (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  anon_id     TEXT,
+  score       INTEGER NOT NULL CHECK (score BETWEEN 0 AND 10),
+  notes       TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nps_responses_created_at ON nps_responses (created_at);
+
 -- ============================================================
 -- Unique constraints
 -- ============================================================
