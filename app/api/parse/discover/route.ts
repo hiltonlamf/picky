@@ -108,6 +108,7 @@ export async function POST(request: NextRequest) {
 
         const { allowed } = await checkRateLimit(ip);
         if (!allowed) {
+          await captureServer(distinctId, 'rate_limit_hit', { stage: 'discover' });
           send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
           return close();
         }

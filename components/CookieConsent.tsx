@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { initPostHogIfConsented } from '@/lib/posthog-client';
+import { initPostHogIfConsented, capture } from '@/lib/posthog-client';
 
 export default function CookieConsent() {
   const [visible, setVisible] = useState(false);
@@ -15,6 +15,7 @@ export default function CookieConsent() {
     localStorage.setItem('picky-cookie-consent', '1');
     // Analytics only ever starts here (or on a later visit) — after consent.
     initPostHogIfConsented();
+    capture('cookie_consent_given');
     setVisible(false);
   }
 

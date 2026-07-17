@@ -190,7 +190,7 @@ export default function RestaurantPage() {
           </h1>
           <div className="shrink-0 pt-0.5 flex items-center gap-2">
             <button
-              onClick={() => setFeedbackOpen(true)}
+              onClick={() => { setFeedbackOpen(true); capture('feedback_modal_opened', { restaurant_id: restaurant.id }); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
             >
               <ChatIcon className="w-4 h-4" />
@@ -254,7 +254,7 @@ export default function RestaurantPage() {
           <select
             id="menu-select"
             value={menuFilter}
-            onChange={(e) => setMenuFilter(e.target.value)}
+            onChange={(e) => { setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
             className="w-full sm:w-auto px-4 py-2 rounded-full border-2 border-mint-200 bg-white text-sm font-medium text-evergreen focus:outline-none focus:ring-4 focus:ring-picky-500/15 focus:border-picky-500"
           >
             {menuLabels.map((label) => (
@@ -272,7 +272,7 @@ export default function RestaurantPage() {
         {filters.map((f) => (
           <button
             key={f.value}
-            onClick={() => setFilter(f.value)}
+            onClick={() => { setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: params.id }); }}
             className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 border-2 ${
               filter === f.value
                 ? 'bg-evergreen border-evergreen text-white'

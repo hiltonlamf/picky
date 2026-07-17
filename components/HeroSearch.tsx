@@ -78,6 +78,7 @@ export default function HeroSearch() {
           } else if (event.type === 'error') {
             setError(event.error ?? 'An error occurred');
             setState('error');
+            capture('search_error_occurred', { error: event.error ?? 'An error occurred' });
             return 'done';
           }
         }
@@ -139,8 +140,13 @@ export default function HeroSearch() {
         });
         await followStream(response);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+        const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+        setError(msg);
         setState('error');
+        capture('search_error_occurred', {
+          domain: domainOf(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`),
+          error: msg,
+        });
       }
     },
     [url, followStream]
@@ -148,6 +154,7 @@ export default function HeroSearch() {
 
   const handleAnalyzeSelected = useCallback(async () => {
     if (!restaurantId || selectedIds.length === 0) return;
+    capture('menus_selected', { count: selectedIds.length, total_candidates: candidates.length });
     setState('parsing');
     setError(null);
     setLog([]);
@@ -164,7 +171,7 @@ export default function HeroSearch() {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
       setState('error');
     }
-  }, [restaurantId, selectedIds, followStream]);
+  }, [restaurantId, selectedIds, candidates, followStream]);
 
   const toggle = (id: string) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
