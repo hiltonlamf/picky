@@ -124,7 +124,10 @@ export default async function AdminRestaurantsPage({
                 )}
               </p>
               <p className="text-xs text-evergreen/80 truncate">
-                <span className="uppercase font-mono text-evergreen/50">{r.city}</span> · {r.url}
+                <span className="uppercase font-mono text-evergreen/50">{r.city}</span> · {r.url.replace(/^https?:\/\//, '')}
+              </p>
+              <p className="text-[11px] font-mono text-evergreen/40 truncate select-all" title={r.id}>
+                ID {r.id}
               </p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">

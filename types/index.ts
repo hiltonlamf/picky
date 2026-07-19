@@ -50,6 +50,10 @@ export interface Restaurant {
   menuUrl?: string | null;
   status: RestaurantStatus;
   errorMessage?: string | null;
+  /** Set when an admin has approved this restaurant for public display despite a
+   *  review flag (e.g. a tasting menu captured as a single "dish"). null = a
+   *  flagged restaurant stays hidden from the public guide until reviewed. */
+  guideApprovedAt?: string | null;
   sections: MenuSection[];
   createdAt: string;
 }

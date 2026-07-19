@@ -3,6 +3,7 @@ import { getFeaturedRestaurants } from '@/lib/db';
 import RestaurantCard from '@/components/RestaurantCard';
 import Link from 'next/link';
 import { DUBLIN_RESTAURANTS as DUBLIN_LIST } from '@/lib/init-dublin';
+import { isPubliclyVisible } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
 
 export const metadata: Metadata = {
@@ -23,9 +24,12 @@ export default async function DublinPage() {
     // DB may not be configured yet — show placeholder
   }
 
-  const doneRestaurants = restaurants.filter((r) => r.status === 'done');
+  // Only show restaurants that are safe to publish: a completed analysis with
+  // enough real dishes and no unreviewed "looks odd" flag (e.g. a tasting menu
+  // captured as a single dish). Errored / thin / flagged restaurants are
+  // withheld — the admin eval dashboard surfaces them for review instead.
+  const visibleRestaurants = restaurants.filter(isPubliclyVisible);
   const pendingRestaurants = restaurants.filter((r) => r.status === 'pending' || r.status === 'processing');
-  const errorRestaurants = restaurants.filter((r) => r.status === 'error');
 
   const isInitialising = restaurants.length === 0 || pendingRestaurants.length > 0;
 
@@ -61,10 +65,10 @@ export default async function DublinPage() {
         </div>
       )}
 
-      {/* Featured restaurants grid — done ones first */}
-      {doneRestaurants.length > 0 && (
+      {/* Featured restaurants grid — publicly-visible ones only */}
+      {visibleRestaurants.length > 0 && (
         <div className="grid sm:grid-cols-2 gap-4 mb-6">
-          {doneRestaurants.map((r) => (
+          {visibleRestaurants.map((r) => (
             <RestaurantCard key={r.id} restaurant={r} />
           ))}
         </div>
@@ -93,20 +97,6 @@ export default async function DublinPage() {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Error cards */}
-      {errorRestaurants.length > 0 && (
-        <div className="grid sm:grid-cols-2 gap-4 mb-6">
-          {errorRestaurants.map((r) => (
-            <div key={r.id} className="card p-5 bg-sun-50/50">
-              <p className="font-semibold text-evergreen/80 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
-              <p className="text-xs text-sun-800">
-                Menu temporarily unavailable — {r.errorMessage ?? 'could not be read'}
-              </p>
-            </div>
-          ))}
         </div>
       )}
 

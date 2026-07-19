@@ -138,7 +138,7 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
 
 /**
  * Extract one menu candidate with reliability-first validation + retry:
- * primary source → alternate sources (pdf/image/screenshot) → Opus escalation.
+ * primary source → alternate sources (pdf/image/screenshot) → Sonnet escalation.
  * Returns the attempt with the most food items, with summed usage/cost.
  */
 /**

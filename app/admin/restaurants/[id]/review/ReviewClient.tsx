@@ -13,6 +13,7 @@ import type {
   FeedbackItem,
 } from '@/types';
 import DietaryBadge from '@/components/DietaryBadge';
+import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 
 interface Props {
   restaurant: Restaurant;
@@ -84,6 +85,8 @@ export default function ReviewClient({
   const [missedMenus, setMissedMenus] = useState(missedMenusInitial);
   const [menusReviewedAt, setMenusReviewedAt] = useState<string | null>(menusReviewedAtInitial);
   const [inGuide, setInGuide] = useState(inGuideInitial);
+  const [approvedAt, setApprovedAt] = useState<string | null>(restaurant.guideApprovedAt ?? null);
+  const [copied, setCopied] = useState(false);
   // Local copy of recorded verdicts so a click reflects immediately (the server
   // value is refreshed on router.refresh()).
   const [verdicts, setVerdicts] = useState<Record<string, MenuCandidateVerdict>>(candidateVerdicts);
@@ -239,6 +242,45 @@ export default function ReviewClient({
     });
   }
 
+  async function toggleApprove() {
+    const next = !approvedAt;
+    await run('approve', async () => {
+      await postJson(`/api/admin/restaurants/${restaurant.id}/approve`, { approved: next });
+      setApprovedAt(next ? new Date().toISOString() : null);
+    });
+  }
+
+  async function deleteRestaurant() {
+    if (
+      !window.confirm(
+        `Delete "${restaurant.name ?? restaurant.url}" and all its menus & dishes for good? This removes it from every guide too and can't be undone. (User feedback and cost history are kept.)`
+      )
+    ) {
+      return;
+    }
+    setBusy('delete-restaurant');
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/restaurants/${restaurant.id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Delete failed');
+      router.push('/admin/restaurants');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete this restaurant.');
+      setBusy(null);
+    }
+  }
+
+  async function copyId() {
+    try {
+      await navigator.clipboard.writeText(restaurant.id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — the id stays visible & selectable as a fallback
+    }
+  }
+
   async function removeMenuGroup(label: string | null) {
     const displayLabel = label ?? 'this menu';
     if (!window.confirm(`Remove ${displayLabel} entirely — all its sections and dishes? This can't be undone.`)) return;
@@ -314,6 +356,11 @@ export default function ReviewClient({
   const reviewedDishes = liveDishes.filter((d) => d.humanVerified).length;
   const removedCount = allDishes.length - liveDishes.length;
 
+  // Review flags + live public-visibility (uses the local approvedAt so the
+  // banner updates the moment you approve, before the server refresh).
+  const reviewFlags = computeReviewFlags(restaurant);
+  const publiclyVisible = isPubliclyVisible({ ...restaurant, guideApprovedAt: approvedAt });
+
   // Map a live menu group's label back to the source URL of the candidate it
   // came from, so each live menu can show a clickable "verify this menu" link.
   const candidateRefByLabel = new Map<string, string>();
@@ -346,6 +393,18 @@ export default function ReviewClient({
       <div className="mb-6">
         <h1 className="text-xl font-bold text-evergreen">{restaurant.name ?? restaurant.url}</h1>
         <p className="text-sm text-evergreen/80">{restaurant.canonicalUrl ?? restaurant.url}</p>
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-[11px] font-mono text-evergreen/50 select-all" title="Restaurant ID">
+            ID {restaurant.id}
+          </span>
+          <button
+            onClick={copyId}
+            className="text-[11px] font-medium text-picky-700 hover:underline"
+            aria-label="Copy restaurant ID"
+          >
+            {copied ? 'Copied ✓' : 'Copy'}
+          </button>
+        </div>
         <p className="text-xs text-evergreen/60 mt-1">{formatScrapedAt(restaurant.lastScrapedAt)}</p>
         {totalOpenFeedback > 0 && (
           <p className="mt-2 inline-block rounded-full bg-sun-50 text-sun-800 text-xs font-medium px-3 py-1">
@@ -381,6 +440,43 @@ export default function ReviewClient({
           {busy === 'guide' ? 'Saving…' : inGuide ? 'Remove from guide' : 'Add to guide'}
         </button>
       </div>
+
+      {/* Public-visibility review gate: an odd-but-featured restaurant (too few
+          dishes, or a tasting/dim-sum menu captured as one "dish") is withheld
+          from the public guide until an admin approves it here. */}
+      {restaurant.status === 'done' && reviewFlags.length > 0 && (
+        <div className="mb-4 rounded-xl border border-sun-400/50 bg-sun-50/50 px-4 py-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-evergreen">
+                {publiclyVisible
+                  ? '⭐ Approved — clears the public-guide bar'
+                  : '⚠ Held for review — hidden from the public guide'}
+              </p>
+              <ul className="mt-1 text-xs text-evergreen/80 list-disc pl-4 space-y-0.5">
+                {reviewFlags.map((f, i) => (
+                  <li key={i}>{f.detail}</li>
+                ))}
+              </ul>
+              {totalDishes < MIN_GUIDE_DISHES && (
+                <p className="mt-1 text-xs text-sun-800">
+                  This needs at least {MIN_GUIDE_DISHES} dishes to be shown — approval can&rsquo;t override too few dishes.
+                  Add the missing dishes/menus, or delete the restaurant if the site can&rsquo;t be read.
+                </p>
+              )}
+            </div>
+            {totalDishes >= MIN_GUIDE_DISHES && (
+              <button
+                disabled={busy === 'approve'}
+                onClick={toggleApprove}
+                className={approvedAt ? 'btn-ghost text-sm px-4 py-1.5' : 'btn-primary text-sm px-4 py-2'}
+              >
+                {busy === 'approve' ? 'Saving…' : approvedAt ? 'Un-approve (hide)' : 'Approve for public'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Menu-level review sign-off (B2): the countable "restaurant reviewed" action. */}
       <div
@@ -691,6 +787,26 @@ export default function ReviewClient({
           ))}
         </section>
       ))}
+
+      {/* Danger zone — permanently remove a restaurant (e.g. an unreadable site
+          or a bad duplicate). Cascades to its menus, dishes and guide entries. */}
+      <section className="mt-12 rounded-xl border border-red-300 bg-red-50/50 px-4 py-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-semibold text-red-700">Delete this restaurant</p>
+            <p className="text-xs text-red-700/80">
+              Removes it and all its menus & dishes, and drops it from every guide. Can&rsquo;t be undone.
+            </p>
+          </div>
+          <button
+            disabled={busy === 'delete-restaurant'}
+            onClick={deleteRestaurant}
+            className="text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-full px-4 py-1.5 disabled:opacity-60"
+          >
+            {busy === 'delete-restaurant' ? 'Deleting…' : 'Delete restaurant'}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

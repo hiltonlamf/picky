@@ -34,16 +34,22 @@ function db() {
   return createClient(url, key);
 }
 
-async function upsertFeatured(restaurantId: string, order: number) {
+export async function upsertFeatured(restaurantId: string, order: number, city = 'dublin') {
   await db()
     .from('featured_restaurants')
     .upsert(
-      { restaurant_id: restaurantId, city: 'dublin', display_order: order },
+      { restaurant_id: restaurantId, city, display_order: order },
       { onConflict: 'restaurant_id,city' }
     );
 }
 
-async function parseAndSave(restaurantId: string, name: string, url: string): Promise<void> {
+/**
+ * Run the full analysis pipeline for one restaurant and persist it — the SAME
+ * path the live user flow uses (scrape → discover → extract+classify+audit →
+ * save). Reused by the boot seeder and the trendy-seed script so there is one
+ * analyzer, not several. Assumes the restaurant row already exists.
+ */
+export async function parseAndSave(restaurantId: string, name: string, url: string): Promise<void> {
   await resetRestaurantForReparse(restaurantId);
 
   let scrapeResult;
