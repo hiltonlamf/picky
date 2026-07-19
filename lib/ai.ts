@@ -197,8 +197,9 @@ function normalizeImageType(type: string): string | null {
   return SUPPORTED_IMAGE_TYPES.has(type) ? type : null;
 }
 
-/** Detect image type from magic bytes (more reliable than Content-Type). */
-function sniffImageType(b: Uint8Array): string | null {
+/** Detect image type from magic bytes (more reliable than Content-Type). Exported
+ *  for the admin upload path, which must not trust a client-declared MIME type. */
+export function sniffImageType(b: Uint8Array): string | null {
   if (b.length < 12) return null;
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
   if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
@@ -226,6 +227,21 @@ export async function classifyMenuFromImages(
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
   const downloaded = await Promise.all(imageUrls.map(downloadImageAsBase64));
   const images = downloaded.filter(Boolean) as Array<{ data: string; mediaType: string }>;
+  if (images.length === 0) return null;
+  return classifyMenuFromImageBuffers(images, restaurantName, modelOverride);
+}
+
+/**
+ * Same as classifyMenuFromImages but for image data already in hand (e.g. an
+ * admin's manually uploaded photo of a menu — a Google Maps screenshot, say —
+ * that has no URL to fetch). Split out so both entry points share one
+ * implementation instead of the upload path duplicating the API call.
+ */
+export async function classifyMenuFromImageBuffers(
+  images: Array<{ data: string; mediaType: string }>,
+  restaurantName?: string,
+  modelOverride?: string
+): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
   if (images.length === 0) return null;
 
   const model = modelOverride ?? EXTRACTION_MODEL;
@@ -468,6 +484,25 @@ export async function classifyMenuFromPdf(
     if (buffer.byteLength > 20 * 1024 * 1024) return null;
 
     const pdfBase64 = Buffer.from(buffer).toString('base64');
+    return classifyMenuFromPdfBuffer(pdfBase64, restaurantName, modelOverride);
+  } catch (err) {
+    if (isBillingError(err)) throw err;
+    return null;
+  }
+}
+
+/**
+ * Same as classifyMenuFromPdf but for PDF data already in hand (e.g. an
+ * admin's manually uploaded PDF, with no URL to fetch). Split out so both
+ * entry points share one implementation instead of the upload path
+ * duplicating the API call.
+ */
+export async function classifyMenuFromPdfBuffer(
+  pdfBase64: string,
+  restaurantName?: string,
+  modelOverride?: string
+): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
+  try {
     const model = modelOverride ?? EXTRACTION_MODEL;
     const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 

@@ -10,8 +10,10 @@ export default function MenuSection({ section, activeFilter }: Props) {
   const visibleDishes = section.dishes.filter((dish) => {
     if (!activeFilter || activeFilter === 'all') return true;
     if (activeFilter === 'vegan') return dish.classification === 'vegan';
+    // 'unknown' surfaces here (not under vegan — the higher-trust claim per
+    // CLAUDE.md) as a "maybe, please confirm" option instead of being hidden.
     if (activeFilter === 'vegetarian')
-      return dish.classification === 'vegan' || dish.classification === 'vegetarian';
+      return dish.classification === 'vegan' || dish.classification === 'vegetarian' || dish.classification === 'unknown';
     return true;
   });
 

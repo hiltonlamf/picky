@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "test:smoke": "tsx scripts/run-pipeline-tests.ts --smoke",
-    "record:fixture": "tsx scripts/record-fixture.ts"
+    "record:fixture": "tsx scripts/record-fixture.ts",
+    "test:eval": "tsx scripts/run-eval.ts",
+    "test:admin": "tsx scripts/test-admin-actions.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",

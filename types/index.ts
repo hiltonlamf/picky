@@ -15,6 +15,18 @@ export interface Dish {
   reportCount: number;
   warningFlagged: boolean;
   sectionId?: string;
+  /** Set by an admin correction/add/confirm — protects the row from being wiped on the next reparse. */
+  humanVerified: boolean;
+  /** Admin note; also carries the light "no longer matched the latest extraction" flag. */
+  reviewerNotes?: string | null;
+  /** Who created this dish row: the AI pipeline ('ai') or an admin by hand ('admin'). */
+  origin: 'ai' | 'admin';
+  /** What the AI originally classified this dish as, kept even after a human overwrites
+   *  `classification` — so "AI said X → now Y" stays visible. null for admin-added dishes. */
+  aiClassification?: DietaryClassification | null;
+  /** Non-null once an admin has soft-deleted this dish. Excluded from everything users
+   *  see; kept as an audit record and shown (struck-through, restorable) in admin review. */
+  deletedAt?: string | null;
 }
 
 export interface MenuSection {
@@ -176,4 +188,88 @@ export interface DietaryFilterConfig {
 export interface ReportIssueType {
   value: string;
   label: string;
+}
+
+// ============================================================
+// Admin dashboard + eval infrastructure
+// ============================================================
+
+/** The durable golden set's anchor row — one per restaurant URL, auto-created
+ *  the first time a dish or menu-candidate under that URL gets a human verdict. */
+export interface EvalCase {
+  id: string;
+  url: string;
+  name?: string | null;
+  city?: string | null;
+  /** Free text: real menus on the site the pipeline never found at all. */
+  missedMenus?: string | null;
+  notes?: string | null;
+  /** Set when a human confirms this restaurant's menu discovery is correct (menu-level review). */
+  menusReviewedAt?: string | null;
+  createdAt: string;
+}
+
+export type MenuCandidateVerdict = 'correct' | 'spurious' | 'duplicate';
+
+/** A human verdict on one AI-discovered menu candidate (or a menu-level
+ *  add/remove action performed on the review screen). */
+export interface EvalMenuCandidate {
+  id: string;
+  evalCaseId: string;
+  label: string;
+  verdict: MenuCandidateVerdict;
+  notes?: string | null;
+  createdAt: string;
+}
+
+export type EvalDishSource = 'admin_review' | 'feedback_confirmed';
+
+/** One human-validated ground-truth dish, auto-grown from a confirm/correct
+ *  action in the admin review screen or a confirmed feedback report. */
+export interface EvalDish {
+  id: string;
+  evalCaseId: string;
+  menuLabel?: string | null;
+  sectionName?: string | null;
+  name: string;
+  expectedClassification: DietaryClassification;
+  /** What the AI originally guessed at the moment of the human verdict, captured
+   *  before the live dish was overwritten. null for legacy rows. Dish accuracy =
+   *  % where this equals expectedClassification. */
+  aiOriginalClassification?: DietaryClassification | null;
+  source: EvalDishSource;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FeedbackStatus = 'open' | 'confirmed' | 'dismissed';
+
+/** A single user report about one dish, surfaced inline on the review screen
+ *  (B7) so a reviewer can act on it where the dish lives, not just in the inbox. */
+export interface DishReportSummary {
+  id: string;
+  dishId: string;
+  issueType: string;
+  notes?: string | null;
+  status: FeedbackStatus;
+  createdAt: string;
+}
+
+/** Unified view over dish_reports (always about one dish's label) and
+ *  restaurant_feedback (general product feedback) for the admin inbox. */
+export interface FeedbackItem {
+  kind: 'dish_report' | 'restaurant_feedback';
+  id: string;
+  createdAt: string;
+  status: FeedbackStatus;
+  resolutionNotes?: string | null;
+  resolvedAt?: string | null;
+  notes?: string | null;
+  /** issue_type for dish_report, feedback_type for restaurant_feedback. */
+  issueOrFeedbackType: string;
+  dishId?: string;
+  dishName?: string;
+  restaurantId?: string;
+  restaurantName?: string | null;
 }

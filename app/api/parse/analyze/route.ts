@@ -5,7 +5,7 @@ import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/li
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, logUsage, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
-import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
+import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
 
@@ -92,13 +92,16 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        // Resolve state: a fresh selection starts a new analysis (and counts
-        // against the rate limit); a bare call resumes stored progress.
+        // Resolve state: a fresh selection continues a new analysis; a bare
+        // call resumes stored progress. The rate-limit slot was already consumed
+        // at the discover stage for this restaurant, so here we only CHECK the
+        // budget (consume: false) — no double-counting a single new-restaurant
+        // flow, while still refusing to proceed if the budget is already spent.
         let state: AnalysisState;
         if (candidateIds?.length) {
-          const { allowed } = await checkRateLimit(ip);
+          const { allowed } = await checkRateLimit(ip, { consume: false });
           if (!allowed) {
-            send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
+            send({ type: 'error', error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} new-restaurant searches per hour. Please try again later.` });
             return close();
           }
           // Resolve selected ids against the SERVER-STORED candidate list only.
