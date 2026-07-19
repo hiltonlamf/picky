@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getEvalCases, getEvalCaseDetail } from '@/lib/db';
 
+// Reads the DB on request — must never be prerendered at build time (CI has no
+// DB credentials, and the data is always live anyway).
+export const dynamic = 'force-dynamic';
+
 // Reuses the exact CSV-escaping convention already in scripts/backup-spend.ts
 // rather than inventing a new one or adding a CSV dependency.
 const esc = (v: unknown) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
