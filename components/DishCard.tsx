@@ -51,10 +51,18 @@ export default function DishCard({ dish, activeFilter }: Props) {
 
   const isLowConfidence = dish.confidence < CONFIDENCE_THRESHOLD_WARNING;
 
-  // Hide dishes that don't match the active filter (if set)
+  // Hide dishes that don't match the active filter (if set). 'unknown'
+  // dishes are included under vegetarian (a "maybe, please confirm" option)
+  // but never under vegan — the higher-trust claim per CLAUDE.md.
   if (activeFilter && activeFilter !== 'all') {
     if (activeFilter === 'vegan' && dish.classification !== 'vegan') return null;
-    if (activeFilter === 'vegetarian' && dish.classification !== 'vegan' && dish.classification !== 'vegetarian') return null;
+    if (
+      activeFilter === 'vegetarian' &&
+      dish.classification !== 'vegan' &&
+      dish.classification !== 'vegetarian' &&
+      dish.classification !== 'unknown'
+    )
+      return null;
   }
 
   return (

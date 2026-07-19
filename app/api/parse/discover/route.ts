@@ -16,7 +16,7 @@ import {
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
-import { checkRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
+import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
 
@@ -105,20 +105,26 @@ export async function POST(request: NextRequest) {
           return close();
         }
         const { url } = parsed.data;
-
-        const { allowed } = await checkRateLimit(ip);
-        if (!allowed) {
-          await captureServer(distinctId, 'rate_limit_hit', { stage: 'discover' });
-          send({ type: 'error', error: `You've reached the limit of 5 searches per hour. Please try again later.` });
-          return close();
-        }
         attemptUrl = url;
 
-        // Cache check
+        // Cache check FIRST. A restaurant that's already in our database and
+        // fresh is served with ZERO LLM calls, so it must NOT count against the
+        // rate limit — the limit exists only to cap the cost of NEW analyses.
         send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
         const existing = await findExistingRestaurant(url).catch(() => null);
         if (existing?.status === 'done' && isFresh(existing.lastScrapedAt)) {
           send({ type: 'cached', restaurantId: existing.id });
+          return close();
+        }
+
+        // Past the cache: this WILL run the AI pipeline (a new restaurant, or a
+        // stale reparse), so enforce and consume ONE rate-limit slot here — one
+        // per new restaurant. The downstream /analyze step deliberately does not
+        // consume another, so the whole flow costs the user a single slot.
+        const { allowed } = await checkRateLimit(ip);
+        if (!allowed) {
+          await captureServer(distinctId, 'rate_limit_hit', { stage: 'discover' });
+          send({ type: 'error', error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} new-restaurant searches per hour. Please try again later.` });
           return close();
         }
 

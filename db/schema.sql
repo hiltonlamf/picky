@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS dishes (
   confidence_reason TEXT,
   report_count      INTEGER NOT NULL DEFAULT 0,
   warning_flagged   BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Provenance + soft-delete (see 20260718120000_add_dish_provenance.sql).
+  origin            TEXT NOT NULL DEFAULT 'ai' CHECK (origin IN ('ai', 'admin')),
+  ai_classification TEXT CHECK (ai_classification IN ('vegan', 'vegetarian', 'neither', 'unknown')),
+  deleted_at        TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -175,6 +179,68 @@ CREATE TABLE IF NOT EXISTS nps_responses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_nps_responses_created_at ON nps_responses (created_at);
+
+-- ============================================================
+-- Admin dashboard + eval infrastructure (mirrors
+-- supabase/migrations/20260708103000_add_eval_and_review.sql)
+-- ============================================================
+
+-- Durable golden set — NOT FK'd to restaurants (same wipe-proof pattern as
+-- ai_usage_log / restaurant_feedback): must survive a wipe or the restaurant
+-- being deleted/reprocessed. Auto-created the first time a dish under that
+-- restaurant's URL gets a human verdict.
+CREATE TABLE IF NOT EXISTS eval_cases (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  url TEXT NOT NULL,
+  name TEXT,
+  city TEXT,
+  missed_menus TEXT, -- free text: real menus on the site the pipeline never found
+  notes TEXT,
+  menus_reviewed_at TIMESTAMPTZ, -- set when a human confirms this restaurant's menu discovery is correct (menu-level review)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS eval_cases_url_unique ON eval_cases (lower(url));
+
+CREATE TABLE IF NOT EXISTS eval_menu_candidates ( -- discovery-review verdicts
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  eval_case_id UUID NOT NULL REFERENCES eval_cases(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('correct', 'spurious', 'duplicate')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS eval_dishes ( -- auto-grown, human-validated ground truth
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  eval_case_id UUID NOT NULL REFERENCES eval_cases(id) ON DELETE CASCADE,
+  menu_label TEXT,
+  section_name TEXT,
+  name TEXT NOT NULL,
+  expected_classification TEXT NOT NULL CHECK (expected_classification IN ('vegan','vegetarian','neither','unknown')),
+  -- What the AI originally guessed at the moment a human gave a verdict, captured
+  -- BEFORE the live dish is overwritten. accuracy = % where it == expected_classification.
+  ai_original_classification TEXT CHECK (ai_original_classification IN ('vegan','vegetarian','neither','unknown')),
+  source TEXT NOT NULL DEFAULT 'admin_review' CHECK (source IN ('admin_review','feedback_confirmed')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS eval_dishes_case_name_unique ON eval_dishes (eval_case_id, lower(name));
+
+-- Live-correction support: preserves human fixes/adds/removals across reparses.
+ALTER TABLE dishes
+  ADD COLUMN IF NOT EXISTS human_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS reviewer_notes TEXT;
+
+-- Feedback triage verdicts.
+ALTER TABLE dish_reports
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','confirmed','dismissed')),
+  ADD COLUMN IF NOT EXISTS resolution_notes TEXT,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','confirmed','dismissed')),
+  ADD COLUMN IF NOT EXISTS resolution_notes TEXT,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 
 -- ============================================================
 -- Unique constraints

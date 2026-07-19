@@ -6,7 +6,7 @@ import type { DietaryClassification } from '@/types';
 const CONFIG: Record<DietaryClassification, { label: string; className: string; emoji: string }> = {
   vegan: { label: 'Vegan', className: 'badge-vegan', emoji: '🌱' },
   vegetarian: { label: 'Veggie', className: 'badge-vegetarian', emoji: '🥚' },
-  neither: { label: 'Not for us', className: 'badge-neither', emoji: '🥩' },
+  neither: { label: 'Not vegetarian', className: 'badge-neither', emoji: '🥩' },
   unknown: { label: 'Double-check this one', className: 'badge-unknown', emoji: '❓' },
 };
 

@@ -88,13 +88,19 @@ async function parseAndSave(restaurantId: string, name: string, url: string): Pr
 export async function initDublinRestaurants(): Promise<void> {
   const supabase = db();
 
-  // Replace the featured list with exactly these 10 restaurants.
-  // Deleting first ensures stale entries from previous seed runs don't linger.
-  await supabase.from('featured_restaurants').delete().eq('city', 'dublin');
+  // Guide membership is ADMIN-OWNED and persistent (curated from
+  // /admin/restaurants). This seeder therefore only *bootstraps* the guide the
+  // first time — if the Dublin guide already has any entries, we leave it
+  // completely alone so an admin's add/remove is never wiped on a server
+  // restart. (It used to delete-and-reseed on every boot, which fought with
+  // admin curation.) The seeder still ensures the seed restaurants exist and
+  // get parsed regardless.
+  const { count: guideCount } = await supabase
+    .from('featured_restaurants')
+    .select('*', { count: 'exact', head: true })
+    .eq('city', 'dublin');
+  const bootstrapGuide = (guideCount ?? 0) === 0;
 
-  // Pass 1 — insert all restaurant records and feature them immediately so the
-  // Dublin page can render all 10 cards (pending ones show "Analysing…") before
-  // any parsing has completed.
   const toparse: { id: string; name: string; url: string }[] = [];
 
   for (let i = 0; i < DUBLIN_RESTAURANTS.length; i++) {
@@ -119,7 +125,8 @@ export async function initDublinRestaurants(): Promise<void> {
       }
     }
 
-    await upsertFeatured(restaurantId, i);
+    // Only feature on a first-time bootstrap (empty guide); never override admin curation afterwards.
+    if (bootstrapGuide) await upsertFeatured(restaurantId, i);
 
     if (!existing || existing.status !== 'done') {
       toparse.push({ id: restaurantId, name, url });
