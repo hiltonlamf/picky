@@ -600,24 +600,27 @@ export async function reportDish(
 }
 
 export async function submitFeedback(
-  restaurantId: string,
+  restaurantId: string | null,
   restaurantName: string | null,
   feedbackType: string,
   notes: string,
   ipHash: string,
-  anonId?: string | null
+  anonId?: string | null,
+  city?: string | null
 ): Promise<void> {
   const row = {
-    restaurant_id: restaurantId,
+    restaurant_id: restaurantId, // null for guide-level feedback
     restaurant_name: restaurantName,
     feedback_type: feedbackType,
     notes: notes || null,
     ip_hash: ipHash,
+    city: city ?? null,
   };
   const { error } = await db().from('restaurant_feedback').insert({ ...row, anon_id: anonId ?? null });
-  // Degrade gracefully when the anon_id column is unmigrated.
+  // Degrade gracefully when the anon_id / city columns aren't migrated yet.
   if (error) {
-    const retry = await db().from('restaurant_feedback').insert(row);
+    const { city: _city, ...base } = row;
+    const retry = await db().from('restaurant_feedback').insert(base);
     if (retry.error) throw new Error(`Failed to save feedback: ${retry.error.message}`);
   }
 }
@@ -1384,6 +1387,7 @@ export async function getFeedbackInbox(status?: FeedbackStatus): Promise<Feedbac
     issueOrFeedbackType: f.feedback_type as string,
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
+    city: (f.city as string | null) ?? null,
   }));
 
   return [...dishItems, ...feedbackItems].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -1728,6 +1732,7 @@ export async function getRestaurantFeedback(
     issueOrFeedbackType: f.feedback_type as string,
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
+    city: (f.city as string | null) ?? null,
   }));
 
   return { dishReports, restaurantFeedback };

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { DUBLIN_RESTAURANTS as DUBLIN_LIST } from '@/lib/init-dublin';
 import { isPubliclyVisible } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
+import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 
 export const metadata: Metadata = {
   title: 'Vegetarian & Vegan Restaurants in Dublin',
@@ -44,10 +45,11 @@ export default async function DublinPage() {
         <h1 className="text-3xl sm:text-4xl font-bold text-evergreen mb-3 tracking-tight">
           Dublin, pre-scouted by AI
         </h1>
-        <p className="text-evergreen/80 max-w-2xl sm:text-lg">
+        <p className="text-evergreen/80 max-w-2xl sm:text-lg mb-5">
           Our AI has already read and verified the menus at these Dublin restaurants, so you can
           see exactly which dishes are veggie or vegan before you visit.
         </p>
+        <GuideFeedbackButton city="dublin" />
       </div>
 
       {/* Initialising banner */}

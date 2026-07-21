@@ -280,4 +280,6 @@ export interface FeedbackItem {
   dishName?: string;
   restaurantId?: string;
   restaurantName?: string | null;
+  /** Set for guide-level feedback (no single restaurant) — which city guide it's about. */
+  city?: string | null;
 }

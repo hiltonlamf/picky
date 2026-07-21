@@ -2,38 +2,39 @@ import type { Restaurant, MenuSection, Dish } from '@/types';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
-// The key idea: a diner only sees ONE menu per visit, so a restaurant that sums
-// 44 veg dishes across breakfast/lunch/dinner really offers ~11 at any sitting.
-// We therefore rank and headline by the BEST SINGLE MENU's veg count, and show
-// the per-menu breakdown. Side dishes are counted like any other veg option
-// (no exclusion). Mains are only used to highlight a few example dishes.
+// A diner only sees ONE menu per visit, so a restaurant that sums 44 veg dishes
+// across breakfast/lunch/dinner really offers ~11 at any sitting. We therefore
+// rank and headline by the BEST SINGLE MENU's veg count, show the per-menu
+// breakdown, and highlight a few example dishes (the priciest veg dishes — the
+// most expensive item is usually the most substantial, i.e. a "main").
 
-/** True if a section name reads as a "main course" section — used ONLY to pick
- *  a few example mains to highlight. Pure string heuristic. */
-export function isMainSection(name: string): boolean {
-  const n = (name ?? '').toLowerCase();
-  // Exclude sections that are clearly not mains even if they contain "main".
-  if (/\b(side|starter|appetiz|dessert|sweet|small plate|pudding)/.test(n)) return false;
-  return /\b(mains?|entrees?|entrées?|large plates?|from the grill|secondi|plats)\b/.test(n);
+/** Parse a price string ("€7.50", "€29", "12", "8.00") to a number, or null if
+ *  there's no usable number (e.g. "Market Price", empty). */
+export function parsePrice(price: string | null | undefined): number | null {
+  if (!price) return null;
+  const cleaned = price.replace(/[^0-9.]/g, '');
+  if (!cleaned) return null;
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
 }
 
 function isVeg(dish: Dish): boolean {
   return dish.classification === 'vegan' || dish.classification === 'vegetarian';
 }
 
+/** Live (non-deleted) dishes of a section. */
+function liveDishes(section: MenuSection): Dish[] {
+  return section.dishes.filter((d) => !d.deletedAt);
+}
+
 /** Collapse a dish name to a comparison key: drop parentheticals and standalone
  *  veg markers (V / VG / vegan…) so the same dish across menus dedupes to one. */
-function normalizeMainName(name: string): string {
+function normalizeDishName(name: string): string {
   return (name ?? '')
     .toLowerCase()
     .replace(/\([^)]*\)/g, ' ')
     .replace(/\b(v|vg|ve|vgn|vegan|vegetarian|veg)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, '');
-}
-
-/** Live (non-deleted) dishes of a section. */
-function liveDishes(section: MenuSection): Dish[] {
-  return section.dishes.filter((d) => !d.deletedAt);
 }
 
 export interface PerMenuVeg {
@@ -46,22 +47,23 @@ export interface PerMenuVeg {
 export interface GuideInsights {
   /** Best single menu's veg count — the guide headline + ranking key. */
   maxVegOptions: number;
+  /** The best single menu's vegan / vegetarian split (shown once on the card). */
+  bestMenu: { label: string | null; vegan: number; vegetarian: number };
   /** Veg options per source menu, in display order. */
   perMenu: PerMenuVeg[];
   /** All live dishes across every menu (sides included). */
   totalDishes: number;
-  /** Up to 3 example veg dishes from main-course sections (names). */
-  vegMains: string[];
+  /** Up to 3 example veg dishes — the priciest (≈ the mains). Names only. */
+  highlights: string[];
 }
 
-const MAX_VEG_MAINS = 3;
+const MAX_HIGHLIGHTS = 3;
 
 /** Compute the guide card's numbers from a restaurant's sections. Groups by
  *  menuLabel so multi-menu restaurants (Lunch/Dinner) report per menu and are
  *  ranked by their best single menu, not the sum. */
 export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideInsights {
-  // Group sections by menuLabel, preserving first-seen order (sections arrive
-  // ordered by display_order). null label => a single "Menu" group.
+  // Group sections by menuLabel, preserving first-seen (display) order.
   const order: Array<string | null> = [];
   const byLabel = new Map<string | null, MenuSection[]>();
   for (const s of restaurant.sections) {
@@ -78,26 +80,45 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
     return { label, vegOptions: dishes.filter(isVeg).length };
   });
 
-  const maxVegOptions = perMenu.reduce((max, m) => Math.max(max, m.vegOptions), 0);
+  // Best single menu = the one with the most veg options; its vegan/veg split.
+  let bestLabel: string | null = order[0] ?? null;
+  let maxVegOptions = 0;
+  for (const m of perMenu) {
+    if (m.vegOptions > maxVegOptions) {
+      maxVegOptions = m.vegOptions;
+      bestLabel = m.label;
+    }
+  }
+  const bestDishes = (byLabel.get(bestLabel) ?? []).flatMap(liveDishes);
+  const bestMenu = {
+    label: bestLabel,
+    vegan: bestDishes.filter((d) => d.classification === 'vegan').length,
+    vegetarian: bestDishes.filter((d) => d.classification === 'vegetarian').length,
+  };
+
   const totalDishes = restaurant.sections.flatMap(liveDishes).length;
 
-  // Example mains: veg dishes living in a main-course section, de-duplicated by
-  // a normalized name so the SAME dish appearing on several menus (e.g.
-  // "Pappardelle", "Pappardelle (V)", "Pappardelle V") counts once.
+  // Highlights: the priciest veg dishes across the restaurant (most expensive ≈
+  // most substantial ≈ a main), de-duped by normalized name so the same dish on
+  // several menus counts once. Unpriced dishes can't be ranked, so they're
+  // excluded from highlights.
   const seen = new Set<string>();
-  const vegMains: string[] = [];
+  const pricedVeg: Array<{ name: string; price: number }> = [];
   for (const section of restaurant.sections) {
-    if (!isMainSection(section.name)) continue;
     for (const dish of liveDishes(section)) {
       if (!isVeg(dish)) continue;
-      const key = normalizeMainName(dish.name);
+      const price = parsePrice(dish.price);
+      if (price === null) continue;
+      const key = normalizeDishName(dish.name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      vegMains.push(dish.name.trim());
-      if (vegMains.length >= MAX_VEG_MAINS) break;
+      pricedVeg.push({ name: dish.name.trim(), price });
     }
-    if (vegMains.length >= MAX_VEG_MAINS) break;
   }
+  const highlights = pricedVeg
+    .sort((a, b) => b.price - a.price)
+    .slice(0, MAX_HIGHLIGHTS)
+    .map((d) => d.name);
 
-  return { maxVegOptions, perMenu, totalDishes, vegMains };
+  return { maxVegOptions, bestMenu, perMenu, totalDishes, highlights };
 }

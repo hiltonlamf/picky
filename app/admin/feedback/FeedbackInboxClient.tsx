@@ -4,10 +4,10 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { FeedbackItem } from '@/types';
-import { REPORT_ISSUE_TYPES, GENERAL_FEEDBACK_TYPES } from '@/lib/dietary-config';
+import { REPORT_ISSUE_TYPES, GENERAL_FEEDBACK_TYPES, GUIDE_FEEDBACK_TYPES } from '@/lib/dietary-config';
 
 const ISSUE_LABELS: Record<string, string> = Object.fromEntries(
-  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES].map((t) => [t.value, t.label])
+  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES].map((t) => [t.value, t.label])
 );
 
 function FilterTab({ label, value, active }: { label: string; value: string; active: string }) {
@@ -101,6 +101,11 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
                 <p className="font-semibold text-evergreen">{ISSUE_LABELS[item.issueOrFeedbackType] ?? item.issueOrFeedbackType}</p>
                 {item.dishName && <p className="text-sm text-evergreen/80">Dish: {item.dishName}</p>}
                 {item.restaurantName && <p className="text-sm text-evergreen/80">Restaurant: {item.restaurantName}</p>}
+                {!item.restaurantId && item.city && (
+                  <p className="text-sm text-evergreen/80">
+                    Guide: <span className="capitalize">{item.city}</span>
+                  </p>
+                )}
                 {item.notes && <p className="text-sm text-evergreen mt-2 italic">&ldquo;{item.notes}&rdquo;</p>}
               </div>
               <span className={`text-xs font-mono uppercase px-2 py-1 rounded-full flex-shrink-0 ${statusBadgeClass(item.status)}`}>

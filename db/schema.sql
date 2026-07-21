@@ -75,13 +75,18 @@ CREATE TABLE IF NOT EXISTS dish_reports (
 -- restaurant's data.
 CREATE TABLE IF NOT EXISTS restaurant_feedback (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  restaurant_id   UUID,        -- reference only; intentionally NOT a FK
+  restaurant_id   UUID,        -- reference only; intentionally NOT a FK; NULL for guide-level feedback
   restaurant_name TEXT,
   feedback_type   TEXT NOT NULL,
   notes           TEXT,
   ip_hash         TEXT,
+  city            TEXT,        -- set for guide-level feedback (suggest a restaurant / flag an issue)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Guide-level feedback (no single restaurant): city context column.
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS city TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_restaurant_feedback_created_at ON restaurant_feedback(created_at);
 

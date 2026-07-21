@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { isMainSection, guideInsights } from '@/lib/menu-insights';
+import { parsePrice, guideInsights } from '@/lib/menu-insights';
 import type { Restaurant, MenuSection, Dish, DietaryClassification } from '@/types';
 
 let idCounter = 0;
-function dish(name: string, classification: DietaryClassification): Dish {
+function dish(name: string, classification: DietaryClassification, price: string | null = null): Dish {
   return {
     id: `d${idCounter++}`,
     name,
     description: null,
-    price: null,
+    price,
     classification,
     confidence: 0.9,
     reportCount: 0,
@@ -25,82 +25,67 @@ function section(name: string, dishes: Dish[], menuLabel: string | null = null):
 function restaurant(sections: MenuSection[]): Restaurant {
   return {
     id: 'r1', url: 'https://example.com', city: 'dublin', status: 'done',
-    sections, createdAt: '2026-07-20',
+    sections, createdAt: '2026-07-21',
   };
 }
 
-describe('isMainSection', () => {
-  it('recognises main-course sections', () => {
-    expect(isMainSection('Mains')).toBe(true);
-    expect(isMainSection('Main Courses')).toBe(true);
-    expect(isMainSection('Large Plates')).toBe(true);
-    expect(isMainSection('Secondi')).toBe(true);
+describe('parsePrice', () => {
+  it('parses common formats', () => {
+    expect(parsePrice('€7.50')).toBe(7.5);
+    expect(parsePrice('€29')).toBe(29);
+    expect(parsePrice('12')).toBe(12);
+    expect(parsePrice('8.00')).toBe(8);
+    expect(parsePrice('£12.50')).toBe(12.5);
   });
-
-  it('rejects non-main sections', () => {
-    for (const n of ['Starters', 'Sides', 'Side Dishes', 'Desserts', 'Small Plates', 'Sharing Plates', 'Appetizers']) {
-      expect(isMainSection(n)).toBe(false);
-    }
+  it('returns null for missing/unparseable', () => {
+    expect(parsePrice(null)).toBeNull();
+    expect(parsePrice('')).toBeNull();
+    expect(parsePrice('Market Price')).toBeNull();
   });
 });
 
 describe('guideInsights', () => {
-  it('counts all veg dishes including sides, single menu', () => {
-    const r = restaurant([
-      section('Mains', [dish('Risotto', 'vegetarian'), dish('Steak', 'neither')]),
-      section('Sides', [dish('Chips', 'vegan'), dish('Greens', 'vegan')]),
-    ]);
-    const ins = guideInsights(r);
-    expect(ins.perMenu).toHaveLength(1);
-    expect(ins.perMenu[0].vegOptions).toBe(3); // risotto + 2 vegan sides
-    expect(ins.maxVegOptions).toBe(3);
-    expect(ins.totalDishes).toBe(4);
-  });
-
-  it('ranks by the BEST single menu, not the sum (the SOLE case)', () => {
-    const lunch = [
-      section('Lunch Mains', [dish('L1', 'vegetarian'), dish('L2', 'vegan')], 'Lunch'),
-    ]; // 2 veg
+  it('ranks by the BEST single menu and splits vegan/veggie for that menu', () => {
+    const lunch = [section('Lunch', [dish('L1', 'vegetarian'), dish('L2', 'vegan')], 'Lunch')]; // 2 veg
     const dinner = [
-      section('Dinner Mains', [dish('D1', 'vegetarian'), dish('D2', 'vegetarian'), dish('D3', 'vegan')], 'Dinner'),
-      section('Dinner Sides', [dish('D4', 'vegan')], 'Dinner'),
-    ]; // 4 veg
+      section('Dinner', [dish('D1', 'vegetarian'), dish('D2', 'vegetarian'), dish('D3', 'vegan')], 'Dinner'),
+    ]; // 3 veg (2 veggie, 1 vegan)
     const ins = guideInsights(restaurant([...lunch, ...dinner]));
+    expect(ins.maxVegOptions).toBe(3); // best menu, not 5 (the sum)
+    expect(ins.bestMenu).toEqual({ label: 'Dinner', vegan: 1, vegetarian: 2 });
     expect(ins.perMenu).toEqual([
       { label: 'Lunch', vegOptions: 2 },
-      { label: 'Dinner', vegOptions: 4 },
+      { label: 'Dinner', vegOptions: 3 },
     ]);
-    expect(ins.maxVegOptions).toBe(4); // best menu, NOT 6 (the sum)
-    expect(ins.totalDishes).toBe(6);
+    expect(ins.totalDishes).toBe(5);
   });
 
-  it('highlights up to 3 veg mains, de-duplicated, from main sections only', () => {
+  it('highlights up to 3 priciest veg dishes, de-duped across menus', () => {
     const r = restaurant([
-      section('Starters', [dish('Soup', 'vegan')]),
+      section('Starters', [dish('Soup', 'vegan', '€6')]),
       section('Mains', [
-        dish('Aubergine Parmigiana', 'vegetarian'),
-        dish('Mushroom Wellington', 'vegan'),
-        dish('Beef', 'neither'),
-        dish('Lentil Dhal', 'vegan'),
-        dish('Chickpea Curry', 'vegan'),
+        dish('Truffle Risotto', 'vegetarian', '€24'),
+        dish('Aubergine (V)', 'vegan', '€19'),
+        dish('Aubergine V', 'vegan', '€19'), // same dish, different spelling → deduped
+        dish('Wellington', 'vegan', '€22'),
+        dish('Steak', 'neither', '€30'), // not veg → excluded
+        dish('No Price Special', 'vegan', null), // unpriced → excluded
       ]),
-      section('Sides', [dish('Chips', 'vegan')]),
     ]);
+    expect(guideInsights(r).highlights).toEqual(['Truffle Risotto', 'Wellington', 'Aubergine (V)']);
+  });
+
+  it('returns no highlights when no veg dish has a price', () => {
+    const r = restaurant([section('Menu', [dish('Chips', 'vegan', null), dish('Steak', 'neither', '€20')])]);
+    expect(guideInsights(r).highlights).toEqual([]);
+  });
+
+  it('excludes soft-deleted dishes', () => {
+    const d = dish('Deleted', 'vegan', '€40');
+    d.deletedAt = '2026-07-20';
+    const r = restaurant([section('Menu', [d, dish('Live', 'vegetarian', '€10')])]);
     const ins = guideInsights(r);
-    expect(ins.vegMains).toEqual(['Aubergine Parmigiana', 'Mushroom Wellington', 'Lentil Dhal']);
-  });
-
-  it('de-dupes the same main across menus despite veg-marker spelling', () => {
-    const r = restaurant([
-      section('À La Carte Mains', [dish('Pappardelle (V)', 'vegetarian')], 'À La Carte'),
-      section('Dinner Mains', [dish('Pappardelle V', 'vegetarian'), dish('Aubergine', 'vegan')], 'Dinner'),
-    ]);
-    expect(guideInsights(r).vegMains).toEqual(['Pappardelle (V)', 'Aubergine']);
-  });
-
-  it('returns no mains when there is no main section', () => {
-    const r = restaurant([section('Small Plates', [dish('Padron Peppers', 'vegan')])]);
-    expect(guideInsights(r).vegMains).toEqual([]);
-    expect(guideInsights(r).maxVegOptions).toBe(1);
+    expect(ins.totalDishes).toBe(1);
+    expect(ins.highlights).toEqual(['Live']);
   });
 });

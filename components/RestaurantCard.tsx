@@ -7,16 +7,8 @@ interface Props {
   restaurant: Restaurant;
 }
 
-function countByClassification(restaurant: Restaurant, classification: string) {
-  return restaurant.sections
-    .flatMap((s) => s.dishes)
-    .filter((d) => d.classification === classification).length;
-}
-
 export default function RestaurantCard({ restaurant }: Props) {
-  const veganCount = countByClassification(restaurant, 'vegan');
-  const vegetarianCount = countByClassification(restaurant, 'vegetarian');
-  const { maxVegOptions, perMenu, vegMains } = guideInsights(restaurant);
+  const { maxVegOptions, bestMenu, perMenu, highlights } = guideInsights(restaurant);
 
   // Per-menu breakdown only matters when there's more than one source menu.
   const namedMenus = perMenu.filter((m) => m.label);
@@ -42,6 +34,23 @@ export default function RestaurantCard({ restaurant }: Props) {
         </p>
       )}
 
+      {/* Vegan / veggie split — from the BEST single menu (what a diner sees at
+          one sitting), shown once each with the emojis. */}
+      <div className="flex gap-3 mb-2">
+        {bestMenu.vegan > 0 && (
+          <span className="text-xs flex items-center gap-1 text-picky-700">
+            <span aria-hidden="true">🌱</span>
+            {bestMenu.vegan} vegan
+          </span>
+        )}
+        {bestMenu.vegetarian > 0 && (
+          <span className="text-xs flex items-center gap-1 text-picky-600">
+            <span aria-hidden="true">🥚</span>
+            {bestMenu.vegetarian} veggie
+          </span>
+        )}
+      </div>
+
       {/* Per-menu breakdown — a diner sees one menu per visit, so show each. */}
       {showPerMenu && (
         <p className="text-xs text-evergreen/70 mb-2">
@@ -54,25 +63,10 @@ export default function RestaurantCard({ restaurant }: Props) {
         </p>
       )}
 
-      <div className="flex gap-3 mb-2">
-        {veganCount > 0 && (
-          <span className="text-xs flex items-center gap-1 text-picky-700">
-            <span aria-hidden="true">🌱</span>
-            {veganCount} vegan
-          </span>
-        )}
-        {vegetarianCount > 0 && (
-          <span className="text-xs flex items-center gap-1 text-picky-600">
-            <span aria-hidden="true">🥚</span>
-            {vegetarianCount} veggie
-          </span>
-        )}
-      </div>
-
-      {/* A few example veg mains — the useful signal (not just sides/desserts). */}
-      {vegMains.length > 0 && (
+      {/* A few standout veg dishes (the priciest ≈ the mains). */}
+      {highlights.length > 0 && (
         <p className="text-xs text-evergreen/80 mb-3">
-          <span className="font-medium text-evergreen">Mains:</span> {vegMains.join(', ')}
+          <span className="font-medium text-evergreen">Highlights:</span> {highlights.join(', ')}
         </p>
       )}
 

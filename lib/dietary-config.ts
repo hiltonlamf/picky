@@ -68,6 +68,13 @@ export const GENERAL_FEEDBACK_TYPES = [
   { value: 'other', label: 'Something else' },
 ];
 
+// Guide-level feedback (not tied to one restaurant) — shown on the city guide.
+export const GUIDE_FEEDBACK_TYPES = [
+  { value: 'suggest_restaurant', label: 'Suggest a restaurant to add to this guide' },
+  { value: 'guide_issue', label: 'Flag an issue with a restaurant in this guide' },
+  { value: 'other', label: 'Something else' },
+];
+
 export const CONFIDENCE_THRESHOLD_WARNING = 0.6;
 export const STALENESS_DAYS = 30;
 export const REPORT_COUNT_WARNING_THRESHOLD = 3;
