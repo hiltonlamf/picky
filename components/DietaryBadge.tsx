@@ -1,11 +1,11 @@
 import type { DietaryClassification } from '@/types';
 
 // Emoji, not the SVG icon set, on purpose: at a glance across a long list of
-// dishes, distinct shape+color (🌱 vs 🥚 vs 🥩 vs ❓) reads faster than four
+// dishes, distinct shape+color (🌱 vs 🍳 vs 🥩 vs ❓) reads faster than four
 // icons that are all "some shade of green".
 const CONFIG: Record<DietaryClassification, { label: string; className: string; emoji: string }> = {
   vegan: { label: 'Vegan', className: 'badge-vegan', emoji: '🌱' },
-  vegetarian: { label: 'Veggie', className: 'badge-vegetarian', emoji: '🥚' },
+  vegetarian: { label: 'Veggie', className: 'badge-vegetarian', emoji: '🍳' },
   neither: { label: 'Not vegetarian', className: 'badge-neither', emoji: '🥩' },
   unknown: { label: 'Double-check this one', className: 'badge-unknown', emoji: '❓' },
 };

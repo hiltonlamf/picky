@@ -45,6 +45,20 @@ export function textLooksLikeMenu(text: string): boolean {
 export const DRINK_SOURCE_RE =
   /\b(wine|wines|winelist|drink|drinks|beverage|beverages|cocktail|cocktails|spirits|aperitif|digestif|bar\s?list|bar\s?menu|beer\s?list|gin\s?list|whisk(e)?y\s?list|vino|vinos|boissons|bebidas)\b/i;
 
+/**
+ * Not real dining menus — allergen sheets, catering/collection/delivery/takeaway
+ * ordering, kids' menus (not the guide's audience), gift vouchers, group-booking
+ * packages. Dropped in discovery so they never become a "menu" for ANY restaurant
+ * or city. Kept separate from DRINK_SOURCE_RE for clarity.
+ */
+export const NON_FOOD_MENU_RE =
+  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu)\b/i;
+
+/** True if a menu label / hint is a non-food menu that should never be captured. */
+export function isNonFoodMenu(text: string): boolean {
+  return NON_FOOD_MENU_RE.test(text ?? '');
+}
+
 /** Turn a URL into a short human hint from its slug, e.g. ".../wine-list.pdf" → "wine list". */
 export function hintFromUrl(url: string): string {
   try {
@@ -170,7 +184,11 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
       const key = `${r.type}|${r.ref}`;
       if (seen.has(key)) return false;
       seen.add(key);
-      if (r.type !== 'text' && DRINK_SOURCE_RE.test(`${r.hint} ${hintFromUrl(r.ref)}`)) return false;
+      const hintText = `${r.hint} ${hintFromUrl(r.ref)}`;
+      // Non-food menus (allergen/catering/kids/collection/...) are dropped for
+      // ALL source types, including text/pdf — they are never real dining menus.
+      if (isNonFoodMenu(hintText)) return false;
+      if (r.type !== 'text' && DRINK_SOURCE_RE.test(hintText)) return false;
       return true;
     });
   };
@@ -224,6 +242,9 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     const kept = judged.filter(
       (j) =>
         !j.verdict.isDrinkOnly &&
+        // Non-food menus are dropped even for text/pdf (checked against the AI's
+        // label too, in case the raw hint was opaque) — overrides the survival rule.
+        !isNonFoodMenu(`${j.verdict.label} ${j.raw.hint} ${hintFromUrl(j.raw.ref)}`) &&
         (j.verdict.isDistinctMenu || j.raw.type === 'text' || j.raw.type === 'pdf')
     );
 

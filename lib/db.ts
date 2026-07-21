@@ -16,8 +16,11 @@ import type {
   FeedbackItem,
   FeedbackStatus,
   DishReportSummary,
+  RestaurantStatus,
 } from '@/types';
 import type { AIUsage } from './ai';
+import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
+import { guideInsights } from './menu-insights';
 import {
   verifyVegClassifications,
   classifyMenuFromImageBuffers,
@@ -61,6 +64,55 @@ export function normalizeUrl(url: string): string {
     .replace(/\/+$/, '');
 }
 
+// Hosts where MANY distinct restaurants live under one domain (hosted ordering
+// platforms, maps, social, review sites). We must NOT collapse these to the
+// bare host, or two unrelated restaurants would merge into one — so for them
+// the full path stays part of the identity. Everything else is treated as a
+// dedicated restaurant domain whose subpages (/menu, /, /menu/lunch, ...) are
+// all the same restaurant.
+const SHARED_PLATFORM_HOST_RE =
+  /(^|\.)(toasttab\.com|square\.site|mryum\.com|bopple\.com|storekit\.com|flipdish\.[a-z.]+|google\.[a-z.]+|goo\.gl|instagram\.com|facebook\.com|fb\.com|yelp\.[a-z.]+|tripadvisor\.[a-z.]+|linktr\.ee|linktree\.[a-z.]+)$/i;
+
+// Registrable host, www-stripped, scheme-agnostic. Returns null if the input
+// can't be parsed as a URL (falls back to the legacy full-string normalizer).
+function restaurantHost(url: string): string | null {
+  try {
+    const trimmed = url.trim();
+    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const host = new URL(withScheme).hostname.toLowerCase().replace(/^www\./, '');
+    return host || null;
+  } catch {
+    return null;
+  }
+}
+
+function isSharedPlatformHost(host: string): boolean {
+  return /^(order|orders|ordering)\./i.test(host) || SHARED_PLATFORM_HOST_RE.test(host);
+}
+
+// The identity key used to dedup restaurants. A dedicated restaurant domain
+// collapses every subpage / www / scheme variant to its bare root host, so
+// `dohertysbar.ie/menu/`, `https://dohertysbar.ie`, `www.dohertysbar.ie` all
+// share ONE key. Shared platforms keep their full normalized path so distinct
+// restaurants on a common host remain distinct.
+export function restaurantDedupKey(url: string): string {
+  const host = restaurantHost(url);
+  if (!host) return normalizeUrl(url);
+  if (isSharedPlatformHost(host)) return normalizeUrl(url);
+  return host;
+}
+
+// The URL we STORE as a restaurant's identity: a clean, valid, clickable root
+// link (`https://<host>`) for a dedicated domain, with subpages stripped; or
+// the URL as submitted for shared platforms, where the path IS the identity.
+// The actual menu page is preserved separately in `menu_url` / `canonical_url`.
+export function canonicalRestaurantUrl(url: string): string {
+  const host = restaurantHost(url);
+  if (!host) return url.trim();
+  if (isSharedPlatformHost(host)) return url.trim();
+  return `https://${host}`;
+}
+
 type DbRestaurantRow = {
   id: string;
   url: string;
@@ -82,27 +134,41 @@ type DbRow = Record<string, unknown>;
  * to equal another restaurant's already-resolved canonical_url.
  */
 export function findMatchingRestaurantId(
-  normalized: string,
+  targetUrl: string,
   rows: Array<{ id: string; url: string; canonical_url: string | null }>
 ): string | null {
-  const byUrl = rows.find((r) => normalizeUrl(r.url) === normalized);
-  if (byUrl) return byUrl.id;
-  const byCanonical = rows.find((r) => r.canonical_url && normalizeUrl(r.canonical_url) === normalized);
-  return byCanonical ? byCanonical.id : null;
+  // Primary: dedup-key match — collapses subpages/www/scheme of a dedicated
+  // domain (the dohertysbar.ie/menu vs dohertysbar.ie duplicate), while
+  // keeping shared-platform restaurants distinct.
+  const key = restaurantDedupKey(targetUrl);
+  const byKey = rows.find(
+    (r) =>
+      restaurantDedupKey(r.url) === key ||
+      (r.canonical_url != null && restaurantDedupKey(r.canonical_url) === key)
+  );
+  if (byKey) return byKey.id;
+
+  // Fallback: legacy normalized full-URL match (covers any pre-existing row
+  // whose url still carries a path, and the canonical_url-equality case).
+  const normalized = normalizeUrl(targetUrl);
+  const byUrl = rows.find(
+    (r) =>
+      normalizeUrl(r.url) === normalized ||
+      (r.canonical_url != null && normalizeUrl(r.canonical_url) === normalized)
+  );
+  return byUrl ? byUrl.id : null;
 }
 
 export async function findExistingRestaurant(
   url: string
 ): Promise<{ id: string; status: string; lastScrapedAt: string | null } | null> {
-  const normalized = normalizeUrl(url);
-
   // Small table (low hundreds of rows at this project's scale) — comparing
   // normalized forms in JS is simpler and far more robust than trying to
   // enumerate every URL-formatting variant as a separate DB query.
   const { data } = await db().from('restaurants').select('id, url, canonical_url, last_scraped_at, status');
   const rows = (data ?? []) as DbRestaurantRow[];
 
-  const matchId = findMatchingRestaurantId(normalized, rows);
+  const matchId = findMatchingRestaurantId(url, rows);
   if (!matchId) return null;
 
   const row = rows.find((r) => r.id === matchId)!;
@@ -190,6 +256,8 @@ export async function fetchRestaurantWithDishes(
     menuUrl: r.menu_url,
     status: r.status,
     errorMessage: r.error_message,
+    cuisine: r.cuisine ?? null,
+    guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
     createdAt: r.created_at,
   };
@@ -240,9 +308,17 @@ export function matchVerifiedDishes(
 }
 
 export async function createRestaurantRecord(url: string, city = 'dublin'): Promise<string> {
+  // Store the clean root URL as the identity (subpages stripped for dedicated
+  // domains, kept as-is for shared platforms) and stamp the dedup key so the
+  // unique index enforces one-row-per-restaurant at write time.
   const { data, error } = await db()
     .from('restaurants')
-    .insert({ url, city, status: 'processing' })
+    .insert({
+      url: canonicalRestaurantUrl(url),
+      city,
+      status: 'processing',
+      dedup_key: restaurantDedupKey(url),
+    })
     .select('id')
     .single();
   if (error) throw new Error(`Failed to create restaurant: ${error.message}`);
@@ -326,6 +402,9 @@ export async function saveClassifiedMenu(
       menu_url: menuUrl,
       status: 'done',
       last_scraped_at: new Date().toISOString(),
+      // Only overwrite cuisine when this run actually detected one, so a reparse
+      // that omits it doesn't wipe a good existing value.
+      ...(menu.cuisine ? { cuisine: menu.cuisine } : {}),
       ...(usage && {
         model_used: usage.model,
         tokens_in: usage.tokensIn,
@@ -521,24 +600,27 @@ export async function reportDish(
 }
 
 export async function submitFeedback(
-  restaurantId: string,
+  restaurantId: string | null,
   restaurantName: string | null,
   feedbackType: string,
   notes: string,
   ipHash: string,
-  anonId?: string | null
+  anonId?: string | null,
+  city?: string | null
 ): Promise<void> {
   const row = {
-    restaurant_id: restaurantId,
+    restaurant_id: restaurantId, // null for guide-level feedback
     restaurant_name: restaurantName,
     feedback_type: feedbackType,
     notes: notes || null,
     ip_hash: ipHash,
+    city: city ?? null,
   };
   const { error } = await db().from('restaurant_feedback').insert({ ...row, anon_id: anonId ?? null });
-  // Degrade gracefully when the anon_id column is unmigrated.
+  // Degrade gracefully when the anon_id / city columns aren't migrated yet.
   if (error) {
-    const retry = await db().from('restaurant_feedback').insert(row);
+    const { city: _city, ...base } = row;
+    const retry = await db().from('restaurant_feedback').insert(base);
     if (retry.error) throw new Error(`Failed to save feedback: ${retry.error.message}`);
   }
 }
@@ -566,8 +648,18 @@ export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]
   const rows = (data ?? []) as Array<{ restaurant_id: string; display_order: number }>;
   if (!rows.length) return [];
 
-  const results = await Promise.all(rows.map((r) => fetchRestaurantWithDishes(r.restaurant_id)));
-  return results.filter(Boolean) as Restaurant[];
+  const results = (await Promise.all(rows.map((r) => fetchRestaurantWithDishes(r.restaurant_id)))).filter(
+    Boolean
+  ) as Restaurant[];
+
+  // Rank best-for-vegetarians first: by the best SINGLE menu's veg count (a diner
+  // only sees one menu per visit), tie-broken by the curated display order.
+  const orderById = new Map(rows.map((r) => [r.restaurant_id, r.display_order]));
+  return results.sort((a, b) => {
+    const diff = guideInsights(b).maxVegOptions - guideInsights(a).maxVegOptions;
+    if (diff !== 0) return diff;
+    return (orderById.get(a.id) ?? 0) - (orderById.get(b.id) ?? 0);
+  });
 }
 
 // ============================================================
@@ -768,6 +860,10 @@ export interface EvalDashboardStats {
   // ③ Dishes found
   lowDishThreshold: number;
   lowDishRestaurants: Array<{ id: string; name: string | null; url: string; dishCount: number }>;
+  // Featured but withheld from the public guide (in a guide, yet isPubliclyVisible
+  // is false) — the "looks odd, review it" queue. minGuideDishes = the public bar.
+  minGuideDishes: number;
+  withheldFeatured: Array<{ id: string; name: string | null; url: string; cities: string[]; dishCount: number; reasons: string[] }>;
   // ④ Classification
   dishesReviewed: number;
   dishesTotal: number;
@@ -788,7 +884,7 @@ export interface EvalDashboardStats {
 export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
   const { data: restRows } = await db()
     .from('restaurants')
-    .select('id, name, url, canonical_url, status, last_scraped_at')
+    .select('id, name, url, canonical_url, status, last_scraped_at, guide_approved_at')
     .order('created_at', { ascending: false });
   const restaurants = (restRows ?? []) as DbRow[];
 
@@ -815,6 +911,65 @@ export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
     } else if (status === 'done' && dishCount > 0 && dishCount < LOW_DISH_COUNT_THRESHOLD) {
       lowDishRestaurants.push({ id, name: (r.name as string | null) ?? null, url: r.url as string, dishCount });
     }
+  }
+
+  // Featured-but-withheld queue: restaurants that ARE in a guide yet fail the
+  // exact same public-visibility gate the /dublin page uses. Reusing
+  // isPubliclyVisible/computeReviewFlags guarantees this list matches what
+  // diners are actually not seeing. Only featured restaurants need the (heavier)
+  // per-dish fetch, so this stays cheap.
+  const { data: featRows } = await db().from('featured_restaurants').select('restaurant_id, city');
+  const featuredCitiesById = new Map<string, string[]>();
+  for (const f of (featRows ?? []) as DbRow[]) {
+    const rid = f.restaurant_id as string;
+    if (!featuredCitiesById.has(rid)) featuredCitiesById.set(rid, []);
+    featuredCitiesById.get(rid)!.push(f.city as string);
+  }
+  const featuredIds = Array.from(featuredCitiesById.keys());
+  const featuredDishes = new Map<string, Array<Pick<Dish, 'name' | 'description' | 'deletedAt'>>>();
+  if (featuredIds.length > 0) {
+    const { data: fd } = await db().from('dishes').select('restaurant_id, name, description, deleted_at').in('restaurant_id', featuredIds);
+    for (const d of (fd ?? []) as DbRow[]) {
+      const rid = d.restaurant_id as string;
+      if (!featuredDishes.has(rid)) featuredDishes.set(rid, []);
+      featuredDishes.get(rid)!.push({
+        name: d.name as string,
+        description: (d.description as string | null) ?? null,
+        deletedAt: (d.deleted_at as string | null) ?? null,
+      });
+    }
+  }
+  const restById = new Map(restaurants.map((r) => [r.id as string, r]));
+  const withheldFeatured: EvalDashboardStats['withheldFeatured'] = [];
+  for (const rid of featuredIds) {
+    const r = restById.get(rid);
+    if (!r) continue;
+    const live = (featuredDishes.get(rid) ?? []).filter((d) => !d.deletedAt);
+    // Minimal restaurant shape — computeReviewFlags/isPubliclyVisible only read
+    // sections[].dishes[].{name,description,deletedAt}, status and guideApprovedAt.
+    const synthetic = {
+      status: r.status as RestaurantStatus,
+      guideApprovedAt: (r.guide_approved_at as string | null) ?? null,
+      sections: [{ dishes: live as unknown as Dish[] }],
+    } as Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>;
+    if (isPubliclyVisible(synthetic)) continue;
+
+    const reasons: string[] = [];
+    const status = r.status as string;
+    if (status !== 'done') reasons.push(`not fully analysed (status: ${status})`);
+    else if (live.length === 0) reasons.push('0 dishes — the menu failed to read');
+    else if (live.length < MIN_GUIDE_DISHES) reasons.push(`only ${live.length} dish${live.length === 1 ? '' : 'es'} (needs ${MIN_GUIDE_DISHES})`);
+    for (const f of computeReviewFlags(synthetic)) {
+      if (f.code === 'menu_as_dish') reasons.push(f.detail);
+    }
+    withheldFeatured.push({
+      id: rid,
+      name: (r.name as string | null) ?? null,
+      url: r.url as string,
+      cities: featuredCitiesById.get(rid)!,
+      dishCount: live.length,
+      reasons,
+    });
   }
 
   // ① Menu discovery: reviewed count + clean rate.
@@ -874,6 +1029,8 @@ export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
     fetchFailures,
     lowDishThreshold: LOW_DISH_COUNT_THRESHOLD,
     lowDishRestaurants,
+    minGuideDishes: MIN_GUIDE_DISHES,
+    withheldFeatured,
     dishesReviewed,
     dishesTotal,
     dishAccuracyPct,
@@ -1003,6 +1160,27 @@ export async function setGuideMembership(input: {
   } else {
     await db().from('featured_restaurants').delete().eq('restaurant_id', input.restaurantId).eq('city', input.city);
   }
+}
+
+/** Approve (or un-approve) a review-flagged restaurant for public display.
+ *  Approval lets an odd-but-fine restaurant (e.g. a tasting menu the AI read as
+ *  one "dish") appear on the public guide despite its flag; un-approving hides
+ *  it again. Has no effect on the ≥7-dish gate, which is enforced separately. */
+export async function setGuideApproval(restaurantId: string, approved: boolean): Promise<void> {
+  const { error } = await db()
+    .from('restaurants')
+    .update({ guide_approved_at: approved ? new Date().toISOString() : null })
+    .eq('id', restaurantId);
+  if (error) throw new Error(`Failed to update guide approval: ${error.message}`);
+}
+
+/** Permanently delete a restaurant. Menus, sections, dishes, dish reports and
+ *  featured_restaurants rows cascade via ON DELETE CASCADE. Wipe-safe records
+ *  (restaurant_feedback) and the URL-keyed golden set (eval_cases) are
+ *  intentionally decoupled and survive. */
+export async function deleteRestaurant(restaurantId: string): Promise<void> {
+  const { error } = await db().from('restaurants').delete().eq('id', restaurantId);
+  if (error) throw new Error(`Failed to delete restaurant: ${error.message}`);
 }
 
 export interface ApplyDishVerdictInput {
@@ -1209,6 +1387,7 @@ export async function getFeedbackInbox(status?: FeedbackStatus): Promise<Feedbac
     issueOrFeedbackType: f.feedback_type as string,
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
+    city: (f.city as string | null) ?? null,
   }));
 
   return [...dishItems, ...feedbackItems].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -1553,6 +1732,7 @@ export async function getRestaurantFeedback(
     issueOrFeedbackType: f.feedback_type as string,
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
+    city: (f.city as string | null) ?? null,
   }));
 
   return { dishReports, restaurantFeedback };

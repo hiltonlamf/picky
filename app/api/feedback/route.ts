@@ -7,10 +7,13 @@ import { ANON_ID_COOKIE } from '@/lib/telemetry';
 import { hashIp, getClientIp } from '@/lib/rate-limit';
 
 const schema = z.object({
-  restaurantId: z.string().uuid(),
+  // Optional: guide-level feedback (suggest a restaurant / flag an issue) has no
+  // single restaurant — it carries a `city` instead.
+  restaurantId: z.string().uuid().optional().nullable(),
   restaurantName: z.string().max(200).optional().nullable(),
   feedbackType: z.string().min(1).max(64),
   notes: z.string().max(1000).optional().default(''),
+  city: z.string().max(100).optional().nullable(),
 });
 
 export async function POST(request: NextRequest) {
@@ -21,16 +24,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
 
-    const { restaurantId, restaurantName, feedbackType, notes } = parsed.data;
+    const { restaurantId, restaurantName, feedbackType, notes, city } = parsed.data;
     const ip = getClientIp(request);
     const ipHash = hashIp(ip);
     const anonId = request.cookies.get(ANON_ID_COOKIE)?.value ?? null;
 
-    await submitFeedback(restaurantId, restaurantName ?? null, feedbackType, notes, ipHash, anonId);
+    await submitFeedback(restaurantId ?? null, restaurantName ?? null, feedbackType, notes, ipHash, anonId, city ?? null);
     // Mirrors the restaurant_feedback insert so PostHog and the DB agree.
     await captureServer(anonId ?? ipHash, 'feedback_submitted', {
       feedback_type: feedbackType,
-      restaurant_id: restaurantId,
+      restaurant_id: restaurantId ?? null,
+      city: city ?? null,
     });
     return NextResponse.json({ success: true });
   } catch (err) {

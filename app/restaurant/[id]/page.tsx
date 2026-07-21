@@ -9,6 +9,7 @@ import FreshnessIndicator from '@/components/FreshnessIndicator';
 import Disclaimer from '@/components/Disclaimer';
 import ShareButton from '@/components/ShareButton';
 import FeedbackModal from '@/components/FeedbackModal';
+import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
@@ -171,7 +172,7 @@ export default function RestaurantPage() {
 
   const filters: { value: Filter; label: string; count: number }[] = [
     { value: 'all', label: '🍽️ Everything', count: totalDishes },
-    { value: 'vegetarian', label: '🥚 Veggie', count: vegCount },
+    { value: 'vegetarian', label: '🍳 Veggie', count: vegCount },
     { value: 'vegan', label: '🌱 Vegan', count: veganCount },
   ];
 
@@ -199,22 +200,39 @@ export default function RestaurantPage() {
             <ShareButton restaurant={restaurant} />
           </div>
         </div>
-        <p className="text-xs text-evergreen/80 mt-1">AI-read &amp; verified today</p>
-        {restaurant.menuUrl && (
-          <a
-            href={restaurant.menuUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-picky-600 hover:underline mt-1 inline-block"
-          >
-            View original menu ↗
-          </a>
+        {restaurant.cuisine && (
+          <p className="text-xs font-mono uppercase tracking-[0.08em] text-evergreen/50 mt-1">{restaurant.cuisine}</p>
         )}
-        <div className="mt-3">
+        {/* Links out: the restaurant's own site, and the specific menu page when
+            we have one (some sites publish no direct menu link — then it's hidden). */}
+        <div className="mt-1 flex items-center gap-3 flex-wrap">
+          {(restaurant.canonicalUrl || restaurant.url) && (
+            <a
+              href={restaurant.url || restaurant.canonicalUrl || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-picky-600 hover:underline"
+            >
+              Visit website ↗
+            </a>
+          )}
+          {restaurant.menuUrl && (
+            <a
+              href={restaurant.menuUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-picky-600 hover:underline"
+            >
+              View original menu ↗
+            </a>
+          )}
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
           <FreshnessIndicator
             lastScrapedAt={restaurant.lastScrapedAt}
             restaurantId={restaurant.id}
           />
+          <FlagOutdatedButton restaurantId={restaurant.id} restaurantName={restaurant.name ?? null} />
         </div>
       </div>
 
@@ -234,7 +252,7 @@ export default function RestaurantPage() {
           <div className="text-xs text-evergreen/80 mt-0.5">Vegan</div>
         </div>
         <div className="card p-3 text-center">
-          <div className="text-lg mb-0.5" aria-hidden="true">🥚</div>
+          <div className="text-lg mb-0.5" aria-hidden="true">🍳</div>
           <div className="text-2xl font-bold text-picky-600">{vegCount}</div>
           <div className="text-xs text-evergreen/80 mt-0.5">Veggie</div>
         </div>

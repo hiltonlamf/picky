@@ -41,6 +41,43 @@ export default async function AdminEvalPage() {
         </Link>
       </p>
 
+      {/* Needs review — featured restaurants the public ISN'T seeing. */}
+      <div className={`card p-4 mb-8 ${stats.withheldFeatured.length > 0 ? 'border-l-4 border-l-sun-500' : ''}`}>
+        <h2 className="eyebrow mb-2">⚠ Needs review — in a guide but hidden from the public</h2>
+        <p className="text-sm text-evergreen/90 mb-3">
+          <span className="font-bold text-evergreen">{stats.withheldFeatured.length}</span> featured restaurant(s) are being
+          withheld from the public guide because they look odd (too few dishes, or a tasting/dim-sum menu captured as a
+          single &ldquo;dish&rdquo;). Open one to fix its menu, <em>Approve for public</em> if it&rsquo;s actually fine, or
+          delete it. Restaurants with at least {stats.minGuideDishes} dishes and no odd menus appear automatically.
+        </p>
+        {stats.withheldFeatured.length === 0 ? (
+          <p className="text-xs text-evergreen/70">None — every featured restaurant is clean and visible. 🎉</p>
+        ) : (
+          <div className="divide-y divide-mint-100">
+            {stats.withheldFeatured.map((r) => (
+              <Link
+                key={r.id}
+                href={`/admin/restaurants/${r.id}/review`}
+                className="flex items-start justify-between gap-3 py-2 hover:bg-mint-50 transition-colors"
+              >
+                <span className="min-w-0">
+                  <span className="text-sm font-medium text-evergreen truncate block">
+                    {r.name ?? r.url}
+                    <span className="ml-2 text-[10px] font-medium text-lime bg-evergreen rounded-full px-2 py-0.5 align-middle">
+                      ⭐ {r.cities.join(', ')}
+                    </span>
+                  </span>
+                  <span className="text-xs text-sun-800 block">{r.reasons.join(' · ')}</span>
+                </span>
+                <span className="text-xs font-mono px-2 py-1 rounded-full bg-sun-50 text-sun-800 flex-shrink-0">
+                  {r.dishCount} dish{r.dishCount === 1 ? '' : 'es'}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* ① Menus — the top priority: the right menus, no more, no fewer. */}
       <h2 className="eyebrow mb-3">① Menus — are we finding the right menus?</h2>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">

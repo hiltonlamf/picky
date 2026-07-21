@@ -23,6 +23,26 @@ const MENU_LINK_KEYWORDS = [
   'speisekarte', 'kaart', 'menukaart', 'order',
 ];
 
+// Meal-name links: a real menu subpage is often just "/lunch/" or "/dinner/"
+// with no "menu"/"food" in the slug, so those slip past MENU_LINK_KEYWORDS.
+// Scoring these as well lets discovery find them (both hyphen and space forms,
+// since slugs use hyphens and anchor text uses spaces).
+const MEAL_NAME_KEYWORDS = [
+  'lunch', 'dinner', 'brunch', 'breakfast', 'tasting', 'specials', 'sharing',
+  'sunday', 'à la carte', 'a la carte', 'a-la-carte', 'set menu', 'set-menu',
+  'early bird', 'early-bird', 'pre-theatre', 'pre theatre', 'neighbourhood',
+];
+
+/** Sum keyword hits for a link: +2 for a hit in the anchor text, +3 in the URL. */
+function keywordScore(text: string, href: string): number {
+  let score = 0;
+  for (const keyword of [...MENU_LINK_KEYWORDS, ...MEAL_NAME_KEYWORDS]) {
+    if (text.includes(keyword)) score += 2;
+    if (href.includes(keyword)) score += 3;
+  }
+  return score;
+}
+
 // Hosted ordering platforms host the restaurant's live menu. As MENU SOURCES
 // they are first-class (unlike homepage resolution, where they're excluded).
 const ORDERING_HOST_RE =
@@ -302,11 +322,7 @@ export function findMenuLinks(
     };
 
     if (isPdfUrl(resolvedHref)) {
-      let score = 0;
-      for (const keyword of MENU_LINK_KEYWORDS) {
-        if (text.includes(keyword)) score += 2;
-        if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
-      }
+      const score = keywordScore(text, resolvedHref.toLowerCase());
       // Any PDF linked from a menu keyword anchor is a good candidate
       if (score > 0 || text.includes('download') || text.includes('pdf')) {
         pdfCandidates.push({ url: resolvedHref, score: score || 1 });
@@ -320,11 +336,7 @@ export function findMenuLinks(
     // the restaurant's live menu.
     if (isExternal && !isOrderingHost(resolvedHref)) return;
 
-    let score = isExternal ? 2 : 0;
-    for (const keyword of MENU_LINK_KEYWORDS) {
-      if (text.includes(keyword)) score += 2;
-      if (resolvedHref.toLowerCase().includes(keyword)) score += 3;
-    }
+    const score = (isExternal ? 2 : 0) + keywordScore(text, resolvedHref.toLowerCase());
     if (score > 0) {
       htmlCandidates.push({ url: resolvedHref, score });
       remember(resolvedHref);

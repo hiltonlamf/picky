@@ -75,13 +75,18 @@ CREATE TABLE IF NOT EXISTS dish_reports (
 -- restaurant's data.
 CREATE TABLE IF NOT EXISTS restaurant_feedback (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  restaurant_id   UUID,        -- reference only; intentionally NOT a FK
+  restaurant_id   UUID,        -- reference only; intentionally NOT a FK; NULL for guide-level feedback
   restaurant_name TEXT,
   feedback_type   TEXT NOT NULL,
   notes           TEXT,
   ip_hash         TEXT,
+  city            TEXT,        -- set for guide-level feedback (suggest a restaurant / flag an issue)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Guide-level feedback (no single restaurant): city context column.
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS city TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_restaurant_feedback_created_at ON restaurant_feedback(created_at);
 
@@ -133,6 +138,23 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log (created_
 ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS menu_candidates JSONB,
   ADD COLUMN IF NOT EXISTS candidates_at   TIMESTAMPTZ;
+
+-- De-duplication key + public-guide review gate.
+-- dedup_key: registrable root host for a dedicated restaurant domain (so
+--   /menu, /, www. and scheme variants collapse to one restaurant), or the
+--   full normalized path for shared platforms (Toast/Square/Maps/social/...),
+--   where many restaurants share a host. Computed in app code (lib/db.ts
+--   restaurantDedupKey), backfilled by scripts/dedupe-restaurants.ts.
+-- guide_approved_at: set when an admin approves an odd-but-featured restaurant
+--   for public display; NULL means a flagged restaurant stays hidden.
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS dedup_key         TEXT,
+  ADD COLUMN IF NOT EXISTS guide_approved_at TIMESTAMPTZ;
+
+-- Cuisine label (Italian / Indian / Chinese / ...), emitted by the extraction
+-- prompt and shown on guide cards. Nullable; backfilled by scripts/backfill-cuisine.ts.
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS cuisine TEXT;
 
 -- Passive parse-attempt telemetry (mirrors
 -- supabase/migrations/20260707000000_add_parse_attempts.sql).
@@ -248,6 +270,13 @@ ALTER TABLE restaurant_feedback
 
 -- One row per URL (case-insensitive via unique index)
 CREATE UNIQUE INDEX IF NOT EXISTS restaurants_url_unique ON restaurants (lower(url));
+
+-- One restaurant per dedup key (the durable guard against subpage/www/scheme
+-- duplicates). Partial index so legacy rows with a NULL key (pre-backfill)
+-- don't collide. Create only AFTER scripts/dedupe-restaurants.ts resolves
+-- existing duplicates, or the index build will fail.
+CREATE UNIQUE INDEX IF NOT EXISTS restaurants_dedup_key_unique
+  ON restaurants (dedup_key) WHERE dedup_key IS NOT NULL;
 
 -- A restaurant can only be featured once per city
 CREATE UNIQUE INDEX IF NOT EXISTS featured_restaurant_city_unique

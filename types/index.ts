@@ -50,6 +50,12 @@ export interface Restaurant {
   menuUrl?: string | null;
   status: RestaurantStatus;
   errorMessage?: string | null;
+  /** One- or two-word cuisine type (e.g. "Italian", "Indian"); shown on guide cards. */
+  cuisine?: string | null;
+  /** Set when an admin has approved this restaurant for public display despite a
+   *  review flag (e.g. a tasting menu captured as a single "dish"). null = a
+   *  flagged restaurant stays hidden from the public guide until reviewed. */
+  guideApprovedAt?: string | null;
   sections: MenuSection[];
   createdAt: string;
 }
@@ -173,6 +179,8 @@ export interface RawSection {
 export interface ClassifiedMenu {
   restaurantName?: string;
   language?: string;
+  /** One- or two-word cuisine type (e.g. "Italian", "Indian"); emitted by extraction. */
+  cuisine?: string | null;
   sections: RawSection[];
 }
 
@@ -272,4 +280,6 @@ export interface FeedbackItem {
   dishName?: string;
   restaurantId?: string;
   restaurantName?: string | null;
+  /** Set for guide-level feedback (no single restaurant) — which city guide it's about. */
+  city?: string | null;
 }

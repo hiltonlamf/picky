@@ -99,6 +99,7 @@ Return ONLY valid JSON in this exact structure:
 {
   "restaurantName": "string or null",
   "language": "detected language, e.g. 'English', 'French'",
+  "cuisine": "one- or two-word cuisine type, e.g. 'Italian', 'Indian', 'Chinese', 'Modern European', or null if unclear",
   "sections": [
     {
       "name": "section name e.g. Starters, Mains, Desserts",
@@ -332,7 +333,7 @@ export function buildLabelPrompt(
 
 1. "label": a short, human-distinguishable name a diner would recognise, e.g. "Lunch", "Dinner", "À la carte", "Weekend Brunch", "Set Menu", "Mon–Thu", "Fri–Sun". Use the hint and URL slug. NEVER use meta-labels like "Menu images", "Menus", "Main website", "Page text" — describe WHICH menu it is. If you genuinely can't tell, use "Menu".
 2. "description": a short one-line description (under 8 words) of what's likely on this menu, e.g. "Mains, sharing plates & desserts" or "Roasts, sides & the veg board" — inferred from the label/hint/URL. Helps a diner pick between similar-sounding menus. Keep it plain and concrete, not marketing copy.
-3. "isDistinctMenu": true only if it is a real menu a diner would choose between. False for navigation/about/contact/gallery/booking/gift-voucher links, social media, login/account/checkout pages, or anything that is not actually a menu. Note: online-ordering pages (Toast, Square, etc.) usually contain the restaurant's live menu — those ARE menus.
+3. "isDistinctMenu": true only if it is a real DINING menu a diner would choose between when eating in. False for navigation/about/contact/gallery/booking/gift-voucher links, social media, login/account/checkout pages, or anything that is not actually a menu. ALSO false for: allergen sheets/menus, catering menus, kids'/children's menus, group-booking or set-party packages, and collection/delivery/takeaway ordering menus — these are not the dine-in menus we show. Note: online-ordering pages (Toast, Square, etc.) usually contain the restaurant's live food menu — those ARE menus.
 4. "isDrinkOnly": true if the source is exclusively drinks (wine list, cocktail list, beverages, bar list). This app analyses FOOD only — drink lists are discarded. A menu that includes both food and drinks is NOT drink-only.
 5. "duplicateOf": if this candidate is the SAME menu as an earlier candidate in a different format (e.g. the same dinner menu as both a PDF and a web page, or the same URL twice), give that earlier candidate's index; otherwise null.
 
