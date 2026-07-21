@@ -75,9 +75,30 @@ describe('guideInsights', () => {
     expect(guideInsights(r).highlights).toEqual(['Truffle Risotto', 'Wellington', 'Aubergine (V)']);
   });
 
-  it('returns no highlights when no veg dish has a price', () => {
-    const r = restaurant([section('Menu', [dish('Chips', 'vegan', null), dish('Steak', 'neither', '€20')])]);
-    expect(guideInsights(r).highlights).toEqual([]);
+  it('falls back to veg dishes in menu order when none are priced (tasting menus)', () => {
+    const r = restaurant([
+      section('Courses', [
+        dish('Heritage tomatoes', 'vegan', null),
+        dish('Wild mushroom', 'vegetarian', null),
+        dish('Rhubarb & custard', 'vegetarian', null),
+        dish('Petit fours', 'vegan', null),
+        dish('Beef course', 'neither', null), // not veg → excluded
+      ]),
+    ]);
+    // No prices to rank by, so show the first 3 veg dishes as they appear.
+    expect(guideInsights(r).highlights).toEqual(['Heritage tomatoes', 'Wild mushroom', 'Rhubarb & custard']);
+  });
+
+  it('tops up priced highlights with unpriced veg dishes when fewer than 3 are priced', () => {
+    const r = restaurant([
+      section('Menu', [
+        dish('Priced main', 'vegan', '€18'),
+        dish('Side salad', 'vegan', null),
+        dish('Bread', 'vegetarian', null),
+      ]),
+    ]);
+    // One priced dish leads; unpriced veg fills the remaining slots in order.
+    expect(guideInsights(r).highlights).toEqual(['Priced main', 'Side salad', 'Bread']);
   });
 
   it('excludes soft-deleted dishes', () => {

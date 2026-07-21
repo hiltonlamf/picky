@@ -53,7 +53,8 @@ export interface GuideInsights {
   perMenu: PerMenuVeg[];
   /** All live dishes across every menu (sides included). */
   totalDishes: number;
-  /** Up to 3 example veg dishes — the priciest (≈ the mains). Names only. */
+  /** Up to 3 example veg dishes — priciest first (≈ the mains); falls back to
+   *  veg dishes in menu order for tasting/prix-fixe menus with no prices. */
   highlights: string[];
 }
 
@@ -98,27 +99,29 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
 
   const totalDishes = restaurant.sections.flatMap(liveDishes).length;
 
-  // Highlights: the priciest veg dishes across the restaurant (most expensive ≈
-  // most substantial ≈ a main), de-duped by normalized name so the same dish on
-  // several menus counts once. Unpriced dishes can't be ranked, so they're
-  // excluded from highlights.
+  // Highlights: a few standout veg dishes, de-duped by normalized name so the
+  // same dish on several menus counts once. Priced dishes are ranked priciest-
+  // first (most expensive ≈ most substantial ≈ a main); tasting/prix-fixe menus
+  // have no per-dish price, so we fall back to veg dishes in menu order rather
+  // than showing nothing.
   const seen = new Set<string>();
   const pricedVeg: Array<{ name: string; price: number }> = [];
+  const unpricedVeg: string[] = [];
   for (const section of restaurant.sections) {
     for (const dish of liveDishes(section)) {
       if (!isVeg(dish)) continue;
-      const price = parsePrice(dish.price);
-      if (price === null) continue;
       const key = normalizeDishName(dish.name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      pricedVeg.push({ name: dish.name.trim(), price });
+      const price = parsePrice(dish.price);
+      if (price === null) unpricedVeg.push(dish.name.trim());
+      else pricedVeg.push({ name: dish.name.trim(), price });
     }
   }
-  const highlights = pricedVeg
-    .sort((a, b) => b.price - a.price)
-    .slice(0, MAX_HIGHLIGHTS)
-    .map((d) => d.name);
+  const highlights = [
+    ...pricedVeg.sort((a, b) => b.price - a.price).map((d) => d.name),
+    ...unpricedVeg,
+  ].slice(0, MAX_HIGHLIGHTS);
 
   return { maxVegOptions, bestMenu, perMenu, totalDishes, highlights };
 }

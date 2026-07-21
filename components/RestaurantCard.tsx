@@ -23,9 +23,29 @@ export default function RestaurantCard({ restaurant }: Props) {
         <h3 className="font-semibold text-evergreen group-hover:text-picky-700 transition-colors leading-tight">
           {restaurant.name ?? 'Restaurant'}
         </h3>
-        <span className="flex-shrink-0 text-xs bg-mint-100 text-picky-700 font-medium px-2 py-1 rounded-full">
-          {maxVegOptions} veg {maxVegOptions === 1 ? 'option' : 'options'}
-        </span>
+        {/* Veg counts live top-right: the best-single-menu total, then the
+            vegan / veggie split (each shown only when > 0), keeping the emojis. */}
+        <div className="flex-shrink-0 flex flex-col items-end gap-1">
+          <span className="text-xs bg-mint-100 text-picky-700 font-medium px-2 py-1 rounded-full whitespace-nowrap">
+            {maxVegOptions} veg {maxVegOptions === 1 ? 'option' : 'options'}
+          </span>
+          {(bestMenu.vegan > 0 || bestMenu.vegetarian > 0) && (
+            <div className="flex gap-2 pr-1">
+              {bestMenu.vegan > 0 && (
+                <span className="text-xs flex items-center gap-1 text-picky-700 whitespace-nowrap">
+                  <span aria-hidden="true">🌱</span>
+                  {bestMenu.vegan} vegan
+                </span>
+              )}
+              {bestMenu.vegetarian > 0 && (
+                <span className="text-xs flex items-center gap-1 text-picky-600 whitespace-nowrap">
+                  <span aria-hidden="true">🥚</span>
+                  {bestMenu.vegetarian} veggie
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {restaurant.cuisine && (
@@ -33,23 +53,6 @@ export default function RestaurantCard({ restaurant }: Props) {
           {restaurant.cuisine}
         </p>
       )}
-
-      {/* Vegan / veggie split — from the BEST single menu (what a diner sees at
-          one sitting), shown once each with the emojis. */}
-      <div className="flex gap-3 mb-2">
-        {bestMenu.vegan > 0 && (
-          <span className="text-xs flex items-center gap-1 text-picky-700">
-            <span aria-hidden="true">🌱</span>
-            {bestMenu.vegan} vegan
-          </span>
-        )}
-        {bestMenu.vegetarian > 0 && (
-          <span className="text-xs flex items-center gap-1 text-picky-600">
-            <span aria-hidden="true">🥚</span>
-            {bestMenu.vegetarian} veggie
-          </span>
-        )}
-      </div>
 
       {/* Per-menu breakdown — a diner sees one menu per visit, so show each. */}
       {showPerMenu && (
@@ -66,7 +69,7 @@ export default function RestaurantCard({ restaurant }: Props) {
       {/* A few standout veg dishes (the priciest ≈ the mains). */}
       {highlights.length > 0 && (
         <p className="text-xs text-evergreen/80 mb-3">
-          <span className="font-medium text-evergreen">Highlights:</span> {highlights.join(', ')}
+          <span className="font-medium text-evergreen">Highlights:</span> {highlights.join(' · ')}
         </p>
       )}
 
