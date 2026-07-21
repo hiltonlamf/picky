@@ -24,7 +24,7 @@ export default function RestaurantCard({ restaurant }: Props) {
           {restaurant.name ?? 'Restaurant'}
         </h3>
         {/* Two numbers, top-right: the vegan subset (🌱) and the total veg-
-            friendly count (🥚, "veggie options"), both from the best single menu. */}
+            friendly count (🍳, "veggie options"), both from the best single menu. */}
         <div className="flex-shrink-0 flex items-center gap-3 pt-0.5">
           {bestMenu.vegan > 0 && (
             <span className="text-sm flex items-center gap-1 text-picky-700 whitespace-nowrap">
@@ -33,7 +33,7 @@ export default function RestaurantCard({ restaurant }: Props) {
             </span>
           )}
           <span className="text-sm flex items-center gap-1 text-picky-600 whitespace-nowrap">
-            <span aria-hidden="true">🥚</span>
+            <span aria-hidden="true">🍳</span>
             {maxVegOptions} veggie {maxVegOptions === 1 ? 'option' : 'options'}
           </span>
         </div>
