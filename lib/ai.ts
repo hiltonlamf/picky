@@ -99,6 +99,7 @@ Return ONLY valid JSON in this exact structure:
 {
   "restaurantName": "string or null",
   "language": "detected language, e.g. 'English', 'French'",
+  "cuisine": "one- or two-word cuisine type, e.g. 'Italian', 'Indian', 'Chinese', 'Modern European', or null if unclear",
   "sections": [
     {
       "name": "section name e.g. Starters, Mains, Desserts",

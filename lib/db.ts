@@ -20,6 +20,7 @@ import type {
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
+import { guideInsights } from './menu-insights';
 import {
   verifyVegClassifications,
   classifyMenuFromImageBuffers,
@@ -255,6 +256,7 @@ export async function fetchRestaurantWithDishes(
     menuUrl: r.menu_url,
     status: r.status,
     errorMessage: r.error_message,
+    cuisine: r.cuisine ?? null,
     guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
     createdAt: r.created_at,
@@ -400,6 +402,9 @@ export async function saveClassifiedMenu(
       menu_url: menuUrl,
       status: 'done',
       last_scraped_at: new Date().toISOString(),
+      // Only overwrite cuisine when this run actually detected one, so a reparse
+      // that omits it doesn't wipe a good existing value.
+      ...(menu.cuisine ? { cuisine: menu.cuisine } : {}),
       ...(usage && {
         model_used: usage.model,
         tokens_in: usage.tokensIn,
@@ -640,8 +645,18 @@ export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]
   const rows = (data ?? []) as Array<{ restaurant_id: string; display_order: number }>;
   if (!rows.length) return [];
 
-  const results = await Promise.all(rows.map((r) => fetchRestaurantWithDishes(r.restaurant_id)));
-  return results.filter(Boolean) as Restaurant[];
+  const results = (await Promise.all(rows.map((r) => fetchRestaurantWithDishes(r.restaurant_id)))).filter(
+    Boolean
+  ) as Restaurant[];
+
+  // Rank best-for-vegetarians first: by the best SINGLE menu's veg count (a diner
+  // only sees one menu per visit), tie-broken by the curated display order.
+  const orderById = new Map(rows.map((r) => [r.restaurant_id, r.display_order]));
+  return results.sort((a, b) => {
+    const diff = guideInsights(b).maxVegOptions - guideInsights(a).maxVegOptions;
+    if (diff !== 0) return diff;
+    return (orderById.get(a.id) ?? 0) - (orderById.get(b.id) ?? 0);
+  });
 }
 
 // ============================================================

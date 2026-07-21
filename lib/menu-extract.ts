@@ -270,6 +270,7 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   const multi = named.length > 1;
   let restaurantName: string | undefined;
   let language: string | undefined;
+  let cuisine: string | null | undefined;
 
   const dishKey = (label: string, d: { name: string; price?: string }) =>
     `${label.toLowerCase()}|${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
@@ -291,6 +292,7 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   for (const { label, menu } of named) {
     restaurantName = restaurantName ?? menu.restaurantName;
     language = language ?? menu.language;
+    cuisine = cuisine ?? menu.cuisine;
     for (const section of menu.sections) {
       const dishes = section.dishes.filter((d) => {
         const key = dishKey(label, d);
@@ -302,7 +304,7 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
     }
   }
 
-  return { restaurantName, language, sections };
+  return { restaurantName, language, cuisine, sections };
 }
 
 /** Extract every selected candidate (bounded) and merge into a single menu. */

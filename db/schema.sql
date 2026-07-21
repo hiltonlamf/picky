@@ -146,6 +146,11 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS dedup_key         TEXT,
   ADD COLUMN IF NOT EXISTS guide_approved_at TIMESTAMPTZ;
 
+-- Cuisine label (Italian / Indian / Chinese / ...), emitted by the extraction
+-- prompt and shown on guide cards. Nullable; backfilled by scripts/backfill-cuisine.ts.
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS cuisine TEXT;
+
 -- Passive parse-attempt telemetry (mirrors
 -- supabase/migrations/20260707000000_add_parse_attempts.sql).
 -- One row at the end of every real discover/analyze call, success or

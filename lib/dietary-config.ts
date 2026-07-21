@@ -63,6 +63,7 @@ export const REPORT_ISSUE_TYPES = [
 export const GENERAL_FEEDBACK_TYPES = [
   { value: 'missing_dish', label: "A dish is missing — it's on the menu but not in our results" },
   { value: 'wrong_menu', label: 'This looks like the wrong menu, or the wrong restaurant entirely' },
+  { value: 'menu_outdated', label: 'This menu looks out of date — the restaurant has changed it' },
   { value: 'feature_request', label: 'I have an idea for a feature' },
   { value: 'other', label: 'Something else' },
 ];
