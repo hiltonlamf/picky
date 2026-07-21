@@ -100,6 +100,12 @@ export default function ReviewClient({
   const [addMenuLabel, setAddMenuLabel] = useState('');
   const [addMenuError, setAddMenuError] = useState<string | null>(null);
   const [addMenuResult, setAddMenuResult] = useState<string | null>(null);
+  // No-menu confirmation: the reason the admin will sign off on (defaults to
+  // whatever the pipeline detected).
+  const [noMenuReason, setNoMenuReason] = useState<'not_listed' | 'unavailable' | 'closed'>(
+    restaurant.noMenuReason ?? 'not_listed'
+  );
+  const [confirmedAt, setConfirmedAt] = useState<string | null>(restaurant.noMenuConfirmedAt ?? null);
 
   const groups = groupSections(restaurant.sections);
 
@@ -117,6 +123,13 @@ export default function ReviewClient({
     } finally {
       setBusy(null);
     }
+  }
+
+  async function confirmNoMenuOutcome() {
+    await run('confirm-no-menu', async () => {
+      await postJson(`/api/admin/restaurants/${restaurant.id}/confirm-no-menu`, { reason: noMenuReason });
+      setConfirmedAt(new Date().toISOString());
+    });
   }
 
   async function confirmDish(dish: Dish, section: MenuSection) {
@@ -412,6 +425,43 @@ export default function ReviewClient({
           </p>
         )}
       </div>
+
+      {/* No-menu / dead-site sign-off. The pipeline landed this restaurant in the
+          'no_menu' state (site has no readable menu, or is down/closed). Confirm
+          it to make the outcome STICKY — future searches return the cached
+          answer with zero AI spend, past the 30-day window. To overturn it (the
+          site DOES have a menu), use "Add a missing menu" below — that reads the
+          real menu and flips the restaurant back to live. */}
+      {restaurant.status === 'no_menu' && (
+        <div className="mb-4 rounded-xl border border-sun-400/50 bg-sun-50/50 px-4 py-3">
+          <p className="text-sm font-semibold text-evergreen">
+            {confirmedAt ? '✓ Confirmed: no menu here' : '⚠ Flagged “no menu / dead site” — please confirm'}
+          </p>
+          <p className="text-xs text-evergreen/70 mt-0.5 mb-3">
+            {confirmedAt
+              ? 'Sticky — searches return this answer without re-analyzing. Adding a menu below will overturn it.'
+              : 'We couldn’t read a menu here. Confirm what’s true so we stop paying to re-check it, or add the real menu below if we missed it.'}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={noMenuReason}
+              onChange={(e) => setNoMenuReason(e.target.value as 'not_listed' | 'unavailable' | 'closed')}
+              className="px-3 py-1.5 rounded-full border-2 border-mint-200 bg-white text-sm text-evergreen focus:outline-none focus:border-picky-500"
+            >
+              <option value="not_listed">No menu listed online</option>
+              <option value="unavailable">Website down / not live</option>
+              <option value="closed">Restaurant closed</option>
+            </select>
+            <button
+              disabled={busy === 'confirm-no-menu'}
+              onClick={confirmNoMenuOutcome}
+              className="btn-secondary text-sm px-4 py-1.5"
+            >
+              {busy === 'confirm-no-menu' ? 'Saving…' : confirmedAt ? 'Update reason' : 'Confirm no menu'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Guide membership — curate which restaurants appear on the public city guide. */}
       <div

@@ -10,6 +10,7 @@ import Disclaimer from '@/components/Disclaimer';
 import ShareButton from '@/components/ShareButton';
 import FeedbackModal from '@/components/FeedbackModal';
 import FlagOutdatedButton from '@/components/FlagOutdatedButton';
+import SubmitMenuForm from '@/components/SubmitMenuForm';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
@@ -120,6 +121,41 @@ export default function RestaurantPage() {
         <Link href="/" className="btn-primary text-sm">
           ← Back to search
         </Link>
+      </div>
+    );
+  }
+
+  if (restaurant.status === 'no_menu') {
+    const name = restaurant.name ?? 'this restaurant';
+    const reason = restaurant.noMenuReason ?? 'not_listed';
+    const copy =
+      reason === 'unavailable'
+        ? {
+            heading: 'This website looks down',
+            body: `We couldn't reach ${name}'s website — it may be down or not live yet.`,
+          }
+        : reason === 'closed'
+        ? {
+            heading: 'This restaurant looks closed',
+            body: `${name} appears to be permanently closed, so there's no menu to show.`,
+          }
+        : {
+            heading: 'No menu listed on this site',
+            body: `We looked, but ${name}'s website doesn't seem to publish a menu online.`,
+          };
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16">
+        <div className="text-center mb-6">
+          <LeafOutlineIcon className="w-12 h-12 mx-auto mb-4 text-picky-500" />
+          <h1 className="text-xl font-bold text-evergreen mb-2">{copy.heading}</h1>
+          <p className="text-evergreen/80">{copy.body}</p>
+        </div>
+        <SubmitMenuForm restaurantId={restaurant.id} />
+        <div className="text-center mt-6">
+          <Link href="/" className="btn-ghost text-sm">
+            ← Try a different restaurant
+          </Link>
+        </div>
       </div>
     );
   }

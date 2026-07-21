@@ -38,7 +38,13 @@ export interface MenuSection {
   menuLabel?: string | null;
 }
 
-export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error';
+export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error' | 'no_menu';
+
+/** Why a restaurant landed in the 'no_menu' state — drives the user-facing copy.
+ *  'not_listed'  — the site is up but publishes no readable menu online.
+ *  'unavailable' — the site is down / not live yet (a definitive fetch failure).
+ *  'closed'      — admin-set: the restaurant is permanently closed. */
+export type NoMenuReason = 'not_listed' | 'unavailable' | 'closed';
 
 export interface Restaurant {
   id: string;
@@ -50,6 +56,11 @@ export interface Restaurant {
   menuUrl?: string | null;
   status: RestaurantStatus;
   errorMessage?: string | null;
+  /** Set when status==='no_menu': why we couldn't show a menu. Drives the copy. */
+  noMenuReason?: NoMenuReason | null;
+  /** Non-null once an admin has confirmed the no_menu outcome, making it sticky
+   *  (future searches return the cached answer instead of re-analyzing). */
+  noMenuConfirmedAt?: string | null;
   /** One- or two-word cuisine type (e.g. "Italian", "Indian"); shown on guide cards. */
   cuisine?: string | null;
   /** Set when an admin has approved this restaurant for public display despite a
@@ -115,6 +126,7 @@ export type ParseEventType =
   | 'cached'
   | 'result'
   | 'error'
+  | 'no_menu'
   | 'candidates'
   | 'continue';
 
@@ -152,11 +164,21 @@ export interface ParseContinueEvent {
   restaurantId: string;
 }
 
+/** Terminal, non-error outcome: the site publishes no readable menu, or is
+ *  down/closed. The client navigates to the restaurant page, which shows a
+ *  friendly, actionable screen (paste a link / upload a photo) rather than a
+ *  red error. */
+export interface ParseNoMenuEvent {
+  type: 'no_menu';
+  restaurantId: string;
+}
+
 export type ParseEvent =
   | ParseProgressEvent
   | ParseCachedEvent
   | ParseResultEvent
   | ParseErrorEvent
+  | ParseNoMenuEvent
   | ParseCandidatesEvent
   | ParseContinueEvent;
 
