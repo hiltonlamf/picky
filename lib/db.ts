@@ -17,6 +17,7 @@ import type {
   FeedbackStatus,
   DishReportSummary,
   RestaurantStatus,
+  NoMenuReason,
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
@@ -49,6 +50,23 @@ function db(): any {
     _client = createClient(url, key);
   }
   return _client;
+}
+
+// PostgREST caps an unpaginated select at 1000 rows — silently, with no error,
+// just a truncated result. Fine for small/scoped queries (e.g. `.in('id', ids)`
+// over a handful of restaurants), but WRONG for whole-table aggregates like
+// "every live dish" once the guide grows past that count (it did — 1420 dishes
+// as of writing). Pages via `.range()` until a page comes back short.
+const PAGE_SIZE = 1000;
+async function selectAllRows<T>(build: (from: number, to: number) => Promise<{ data: T[] | null }>): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data } = await build(from, from + PAGE_SIZE - 1);
+    const page = data ?? [];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return all;
 }
 
 // Exported for tests. `\/+` (not `\/\/`) deliberately eats ANY number of
@@ -119,6 +137,8 @@ type DbRestaurantRow = {
   canonical_url: string | null;
   last_scraped_at: string | null;
   status: string;
+  no_menu_reason: string | null;
+  no_menu_confirmed_at: string | null;
 };
 
 type DbRow = Record<string, unknown>;
@@ -161,24 +181,47 @@ export function findMatchingRestaurantId(
 
 export async function findExistingRestaurant(
   url: string
-): Promise<{ id: string; status: string; lastScrapedAt: string | null } | null> {
+): Promise<{
+  id: string;
+  status: string;
+  lastScrapedAt: string | null;
+  noMenuReason: NoMenuReason | null;
+  noMenuConfirmedAt: string | null;
+} | null> {
   // Small table (low hundreds of rows at this project's scale) — comparing
   // normalized forms in JS is simpler and far more robust than trying to
   // enumerate every URL-formatting variant as a separate DB query.
-  const { data } = await db().from('restaurants').select('id, url, canonical_url, last_scraped_at, status');
+  const { data } = await db()
+    .from('restaurants')
+    .select('id, url, canonical_url, last_scraped_at, status, no_menu_reason, no_menu_confirmed_at');
   const rows = (data ?? []) as DbRestaurantRow[];
 
   const matchId = findMatchingRestaurantId(url, rows);
   if (!matchId) return null;
 
   const row = rows.find((r) => r.id === matchId)!;
-  return { id: row.id, status: row.status, lastScrapedAt: row.last_scraped_at };
+  return {
+    id: row.id,
+    status: row.status,
+    lastScrapedAt: row.last_scraped_at,
+    noMenuReason: (row.no_menu_reason as NoMenuReason | null) ?? null,
+    noMenuConfirmedAt: row.no_menu_confirmed_at ?? null,
+  };
 }
 
 export async function resetRestaurantForReparse(id: string): Promise<void> {
   await db()
     .from('restaurants')
-    .update({ status: 'processing', error_message: null, menu_candidates: null, candidates_at: null })
+    .update({
+      status: 'processing',
+      error_message: null,
+      menu_candidates: null,
+      candidates_at: null,
+      // A fresh reparse starts clean — clear any prior no_menu verdict so a
+      // user-triggered "I know where the menu is" retry isn't pinned to it.
+      no_menu_reason: null,
+      no_menu_confirmed_at: null,
+    })
     .eq('id', id);
 }
 
@@ -256,6 +299,8 @@ export async function fetchRestaurantWithDishes(
     menuUrl: r.menu_url,
     status: r.status,
     errorMessage: r.error_message,
+    noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
+    noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
     guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
@@ -571,6 +616,50 @@ export async function markRestaurantError(restaurantId: string, message: string)
     .eq('id', restaurantId);
 }
 
+/**
+ * Terminal "no menu / dead site" outcome — distinct from an error. Used when the
+ * site is up but publishes no readable menu ('not_listed') or is down/not-live
+ * ('unavailable'). Unlike markRestaurantError, this sets last_scraped_at so the
+ * discover-route freshness check will short-circuit the NEXT search instead of
+ * re-running the paid pipeline (an 'error' row is re-analyzed every search — the
+ * cost leak this fixes). The message is stored for context but the results page
+ * renders from no_menu_reason. Preserves any existing admin confirmation.
+ */
+export async function markRestaurantNoMenu(
+  restaurantId: string,
+  reason: NoMenuReason,
+  message: string
+): Promise<void> {
+  await db()
+    .from('restaurants')
+    .update({
+      status: 'no_menu',
+      no_menu_reason: reason,
+      error_message: message,
+      last_scraped_at: new Date().toISOString(),
+    })
+    .eq('id', restaurantId);
+}
+
+/**
+ * Admin confirms a no_menu outcome (optionally re-labelling the reason, e.g.
+ * 'closed' for a shut restaurant). Sets no_menu_confirmed_at so the result
+ * becomes STICKY — future searches return the cached answer forever, past the
+ * 30-day staleness window, with zero AI spend.
+ */
+export async function confirmNoMenu(restaurantId: string, reason: NoMenuReason): Promise<void> {
+  const { error } = await db()
+    .from('restaurants')
+    .update({
+      status: 'no_menu',
+      no_menu_reason: reason,
+      no_menu_confirmed_at: new Date().toISOString(),
+      last_scraped_at: new Date().toISOString(),
+    })
+    .eq('id', restaurantId);
+  if (error) throw new Error(`Failed to confirm no-menu: ${error.message}`);
+}
+
 export async function reportDish(
   dishId: string,
   issueType: string,
@@ -710,8 +799,8 @@ export async function getEvalCaseByUrl(url: string): Promise<EvalCase | null> {
  *  instead of trusting client-supplied copies of the same fields. */
 export async function getRestaurantMeta(
   id: string
-): Promise<{ id: string; url: string; canonicalUrl: string | null; name: string | null; city: string } | null> {
-  const { data } = await db().from('restaurants').select('id, url, canonical_url, name, city').eq('id', id).maybeSingle();
+): Promise<{ id: string; url: string; canonicalUrl: string | null; name: string | null; city: string; status: string } | null> {
+  const { data } = await db().from('restaurants').select('id, url, canonical_url, name, city, status').eq('id', id).maybeSingle();
   if (!data) return null;
   const r = data as DbRow;
   return {
@@ -720,7 +809,27 @@ export async function getRestaurantMeta(
     canonicalUrl: (r.canonical_url as string | null) ?? null,
     name: (r.name as string | null) ?? null,
     city: r.city as string,
+    status: r.status as string,
   };
+}
+
+/**
+ * Whether a restaurant has any live (non-soft-deleted) dish already saved.
+ * `status` is NOT a reliable proxy for this — resetRestaurantForReparse,
+ * markRestaurantError and markRestaurantNoMenu all update only the
+ * `restaurants` row and never touch `dishes`/`menu_sections`, so a restaurant
+ * can drift out of 'done' (a stale reparse that fails, or finds a thin/no
+ * menu this time) while its real, previously-saved dishes are still live.
+ * Callers that must not append to an existing menu (the public submit-menu
+ * flow) need to check this directly, not `status`.
+ */
+export async function restaurantHasLiveDishes(restaurantId: string): Promise<boolean> {
+  const { count } = await db()
+    .from('dishes')
+    .select('*', { count: 'exact', head: true })
+    .eq('restaurant_id', restaurantId)
+    .is('deleted_at', null);
+  return (count ?? 0) > 0;
 }
 
 /** Per-restaurant review + feedback badges shown in the admin restaurant lists. */
@@ -802,11 +911,48 @@ async function buildRestaurantReviewInfo(
   return info;
 }
 
+export interface NoMenuQueueItem {
+  id: string;
+  name: string | null;
+  url: string;
+  reason: NoMenuReason | null;
+  lastScrapedAt: string | null;
+  /** Open feedback on this restaurant — e.g. a user insisting there IS a menu. */
+  openFeedbackCount: number;
+}
+
+/** Restaurants in the 'no_menu' state that an admin hasn't confirmed yet — the
+ *  queue to sign off ("yes, genuinely no menu" → sticky) or overturn (add the
+ *  real menu). Unconfirmed rows already stop re-analysis for 30 days; confirming
+ *  makes that permanent. */
+export async function getNoMenuQueue(): Promise<NoMenuQueueItem[]> {
+  const { data } = await db()
+    .from('restaurants')
+    .select('id, name, url, canonical_url, no_menu_reason, last_scraped_at')
+    .eq('status', 'no_menu')
+    .is('no_menu_confirmed_at', null)
+    .order('last_scraped_at', { ascending: false });
+  const rows = (data ?? []) as DbRow[];
+  const reviewInfo = await buildRestaurantReviewInfo(
+    rows.map((r) => ({ id: r.id as string, url: r.url as string, canonicalUrl: (r.canonical_url as string | null) ?? null }))
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    name: (r.name as string | null) ?? null,
+    url: r.url as string,
+    reason: (r.no_menu_reason as NoMenuReason | null) ?? null,
+    lastScrapedAt: (r.last_scraped_at as string | null) ?? null,
+    openFeedbackCount: reviewInfo.get(r.id as string)?.openFeedbackCount ?? 0,
+  }));
+}
+
 export interface AdminDashboardStats {
   recentRestaurants: RestaurantListItem[];
   todaySpendUsd: number;
   errorRatePct: number | null;
   openFeedbackCount: number;
+  /** No-menu / dead-site restaurants awaiting admin confirmation. */
+  noMenuQueue: NoMenuQueueItem[];
 }
 
 export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
@@ -841,7 +987,9 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
   const { count: openFeedback } = await db().from('restaurant_feedback').select('*', { count: 'exact', head: true }).eq('status', 'open');
   const openFeedbackCount = (openDishReports ?? 0) + (openFeedback ?? 0);
 
-  return { recentRestaurants, todaySpendUsd, errorRatePct, openFeedbackCount };
+  const noMenuQueue = await getNoMenuQueue().catch(() => [] as NoMenuQueueItem[]);
+
+  return { recentRestaurants, todaySpendUsd, errorRatePct, openFeedbackCount, noMenuQueue };
 }
 
 /** Restaurants with fewer than this many dishes (but not zero) are flagged as a
@@ -888,12 +1036,16 @@ export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
     .order('created_at', { ascending: false });
   const restaurants = (restRows ?? []) as DbRow[];
 
-  // Dish counts per restaurant + overall totals (live dishes only).
-  const { data: dishRows } = await db().from('dishes').select('restaurant_id, human_verified').is('deleted_at', null);
+  // Dish counts per restaurant + overall totals (live dishes only). Paginated —
+  // this is a whole-table scan, and the guide has already grown past the
+  // unpaginated 1000-row cap (see selectAllRows).
+  const dishRows = await selectAllRows<DbRow>((from, to) =>
+    db().from('dishes').select('restaurant_id, human_verified').is('deleted_at', null).range(from, to)
+  );
   const dishCountByRestaurant = new Map<string, number>();
   let dishesTotal = 0;
   let dishesReviewed = 0;
-  for (const d of (dishRows ?? []) as DbRow[]) {
+  for (const d of dishRows) {
     dishesTotal++;
     if (d.human_verified) dishesReviewed++;
     const rid = d.restaurant_id as string;
@@ -906,7 +1058,7 @@ export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
     const id = r.id as string;
     const dishCount = dishCountByRestaurant.get(id) ?? 0;
     const status = r.status as string;
-    if (status === 'error' || (status === 'done' && dishCount === 0)) {
+    if (status === 'error' || status === 'no_menu' || (status === 'done' && dishCount === 0)) {
       fetchFailures.push({ id, name: (r.name as string | null) ?? null, url: r.url as string, status, dishCount });
     } else if (status === 'done' && dishCount > 0 && dishCount < LOW_DISH_COUNT_THRESHOLD) {
       lowDishRestaurants.push({ id, name: (r.name as string | null) ?? null, url: r.url as string, dishCount });
@@ -1890,6 +2042,12 @@ export async function addMenuFromUrl(input: {
     }
   }
 
+  // A successfully-read menu makes the restaurant live: flip out of any
+  // 'no_menu'/'error' state to 'done' and clear the no_menu verdict, so the
+  // results page shows the menu instead of the "no menu" screen. (Harmless
+  // when it was already 'done' — the normal "add a missing menu" case.)
+  await markRestaurantLive(input.restaurantId);
+
   await saveMenuCandidateVerdict({
     url: input.restaurantUrl,
     restaurantName: input.restaurantName,
@@ -1900,6 +2058,21 @@ export async function addMenuFromUrl(input: {
   });
 
   return { addedDishCount, usage };
+}
+
+/** Mark a restaurant live after a menu was successfully added by hand (admin or
+ *  a public user submission). Clears any no_menu verdict. */
+async function markRestaurantLive(restaurantId: string): Promise<void> {
+  await db()
+    .from('restaurants')
+    .update({
+      status: 'done',
+      error_message: null,
+      no_menu_reason: null,
+      no_menu_confirmed_at: null,
+      last_scraped_at: new Date().toISOString(),
+    })
+    .eq('id', restaurantId);
 }
 
 /**
@@ -1993,6 +2166,8 @@ export async function addMenuFromUpload(input: {
       addedDishCount += dishRows.length;
     }
   }
+
+  await markRestaurantLive(input.restaurantId);
 
   await saveMenuCandidateVerdict({
     url: input.restaurantUrl,

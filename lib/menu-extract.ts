@@ -264,13 +264,29 @@ function normName(name: string): string {
  *
  * Dishes are de-duped only WITHIN a menu: a dish on both Lunch and Dinner must
  * still appear when the user views either menu, so cross-menu de-dup would be
- * wrong. Single-menu results carry no menuLabel and render as before.
+ * wrong. Single-menu results carry no menuLabel and render as before — UNLESS
+ * the extraction itself already split that one page into several distinctly-
+ * named menus (SYSTEM_PROMPT's "multiple distinct named menus" rule, e.g. a
+ * single page listing "À La Carte" / "Tasting Menu" / "Groups" back to back)
+ * and tagged its own sections with a menuLabel — that per-section label is
+ * preserved rather than overwritten, so a single discovered candidate can
+ * still present as multiple separate menus in the UI.
  */
 export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>): ClassifiedMenu {
   const multi = named.length > 1;
   let restaurantName: string | undefined;
   let language: string | undefined;
   let cuisine: string | null | undefined;
+
+  // The label a section actually ends up tagged with: the candidate's label
+  // when several candidates were merged, otherwise whatever menuLabel the
+  // extraction itself assigned that section (null for an ordinary single
+  // menu). Dedup must key off THIS, not the outer candidate label — a single
+  // candidate split into several named menus (see mergeMenus's doc comment)
+  // can legitimately repeat a dish (e.g. a side) across two of them, and that
+  // must survive the same way it would if they'd been separate candidates.
+  const effectiveLabel = (candidateLabel: string, section: RawSection): string =>
+    multi ? candidateLabel : (section.menuLabel ?? candidateLabel);
 
   const dishKey = (label: string, d: { name: string; price?: string }) =>
     `${label.toLowerCase()}|${normName(d.name)}|${(d.price ?? '').toLowerCase()}`;
@@ -279,8 +295,9 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   const best = new Map<string, number>();
   for (const { label, menu } of named) {
     for (const section of menu.sections) {
+      const key0 = effectiveLabel(label, section);
       for (const d of section.dishes) {
-        const key = dishKey(label, d);
+        const key = dishKey(key0, d);
         if ((best.get(key) ?? -1) < d.confidence) best.set(key, d.confidence);
       }
     }
@@ -294,13 +311,16 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
     language = language ?? menu.language;
     cuisine = cuisine ?? menu.cuisine;
     for (const section of menu.sections) {
+      const sectionLabel = effectiveLabel(label, section);
       const dishes = section.dishes.filter((d) => {
-        const key = dishKey(label, d);
+        const key = dishKey(sectionLabel, d);
         if (taken.has(key) || d.confidence < (best.get(key) ?? 0)) return false;
         taken.add(key);
         return true;
       });
-      if (dishes.length > 0) sections.push({ name: section.name, dishes, menuLabel: multi ? label : null });
+      if (dishes.length > 0) {
+        sections.push({ name: section.name, dishes, menuLabel: multi ? label : (section.menuLabel ?? null) });
+      }
     }
   }
 

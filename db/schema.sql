@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS restaurants (
   name              TEXT,
   city              TEXT NOT NULL DEFAULT 'dublin',
   status            TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending', 'processing', 'done', 'error')),
+                      CHECK (status IN ('pending', 'processing', 'done', 'error', 'no_menu')),
   error_message     TEXT,
   menu_url          TEXT,
   last_scraped_at   TIMESTAMPTZ,
@@ -155,6 +155,20 @@ ALTER TABLE restaurants
 -- prompt and shown on guide cards. Nullable; backfilled by scripts/backfill-cuisine.ts.
 ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS cuisine TEXT;
+
+-- "No menu / dead site" terminal outcome (mirrors
+-- supabase/migrations/20260721120000_add_no_menu_status.sql). Distinct from a
+-- generic 'error' so menu-less/dead sites show a friendly, actionable screen
+-- and STOP being re-analyzed (paid) on every future search. no_menu_reason:
+-- 'not_listed' | 'unavailable' | 'closed'. no_menu_confirmed_at: set when an
+-- admin confirms the outcome, making it sticky past the staleness window.
+ALTER TABLE restaurants DROP CONSTRAINT IF EXISTS restaurants_status_check;
+ALTER TABLE restaurants
+  ADD CONSTRAINT restaurants_status_check
+  CHECK (status IN ('pending', 'processing', 'done', 'error', 'no_menu'));
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS no_menu_reason       TEXT,
+  ADD COLUMN IF NOT EXISTS no_menu_confirmed_at TIMESTAMPTZ;
 
 -- Passive parse-attempt telemetry (mirrors
 -- supabase/migrations/20260707000000_add_parse_attempts.sql).

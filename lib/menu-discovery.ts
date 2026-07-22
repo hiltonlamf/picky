@@ -27,10 +27,22 @@ function candidateId(type: MenuCandidateType, ref: string): string {
 const MENU_WORD_RE =
   /\b(starter|main|dessert|appetiser|appetizer|entr[ée]e|side|sharing|à la carte|a la carte|course|salad|soup|pasta|pizza|risotto|burger|brunch|lunch|dinner)\b/i;
 
+// A bare "X.XX" number (no currency symbol) is ambiguous with opening-hours
+// time ranges written the European way ("5.30-9.30", "Mon 12.30-2.30") — a
+// landing page's opening-hours block can rack up a dozen of these and get
+// mistaken for a priced menu (found on kickys.ie: the homepage's hours list
+// out-scored the real /our-menus/ subpage's own dish list). Both sides of a
+// hyphen/en-dash-joined pair are excluded; a currency-prefixed price is exempt
+// since "€5.30-9.30" isn't a real menu pattern anyway.
+const BARE_DECIMAL_PRICE_RE =
+  /\b(?<!\d{1,2}\.\d{2}[-–]\s{0,3})\d{1,3}\.\d{2}\b(?![^\d]{0,3}[-–]\s*\d{1,2}\.\d{2}\b)/g;
+
 /** Heuristic: does this text actually read like a menu (prices + food words)? */
 export function textLooksLikeMenu(text: string): boolean {
   if (!text || text.length < 100) return false;
-  const priceTokens = (text.match(/(?:€|£|\$)\s?\d|\b\d{1,3}\.\d{2}\b/g) ?? []).length;
+  const currencyTokens = (text.match(/(?:€|£|\$)\s?\d/g) ?? []).length;
+  const bareDecimalTokens = (text.match(BARE_DECIMAL_PRICE_RE) ?? []).length;
+  const priceTokens = currencyTokens + bareDecimalTokens;
   const hasMenuWords = MENU_WORD_RE.test(text);
   // Priceless menus (tasting menus) list many courses — a single menu word in
   // a long marketing page ("seasonal sharing plates…") is not a menu.
@@ -73,7 +85,17 @@ export function hintFromUrl(url: string): string {
   }
 }
 
-type Raw = { type: MenuCandidateType; ref: string; hint: string; source: MenuCandidate['source'] };
+type Raw = {
+  type: MenuCandidateType;
+  ref: string;
+  hint: string;
+  source: MenuCandidate['source'];
+  /** Set when we've directly fetched this subpage and confirmed its own
+   *  content passes textLooksLikeMenu — not just a guess from a URL/anchor
+   *  hint. Lets it survive a false "not distinct" verdict from the labeler,
+   *  same as text/pdf candidates (see the `kept` filter below). */
+  contentValidated?: boolean;
+};
 
 /** How many nav links the deep pass follows, and its total time budget. */
 const DEEP_NAV_LINKS = 3;
@@ -106,9 +128,18 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
     for (const link of sub.menuLinks ?? []) {
       raw.push({ type: 'subpage', ref: link, hint: sub.linkLabels?.[link] || hintFromUrl(link), source: 'subpage' });
     }
-    // The nav page itself reads like a menu → it's a menu subpage.
+    // The nav page itself reads like a menu → it's a menu subpage. We've
+    // directly confirmed its own content, not just guessed from a link
+    // label — mark it so it survives the labeler below even if it can't
+    // confidently call a generically-named page ("Menus") distinct.
     if (textLooksLikeMenu(sub.menuText ?? '')) {
-      raw.push({ type: 'subpage', ref: sub.canonicalUrl || targets[i], hint: hintFromUrl(targets[i]), source: 'subpage' });
+      raw.push({
+        type: 'subpage',
+        ref: sub.canonicalUrl || targets[i],
+        hint: hintFromUrl(targets[i]),
+        source: 'subpage',
+        contentValidated: true,
+      });
     }
   }
   return raw;
@@ -177,13 +208,18 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   }
 
   // De-dupe by ref, and drop obvious drink-only sources (wine lists etc.)
-  // before spending tokens on labeling.
+  // before spending tokens on labeling. A subpage discovered both as a plain
+  // menuLinks guess AND via deepDiscoverRaw's content-fetched check shares the
+  // same type|ref key — prefer the content-validated version so the "first
+  // wins" pass below doesn't silently keep the weaker, unvalidated one.
   const dedupeRaw = (items: Raw[]): Raw[] => {
-    const seen = new Set<string>();
-    return items.filter((r) => {
+    const byKey = new Map<string, Raw>();
+    for (const r of items) {
       const key = `${r.type}|${r.ref}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
+      const existing = byKey.get(key);
+      if (!existing || (r.contentValidated && !existing.contentValidated)) byKey.set(key, r);
+    }
+    return Array.from(byKey.values()).filter((r) => {
       const hintText = `${r.hint} ${hintFromUrl(r.ref)}`;
       // Non-food menus (allergen/catering/kids/collection/...) are dropped for
       // ALL source types, including text/pdf — they are never real dining menus.
@@ -239,13 +275,17 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     // Drop drink-only menus outright, and non-menu links (nav/about/etc.).
     // Text and PDF candidates survive a false isDistinctMenu verdict — they are
     // rarely false positives, and dropping them could strip the only real menu.
+    // Content-validated subpages (deepDiscoverRaw already confirmed their OWN
+    // text looks like a menu, not just a guess from a generic link label like
+    // "Menus") get the same protection — the labeler has no page content to
+    // judge distinctness from, so its "not distinct" guess is the weaker signal.
     const kept = judged.filter(
       (j) =>
         !j.verdict.isDrinkOnly &&
         // Non-food menus are dropped even for text/pdf (checked against the AI's
         // label too, in case the raw hint was opaque) — overrides the survival rule.
         !isNonFoodMenu(`${j.verdict.label} ${j.raw.hint} ${hintFromUrl(j.raw.ref)}`) &&
-        (j.verdict.isDistinctMenu || j.raw.type === 'text' || j.raw.type === 'pdf')
+        (j.verdict.isDistinctMenu || j.raw.type === 'text' || j.raw.type === 'pdf' || j.raw.contentValidated)
     );
 
     // Resolve duplicate groups (same menu in several formats) via duplicateOf

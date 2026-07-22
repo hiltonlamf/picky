@@ -287,6 +287,79 @@ describe('text heuristics', () => {
       )
     ).toBe(false);
   });
+
+  it('does not mistake opening-hours ranges for prices (kickys.ie bug)', () => {
+    // Real landing-page copy: a dozen "5.30-9.30"-style hour ranges used to
+    // score >=8 "prices" under the old regex, outscoring the site's actual
+    // menu subpage and starving discovery of the real content.
+    const openingHoursOnly = `
+      OPENING HOURS
+      Monday: 5.30-9.30
+      Tuesday: 5.30-9.30
+      Wednesday: 5.30-9.30
+      Thursday: 12.30-2.30 & 5.30-9.30
+      Friday: 12.30-2.30 & 5.30-9.30
+      Saturday: 1.00-9.30
+      Dinner. Lunch. Book a table online or follow us for updates.
+    `;
+    expect(textLooksLikeMenu(openingHoursOnly)).toBe(false);
+  });
+
+  it('still counts a real bare-decimal price with no currency symbol', () => {
+    const menuText = `
+      Starters: Soup 6.50, Calamari 9.00, Burrata 11.00, Garlic bread 5.00
+      Mains: Burger 16.50, Pizza 14.00, Risotto 15.50, Seabass 22.00
+    `;
+    expect(textLooksLikeMenu(menuText)).toBe(true);
+  });
+});
+
+describe('content-validated subpage survives a generic label (kickys.ie bug)', () => {
+  it('prefers the real menu subpage over landing-page opening-hours copy, even when the labeler can\'t confirm it\'s distinct', async () => {
+    const subpageUrl = 'https://example-restaurant.ie/our-menus/';
+    // Deep discovery fetches the subpage itself and finds a real menu there.
+    mockScrape.mockResolvedValue(
+      makeScrape({ canonicalUrl: subpageUrl, menuText: MENU_LIKE_TEXT })
+    );
+    // The labeler only ever sees a generic anchor hint ("Menus") and the URL —
+    // no page content — so it can plausibly (and, per the real bug, actually
+    // did) guess this isn't a distinct menu.
+    mockLabeler.mockImplementation(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Menu',
+        isDistinctMenu: false,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }))
+    );
+    const scrape = makeScrape({
+      // The homepage's OWN text is just opening hours — not a real menu.
+      menuText: 'Monday: 5.30-9.30\nTuesday: 5.30-9.30\nDinner. Lunch. Book a table today.',
+      menuLinks: [subpageUrl],
+      navLinks: [subpageUrl],
+      linkLabels: { [subpageUrl]: 'Menus' },
+    });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0].type).toBe('subpage');
+    expect(res.candidates[0].ref).toBe(subpageUrl);
+  });
+});
+
+describe('genuinely no menu — zero candidates, not a hallucinated fallback (bibis.ie / sprezzaturadublin.ie-class sites)', () => {
+  it('produces zero candidates for a real site with no menu text, PDFs, or images', async () => {
+    // Matches what bibis.ie and sprezzaturadublin.ie actually scraped as
+    // during manual review: some page content, but no prices, no food
+    // words, no PDF, no usable image — this precondition is what the
+    // discover route uses to show the friendly "no menu" screen instead of
+    // an error, so it must not silently invent a candidate.
+    const scrape = makeScrape({
+      menuText: 'Follow us on Instagram for the latest updates and events. See you soon!',
+    });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates).toHaveLength(0);
+  });
 });
 
 describe('recorded fixtures (skipped when not recorded)', () => {

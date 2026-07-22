@@ -75,6 +75,13 @@ export default function HeroSearch() {
             }
             router.push(`/restaurant/${event.restaurantId}`);
             return 'done';
+          } else if (event.type === 'no_menu') {
+            // Not an error: the site has no readable menu / is down. The results
+            // page renders a friendly, actionable screen (paste a link / upload
+            // a photo) keyed off the restaurant's no_menu_reason.
+            capture('no_menu_result', { restaurant_id: event.restaurantId });
+            router.push(`/restaurant/${event.restaurantId}`);
+            return 'done';
           } else if (event.type === 'error') {
             setError(event.error ?? 'An error occurred');
             setState('error');

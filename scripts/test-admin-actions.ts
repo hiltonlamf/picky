@@ -25,6 +25,7 @@ import {
   reportDish,
   resolveFeedback,
   getRestaurantFeedback,
+  restaurantHasLiveDishes,
 } from '../lib/db';
 import type { ClassifiedMenu, DietaryClassification } from '../types';
 
@@ -188,6 +189,37 @@ async function main() {
     await db.from('restaurants').delete().eq('id', id);
     await db.from('eval_cases').delete().ilike('url', URL);
     console.log('\ncleaned up throwaway restaurant + eval data.');
+  }
+
+  // --- restaurantHasLiveDishes: status is NOT a safe proxy for "has a menu" ---
+  // Security regression check for /api/submit-menu: a restaurant can drift out
+  // of status='done' (a stale reparse that fails, or finds nothing this time)
+  // while its real, previously-saved dishes are still live — the public
+  // submit-menu endpoint must not append fabricated content in that case.
+  // Isolated restaurant/cleanup so it can't disturb the checks above.
+  console.log('\n[restaurantHasLiveDishes]');
+  const URL2 = 'https://__admin_actions_test_2__.example/menu';
+  await db.from('restaurants').delete().eq('url', URL2);
+  const { data: rest2, error: err2 } = await db
+    .from('restaurants')
+    .insert({ url: URL2, city: CITY, status: 'error' }) // status=error, NOT done
+    .select('id')
+    .single();
+  if (err2) throw new Error('create second temp restaurant: ' + err2.message);
+  const id2 = rest2.id as string;
+  try {
+    check('a fresh restaurant with no dishes reports hasLiveDishes=false', !(await restaurantHasLiveDishes(id2)));
+    await saveClassifiedMenu(id2, URL2, null, menu([{ name: 'Real Dish', classification: 'vegetarian' }]));
+    check(
+      'restaurant with a real dish but status=error still reports hasLiveDishes=true (the vulnerable case)',
+      await restaurantHasLiveDishes(id2)
+    );
+    const dish = await findDish(id2, 'Real Dish');
+    await applyDishVerdict({ restaurantUrl: URL2, city: CITY, restaurantName: 'Admin Actions Test 2', restaurantId: id2, action: 'delete', dishId: dish!.id });
+    check('after soft-deleting the only dish, hasLiveDishes=false again', !(await restaurantHasLiveDishes(id2)));
+  } finally {
+    await db.from('restaurants').delete().eq('id', id2);
+    await db.from('eval_cases').delete().ilike('url', URL2);
   }
 
   console.log(`\n================ ${fail === 0 ? 'ALL PASS ✓' : 'FAILURES'} — ${pass} passed, ${fail} failed ================`);

@@ -911,14 +911,32 @@ function extractMarkdownLinkLabels(markdown: string): Record<string, string> {
 }
 
 async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
-  const res = await fetchWithRetry(url);
-  const finalUrl = res.url || url;
-  const staticHtml = await res.text();
-
-  // Top-level pages: also run a JS-rendering reader so dynamic sites
-  // (Weebly/Wix/Squarespace) and lazy-loaded menus are captured. The reader is
-  // best-effort and returns null when no provider/key is available or on error.
-  const reader = depth === 0 ? await readPage(finalUrl).catch(() => null) : null;
+  let finalUrl = url;
+  let staticHtml = '';
+  let reader: Awaited<ReturnType<typeof readPage>> = null;
+  try {
+    const res = await fetchWithRetry(url);
+    finalUrl = res.url || url;
+    staticHtml = await res.text();
+    // Top-level pages: also run a JS-rendering reader so dynamic sites
+    // (Weebly/Wix/Squarespace) and lazy-loaded menus are captured. Best-effort —
+    // returns null when no provider/key is available or on error.
+    reader = depth === 0 ? await readPage(finalUrl).catch(() => null) : null;
+  } catch (err) {
+    // Our own fetch failed outright — most commonly a TLS trust-chain gap our
+    // Node runtime hasn't caught up with yet (e.g. a brand-new CA root real
+    // browsers and curl already trust, but Node's bundled CA list doesn't).
+    // Only worth retrying at the top level — a subpage fetch failure is
+    // already caught by the caller's own try/catch, one link at a time.
+    // The reader does its OWN server-side fetch, on different infrastructure,
+    // so it isn't blocked by the same local trust-store gap. If it ALSO can't
+    // reach the page, there's genuinely nothing to read — rethrow so the
+    // caller's normal "site down" handling applies.
+    if (depth > 0) throw err;
+    reader = await readPage(url).catch(() => null);
+    if (!reader) throw err;
+    finalUrl = reader.finalUrl || url;
+  }
 
   // Use the reader's rawHtml for DOM extraction when present (Firecrawl),
   // otherwise the static HTML still carries anchor tags for link discovery.

@@ -11,6 +11,7 @@ import {
   saveClassifiedMenu,
   saveMenuCandidates,
   markRestaurantError,
+  markRestaurantNoMenu,
   logUsage,
   logParseAttempt,
 } from '@/lib/db';
@@ -117,6 +118,25 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
+        // Cached "no menu / dead site". Returning this costs ZERO AI, so like the
+        // 'done' cache hit it must NOT re-run the paid pipeline or spend a rate
+        // slot. We short-circuit when the outcome is durable:
+        //   * admin-confirmed (any reason) — sticky forever, or
+        //   * a fresh 'not_listed' — we DID read the site and it genuinely has no
+        //     menu, so re-reading (a full paid extract) can't change the answer.
+        // We deliberately DON'T cache an unconfirmed 'unavailable' (a fetch
+        // failure): that may be a transient blip, and retrying a dead fetch is
+        // cheap (no AI — the scrape throws before any model runs), so we let a
+        // re-search retry it naturally until an admin confirms it's really dead.
+        if (
+          existing?.status === 'no_menu' &&
+          (existing.noMenuConfirmedAt ||
+            (existing.noMenuReason === 'not_listed' && isFresh(existing.lastScrapedAt)))
+        ) {
+          send({ type: 'no_menu', restaurantId: existing.id });
+          return close();
+        }
+
         // Past the cache: this WILL run the AI pipeline (a new restaurant, or a
         // stale reparse), so enforce and consume ONE rate-limit slot here — one
         // per new restaurant. The downstream /analyze step deliberately does not
@@ -141,11 +161,18 @@ export async function POST(request: NextRequest) {
         try {
           scrapeResult = await scrapeRestaurant(url);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Could not fetch this page';
-          await markRestaurantError(restaurantId, msg);
-          await logAttempt(false, msg);
+          const rawMsg = err instanceof Error ? err.message : 'Could not fetch this page';
+          // A fetch that never returned a page: treat as "site down / not live"
+          // rather than a red error, so the user gets an honest, actionable
+          // screen ("this site looks down — share the correct link"). Not cached
+          // while unconfirmed (see the discover cache note), so a transient blip
+          // retries naturally on the next search.
+          const msg =
+            "This website looks like it's down or not live yet. If that's not right, share a direct link to the menu and we'll read it.";
+          await markRestaurantNoMenu(restaurantId, 'unavailable', rawMsg);
+          await logAttempt(false, rawMsg);
           await emitAnalysisCompleted(false);
-          send({ type: 'error', error: msg });
+          send({ type: 'no_menu', restaurantId });
           return close();
         }
 
@@ -159,10 +186,10 @@ export async function POST(request: NextRequest) {
           const msg =
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
-          await markRestaurantError(restaurantId, msg);
+          await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
           await logAttempt(false, msg);
           await emitAnalysisCompleted(false);
-          send({ type: 'error', error: msg });
+          send({ type: 'no_menu', restaurantId });
           return close();
         }
 
@@ -176,10 +203,10 @@ export async function POST(request: NextRequest) {
         if (discovery.candidates.length === 0) {
           const msg =
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
-          await markRestaurantError(restaurantId, msg);
+          await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
           await logAttempt(false, msg);
           await emitAnalysisCompleted(false);
-          send({ type: 'error', error: msg });
+          send({ type: 'no_menu', restaurantId });
           return close();
         }
         attemptCategory = menuCategory(discovery.candidates);
@@ -242,6 +269,15 @@ export async function POST(request: NextRequest) {
           // Failed retry ladders still spent tokens — record them.
           if (err instanceof ExtractionError && err.usage) {
             await logUsage(restaurantId, discovery.finalUrl, err.usage, ctx.title);
+          }
+          // An ExtractionError means we found candidate menus but couldn't read
+          // any dishes from them — that's "no readable menu", not a system error.
+          if (err instanceof ExtractionError) {
+            await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
+            await logAttempt(false, msg);
+            await emitAnalysisCompleted(false);
+            send({ type: 'no_menu', restaurantId });
+            return close();
           }
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);

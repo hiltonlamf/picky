@@ -17,9 +17,16 @@ function StatTile({ label, value }: { label: string; value: string }) {
 
 function statusClass(status: string): string {
   if (status === 'error') return 'bg-sun-50 text-sun-800';
+  if (status === 'no_menu') return 'bg-sun-50 text-sun-800';
   if (status === 'done') return 'bg-mint-100 text-picky-700';
   return 'bg-mint-100 text-evergreen/80';
 }
+
+const NO_MENU_REASON_LABEL: Record<string, string> = {
+  not_listed: 'No menu listed',
+  unavailable: 'Site down',
+  closed: 'Closed',
+};
 
 export default async function AdminHomePage() {
   const stats = await getAdminDashboardStats();
@@ -28,11 +35,45 @@ export default async function AdminHomePage() {
     <div className="max-w-4xl mx-auto px-4 py-10">
       <AdminNav active="dashboard" />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-10">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
         <StatTile label="Today's spend" value={`$${stats.todaySpendUsd.toFixed(4)}`} />
         <StatTile label="Error rate" value={stats.errorRatePct !== null ? `${stats.errorRatePct.toFixed(1)}%` : 'n/a'} />
         <StatTile label="Open feedback" value={String(stats.openFeedbackCount)} />
+        <StatTile label="No-menu to confirm" value={String(stats.noMenuQueue.length)} />
       </div>
+
+      {/* No-menu / dead-site queue: restaurants the pipeline couldn't read that
+          need a human to sign off (sticky "no menu") or overturn (add the real
+          menu). Confirming stops us re-paying to re-check menu-less sites. */}
+      {stats.noMenuQueue.length > 0 && (
+        <div className="mb-10">
+          <h2 className="eyebrow mb-3">No-menu / dead sites to confirm</h2>
+          <div className="card divide-y divide-mint-100">
+            {stats.noMenuQueue.map((r) => (
+              <Link
+                key={r.id}
+                href={`/admin/restaurants/${r.id}/review`}
+                className="flex items-center justify-between gap-4 p-4 hover:bg-mint-50 transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="font-semibold text-evergreen truncate">{r.name ?? r.url}</p>
+                  <p className="text-xs text-evergreen/80 truncate">{r.url}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {r.openFeedbackCount > 0 && (
+                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-sun-50 text-sun-800">
+                      💬 {r.openFeedbackCount}
+                    </span>
+                  )}
+                  <span className="text-xs font-mono uppercase px-2 py-1 rounded-full bg-sun-50 text-sun-800">
+                    {NO_MENU_REASON_LABEL[r.reason ?? 'not_listed'] ?? 'No menu'}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <h2 className="eyebrow">Recent restaurants</h2>
