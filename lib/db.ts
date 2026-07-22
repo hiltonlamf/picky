@@ -494,6 +494,56 @@ export async function saveClassifiedMenu(
     deletedAt: (d.deleted_at as string | null) ?? null,
   }));
 
+  // --- dish-report preservation ---
+  // A diner's "this label is wrong" report lives in dish_reports, FK'd to
+  // dishes with ON DELETE CASCADE — so the wipe below would silently delete
+  // every report (and the report_count/warning_flagged tally on each dish)
+  // along with the old rows. Snapshot both now, keyed by (name, section) like
+  // the verified dishes, and re-home them onto the fresh rows after the insert
+  // so a menu refresh never loses a user trust signal.
+  const { data: oldDishRows } = await db()
+    .from('dishes')
+    .select(
+      'id, name, section_id, report_count, warning_flagged, classification, confidence, description, price, origin, ai_classification'
+    )
+    .eq('restaurant_id', restaurantId);
+  const oldDishes = (oldDishRows ?? []) as DbRow[];
+  const oldDishKey = (d: DbRow) => ({
+    name: d.name as string,
+    sectionName: d.section_id ? (oldSectionNameById.get(d.section_id as string) ?? null) : null,
+  });
+  const oldDishById = new Map(oldDishes.map((d) => [d.id as string, d]));
+
+  const reportedDishes = oldDishes
+    .filter((d) => (((d.report_count as number) ?? 0) > 0) || (d.warning_flagged as boolean))
+    .map((d) => ({
+      ...oldDishKey(d),
+      reportCount: (d.report_count as number) ?? 0,
+      warningFlagged: !!(d.warning_flagged as boolean),
+      classification: d.classification as DietaryClassification,
+      confidence: (d.confidence as number) ?? 0.5,
+      description: (d.description as string | null) ?? null,
+      price: (d.price as string | null) ?? null,
+      origin: ((d.origin as string) === 'admin' ? 'admin' : 'ai') as 'ai' | 'admin',
+      aiClassification: (d.ai_classification as DietaryClassification | null) ?? null,
+    }));
+
+  let oldReports: DbRow[] = [];
+  if (oldDishes.length > 0) {
+    const { data: rep } = await db()
+      .from('dish_reports')
+      .select('*')
+      .in('dish_id', oldDishes.map((d) => d.id as string));
+    oldReports = (rep ?? []) as DbRow[];
+  }
+  // Tag each report with its dish's (name, section) so it can be re-homed.
+  const reportsWithKey = oldReports
+    .map((r) => {
+      const od = oldDishById.get(r.dish_id as string);
+      return od ? { report: r, key: oldDishKey(od) } : null;
+    })
+    .filter((x): x is { report: DbRow; key: { name: string; sectionName: string | null } } => x !== null);
+
   await db().from('dishes').delete().eq('restaurant_id', restaurantId);
   await db().from('menu_sections').delete().eq('restaurant_id', restaurantId);
 
@@ -604,6 +654,111 @@ export async function saveClassifiedMenu(
             ai_classification: v.aiClassification,
             deleted_at: v.deletedAt,
           });
+      }
+    }
+  }
+
+  // --- re-home the preserved dish reports + tallies onto the fresh rows ---
+  if (reportedDishes.length > 0 || reportsWithKey.length > 0) {
+    const norm = (s: string) => s.toLowerCase().trim();
+    // Read the CURRENT dishes (after the fresh insert and the verified
+    // re-application above, which may already have re-inserted some dishes).
+    const loadCurrent = async () => {
+      const { data: secRows } = await db()
+        .from('menu_sections')
+        .select('id, name')
+        .eq('restaurant_id', restaurantId);
+      const secs = (secRows ?? []) as DbRow[];
+      const secNameById = new Map(secs.map((s) => [s.id as string, s.name as string]));
+      const secIdByName = new Map(secs.map((s) => [s.name as string, s.id as string]));
+      const { data: dishRows } = await db()
+        .from('dishes')
+        .select('id, name, section_id')
+        .eq('restaurant_id', restaurantId);
+      const dishes = ((dishRows ?? []) as DbRow[]).map((d) => ({
+        id: d.id as string,
+        name: d.name as string,
+        sectionName: d.section_id ? (secNameById.get(d.section_id as string) ?? null) : null,
+      }));
+      return { dishes, secIdByName };
+    };
+    let { dishes: currentDishes, secIdByName } = await loadCurrent();
+    const findMatch = (key: { name: string; sectionName: string | null }) =>
+      currentDishes.find(
+        (c) => norm(c.name) === norm(key.name) && (c.sectionName ?? null) === (key.sectionName ?? null)
+      ) ??
+      currentDishes.find((c) => norm(c.name) === norm(key.name)) ??
+      null;
+
+    // 1) Restore report_count/warning_flagged onto surviving dishes; for a
+    //    reported dish that dropped off the menu, re-insert it soft-deleted so
+    //    its reports still have a home and an admin can triage them (it won't
+    //    show as a live menu item).
+    let reinsertedAny = false;
+    for (const rd of reportedDishes) {
+      const match = findMatch(rd);
+      if (match) {
+        await db()
+          .from('dishes')
+          .update({ report_count: rd.reportCount, warning_flagged: rd.warningFlagged })
+          .eq('id', match.id);
+      } else {
+        await db()
+          .from('dishes')
+          .insert({
+            restaurant_id: restaurantId,
+            section_id: rd.sectionName ? (secIdByName.get(rd.sectionName) ?? null) : null,
+            name: rd.name,
+            description: rd.description,
+            price: rd.price,
+            classification: rd.classification,
+            confidence: rd.confidence,
+            origin: rd.origin,
+            ai_classification: rd.aiClassification,
+            report_count: rd.reportCount,
+            warning_flagged: rd.warningFlagged,
+            deleted_at: new Date().toISOString(),
+          });
+        reinsertedAny = true;
+      }
+    }
+    if (reinsertedAny) ({ dishes: currentDishes, secIdByName } = await loadCurrent());
+
+    // 2) Re-insert the report rows against the matched new dish ids (the old
+    //    rows were cascade-deleted). Preserve triage state and timestamps.
+    const reportRows = reportsWithKey
+      .map(({ report, key }) => {
+        const match = findMatch(key);
+        if (!match) return null;
+        return {
+          dish_id: match.id,
+          issue_type: report.issue_type as string,
+          notes: (report.notes as string | null) ?? null,
+          ip_hash: (report.ip_hash as string | null) ?? null,
+          anon_id: (report.anon_id as string | null) ?? null,
+          status: (report.status as string | null) ?? 'open',
+          resolution_notes: (report.resolution_notes as string | null) ?? null,
+          resolved_at: (report.resolved_at as string | null) ?? null,
+          created_at: report.created_at as string,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    if (reportRows.length > 0) {
+      const { error } = await db().from('dish_reports').insert(reportRows);
+      // Degrade gracefully if the triage/anon columns aren't migrated yet.
+      if (error) {
+        await db()
+          .from('dish_reports')
+          .insert(
+            reportRows.map((r) => ({
+              dish_id: r.dish_id,
+              issue_type: r.issue_type,
+              notes: r.notes,
+              ip_hash: r.ip_hash,
+              created_at: r.created_at,
+            }))
+          );
       }
     }
   }
