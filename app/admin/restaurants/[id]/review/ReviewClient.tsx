@@ -106,6 +106,7 @@ export default function ReviewClient({
     restaurant.noMenuReason ?? 'not_listed'
   );
   const [confirmedAt, setConfirmedAt] = useState<string | null>(restaurant.noMenuConfirmedAt ?? null);
+  const [reparseResult, setReparseResult] = useState<string | null>(null);
 
   const groups = groupSections(restaurant.sections);
 
@@ -284,6 +285,25 @@ export default function ReviewClient({
     }
   }
 
+  async function reparseRestaurant() {
+    if (
+      !window.confirm(
+        `Re-read "${restaurant.name ?? restaurant.url}" from scratch — fresh scrape, fresh AI classification — and overwrite its current menus? A small real cost (roughly $0.05, more for a long menu). Continue?`
+      )
+    ) {
+      return;
+    }
+    setReparseResult(null);
+    await run('reparse', async () => {
+      const data = await postJson(`/api/admin/restaurants/${restaurant.id}/reparse`, {});
+      setReparseResult(
+        data.outcome === 'no_menu'
+          ? `No menu found this time: ${data.message}`
+          : `Done — found ${data.dishCount} dish${data.dishCount === 1 ? '' : 'es'} (~$${data.costUsd.toFixed(2)}).`
+      );
+    });
+  }
+
   async function copyId() {
     try {
       await navigator.clipboard.writeText(restaurant.id);
@@ -418,7 +438,17 @@ export default function ReviewClient({
             {copied ? 'Copied ✓' : 'Copy'}
           </button>
         </div>
-        <p className="text-xs text-evergreen/60 mt-1">{formatScrapedAt(restaurant.lastScrapedAt)}</p>
+        <div className="mt-1 flex items-center gap-2 flex-wrap">
+          <p className="text-xs text-evergreen/60">{formatScrapedAt(restaurant.lastScrapedAt)}</p>
+          <button
+            disabled={busy === 'reparse'}
+            onClick={reparseRestaurant}
+            className="text-[11px] font-medium text-picky-700 hover:underline disabled:opacity-50"
+          >
+            {busy === 'reparse' ? 'Re-reading the site…' : 'Reparse now'}
+          </button>
+        </div>
+        {reparseResult && <p className="text-xs text-evergreen/70 mt-0.5">{reparseResult}</p>}
         {totalOpenFeedback > 0 && (
           <p className="mt-2 inline-block rounded-full bg-sun-50 text-sun-800 text-xs font-medium px-3 py-1">
             💬 {totalOpenFeedback} open feedback item{totalOpenFeedback > 1 ? 's' : ''} for this restaurant
