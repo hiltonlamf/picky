@@ -1,5 +1,5 @@
 {
-  "comment": "Live-site E2E cases for scripts/run-pipeline-tests.ts. category: text|pdf|image|multilang|js|multi. smoke: stable subset for quick runs (npm run test:smoke).",
+  "comment": "Live-site E2E cases for scripts/run-pipeline-tests.ts. category: text|pdf|image|multilang|js|multi. smoke: stable subset for quick runs (npm run test:smoke). NOTE: two of the 7 sites in docs/debug-failed-dublin-restaurants.md (Amai by Viktor, Drury Buildings) are deliberately NOT listed here — their live auto-discovery still fails (Amai: real menu subpages aren't linked anywhere crawlable, not fixable in code; Drury: a TLS trust-chain gap in Node's bundled CA list, expected to self-resolve — see lib/scraper.ts's fetch-fallback comment). Adding them would mean permanently-failing entries with no code fix to chase; the underlying bugs are instead covered by fixtures in tests/discovery.test.ts and tests/scraper-fetch-fallback.test.ts. Re-check either manually anytime: `npx tsx scripts/run-pipeline-tests.ts amai` / `drury`.",
   "cases": [
     { "name": "Misters", "url": "https://www.misters.ie/", "category": "text", "smoke": true },
     { "name": "Host", "url": "https://hostrestaurant.ie/", "category": "text" },
@@ -15,6 +15,7 @@
     { "name": "The Vintage Kitchen", "url": "https://thevintagekitchen.ie/", "category": "multi", "smoke": true },
     { "name": "Jaru", "url": "https://www.jaru.ie/", "category": "multi" },
     { "name": "Wagamama", "url": "https://wagamama.ie/", "category": "js" },
+    { "name": "Kicky's", "url": "https://kickys.ie/", "category": "text" },
 
     { "name": "Forest Avenue", "url": "https://www.forestavenuerestaurant.ie/", "category": "text", "extended": true },
     { "name": "L'Gueuleton", "url": "https://lgueuleton.com/", "category": "text", "extended": true },

@@ -10,6 +10,18 @@ code to look.
 > cases. Re-running them costs real Anthropic money, so debug the **scrape/discover** stages (free)
 > first and only re-run the full pipeline once you think you've fixed the root cause.
 
+## Resolution (2026-07-22)
+
+All 7 are now handled, three by real code fixes, four by the `no_menu` outcome (see
+`CLAUDE.md`'s no-menu track). Guarded by tests so a future change gets caught automatically:
+
+| Restaurant | Outcome | Regression coverage |
+|---|---|---|
+| Kicky's | **Fixed** — opening-hours-as-price regex bug + a subpage-dedup bug in `lib/menu-discovery.ts`, both real | `tests/discovery.test.ts` ("kickys.ie bug" describe blocks) — fixture-based, free, runs every push. Live case in `tests/pipeline-cases.json` ("Kicky's") — runs on merge to `main`. |
+| Drury Buildings | **Fixed manually** (admin-added PDFs) — live auto-discovery still blocked by a TLS trust-chain gap in Node's bundled CA list (a brand-new 2026 Let's Encrypt root, not yet in any formal root-trust program — deliberately not worked around by trusting it ourselves) | `tests/scraper-fetch-fallback.test.ts` — fixture-based (mocked fetch/reader), free, runs every push. **Not** in the live pipeline suite — see the `comment` field in `pipeline-cases.json` for why, and the manual re-check command. |
+| Amai by Viktor | **Fixed manually** (admin-added menus) — not actually an AVIF problem (verified: real JPEGs); the real menu subpages simply aren't linked anywhere crawlable, even via the JS-rendering reader. No code fix is possible. | None practical to write — there's no discoverable link for a fixture to exercise. Re-check manually: `npx tsx scripts/run-pipeline-tests.ts amai`. |
+| Glovers Alley, Sprezzatura, Bibi's, Clanbrassil House | **`no_menu` outcome** — genuinely no readable menu / down / closed, per manual site review | `tests/discovery.test.ts`'s "genuinely no menu" describe block covers the zero-candidates precondition these rely on. The `status='no_menu'` classification and cost-saving cache logic itself is DB-backed and verified live (not a vitest unit test — see `scripts/test-admin-actions.ts`'s pattern for the closest analogue: reparse-preservation, which also protects Drury/Amai's admin-added dishes from a future reparse bug). |
+
 ---
 
 ## The pipeline, in one screen
