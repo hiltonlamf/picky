@@ -61,6 +61,50 @@ describe('mergeMenus per-menu grouping', () => {
     ]);
     expect(merged.sections.flatMap((s) => s.dishes)).toHaveLength(1);
   });
+
+  // kickys.ie bug: ONE discovered candidate (one subpage) whose own text names
+  // several distinct menus back to back ("À La Carte", "A Taste of Kicky's",
+  // "Groups"). Discovery never split these into separate candidates, so
+  // named.length === 1 — but the extraction itself (SYSTEM_PROMPT's "multiple
+  // distinct named menus" rule) tags each section with its own menuLabel, and
+  // that must survive mergeMenus rather than being nulled out by the
+  // named.length > 1 check, or the UI flattens them onto one page.
+  it('preserves a menuLabel the extraction itself assigned, even from a single candidate', () => {
+    const merged = mergeMenus([
+      {
+        label: 'Menu', // the one subpage candidate's own (outer) label
+        menu: makeMenu([
+          { name: 'Bites', dishes: [makeDish('Focaccia')], menuLabel: 'À La Carte' },
+          { name: 'Bites', dishes: [makeDish('Croquettes')], menuLabel: "A Taste of Kicky's" },
+        ]),
+      },
+    ]);
+    expect(merged.sections).toHaveLength(2);
+    expect(merged.sections.map((s) => s.menuLabel)).toEqual(['À La Carte', "A Taste of Kicky's"]);
+    // Section names stay clean — the menu name lives in menuLabel, not baked
+    // into the name (the actual symptom: "A La Carte - Bites" as a name).
+    expect(merged.sections.every((s) => s.name === 'Bites')).toBe(true);
+  });
+
+  it('does not cross-dedup a same-named dish that legitimately appears on two internally-split menus', () => {
+    const merged = mergeMenus([
+      {
+        label: 'Menu',
+        menu: makeMenu([
+          { name: 'Sides', dishes: [makeDish('Fries', { price: '€5' })], menuLabel: 'À La Carte' },
+          { name: 'Sides', dishes: [makeDish('Fries', { price: '€5' })], menuLabel: 'Groups' },
+        ]),
+      },
+    ]);
+    expect(merged.sections.flatMap((s) => s.dishes)).toHaveLength(2);
+  });
+
+  it('still nulls menuLabel for an ordinary single-menu, single-candidate result (no regression)', () => {
+    const merged = mergeMenus([
+      { label: 'Menu', menu: makeMenu([{ name: 'Mains', dishes: [makeDish('Risotto')] }]) },
+    ]);
+    expect(merged.sections[0].menuLabel).toBeNull();
+  });
 });
 
 describe('looksLikeHeaderItems', () => {

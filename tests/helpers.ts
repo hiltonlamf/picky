@@ -34,7 +34,7 @@ export function makeDish(name: string, overrides: Partial<RawDish> = {}): RawDis
   };
 }
 
-export function makeMenu(sections: Array<{ name: string; dishes: RawDish[] }>): ClassifiedMenu {
+export function makeMenu(sections: Array<{ name: string; dishes: RawDish[]; menuLabel?: string | null }>): ClassifiedMenu {
   return { restaurantName: 'Example Restaurant', language: 'English', sections };
 }
 

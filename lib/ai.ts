@@ -70,6 +70,12 @@ CRITICAL — MULTI-LANGUAGE / BILINGUAL MENUS:
 - Some menus list each dish in two languages (e.g. French and English, or Spanish and English), either side by side or stacked. Output each dish EXACTLY ONCE — never as two separate entries. Use the dish's primary/original language for the "name" and put any translation in the description.
 - Do not let a translated duplicate inflate the dish count.
 
+CRITICAL — MULTIPLE DISTINCT NAMED MENUS ON ONE PAGE:
+- Some pages present several completely separate, independently-named menus back to back — e.g. "À La Carte Menu", "Tasting Menu", "Set Lunch Menu", "Group Menu" — each with its own set of sections/courses. This is different from one menu with several sections (Starters/Mains/Desserts).
+- When this happens, set "menuLabel" on EVERY section to that section's specific named menu (e.g. "À La Carte", "Tasting Menu"), using the menu's own name from the page, shortened naturally.
+- Keep the section's own "name" clean — do NOT prefix or repeat the menu name inside it (e.g. "Starters", never "À La Carte - Starters"). "menuLabel" is where the menu name belongs.
+- If the page describes just ONE menu (by far the most common case), omit "menuLabel" or set it to null for every section.
+
 Classification rules:
 - "vegan": dish contains only plant-based ingredients with no animal products whatsoever
 - "vegetarian": dish contains no meat, poultry, or fish, but may contain dairy, eggs, or honey
@@ -103,6 +109,7 @@ Return ONLY valid JSON in this exact structure:
   "sections": [
     {
       "name": "section name e.g. Starters, Mains, Desserts",
+      "menuLabel": "name of the specific named menu this section belongs to, e.g. 'À La Carte', 'Tasting Menu' — ONLY when the page presents multiple distinct named menus (see rule above); null for the ordinary single-menu case",
       "dishes": [
         {
           "name": "dish name",
