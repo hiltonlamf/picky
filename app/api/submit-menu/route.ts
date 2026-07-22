@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { addMenuFromUrl, addMenuFromUpload, getRestaurantMeta, submitFeedback } from '@/lib/db';
+import { addMenuFromUrl, addMenuFromUpload, getRestaurantMeta, restaurantHasLiveDishes, submitFeedback } from '@/lib/db';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { captureServer } from '@/lib/posthog-server';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
@@ -54,7 +54,11 @@ export async function POST(request: NextRequest) {
 
     // Only help where we failed — never let the public overwrite/append to a
     // restaurant that already has a live menu (that's what Feedback is for).
-    if (restaurant.status === 'done') {
+    // `status` alone isn't a safe check here: a restaurant can drift out of
+    // 'done' (a stale reparse that fails, or finds nothing this time) while
+    // its real, previously-saved dishes are still live — checking status only
+    // would let a submission APPEND fabricated content onto a real listing.
+    if (restaurant.status === 'done' || (await restaurantHasLiveDishes(restaurant.id))) {
       return NextResponse.json(
         { error: 'This restaurant already has a menu. Use the Feedback button to report an issue with it.' },
         { status: 409 }

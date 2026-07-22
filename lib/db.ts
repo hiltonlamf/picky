@@ -813,6 +813,25 @@ export async function getRestaurantMeta(
   };
 }
 
+/**
+ * Whether a restaurant has any live (non-soft-deleted) dish already saved.
+ * `status` is NOT a reliable proxy for this — resetRestaurantForReparse,
+ * markRestaurantError and markRestaurantNoMenu all update only the
+ * `restaurants` row and never touch `dishes`/`menu_sections`, so a restaurant
+ * can drift out of 'done' (a stale reparse that fails, or finds a thin/no
+ * menu this time) while its real, previously-saved dishes are still live.
+ * Callers that must not append to an existing menu (the public submit-menu
+ * flow) need to check this directly, not `status`.
+ */
+export async function restaurantHasLiveDishes(restaurantId: string): Promise<boolean> {
+  const { count } = await db()
+    .from('dishes')
+    .select('*', { count: 'exact', head: true })
+    .eq('restaurant_id', restaurantId)
+    .is('deleted_at', null);
+  return (count ?? 0) > 0;
+}
+
 /** Per-restaurant review + feedback badges shown in the admin restaurant lists. */
 export interface RestaurantReviewInfo {
   /** Menu discovery has been human-signed-off (eval_case.menus_reviewed_at). */
