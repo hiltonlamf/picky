@@ -52,6 +52,23 @@ function db(): any {
   return _client;
 }
 
+// PostgREST caps an unpaginated select at 1000 rows — silently, with no error,
+// just a truncated result. Fine for small/scoped queries (e.g. `.in('id', ids)`
+// over a handful of restaurants), but WRONG for whole-table aggregates like
+// "every live dish" once the guide grows past that count (it did — 1420 dishes
+// as of writing). Pages via `.range()` until a page comes back short.
+const PAGE_SIZE = 1000;
+async function selectAllRows<T>(build: (from: number, to: number) => Promise<{ data: T[] | null }>): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data } = await build(from, from + PAGE_SIZE - 1);
+    const page = data ?? [];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
 // Exported for tests. `\/+` (not `\/\/`) deliberately eats ANY number of
 // slashes after the protocol — a malformed "https:///site.com" (stray extra
 // slash, e.g. from string-concatenation elsewhere) must normalize the same
@@ -1000,12 +1017,16 @@ export async function getEvalDashboardStats(): Promise<EvalDashboardStats> {
     .order('created_at', { ascending: false });
   const restaurants = (restRows ?? []) as DbRow[];
 
-  // Dish counts per restaurant + overall totals (live dishes only).
-  const { data: dishRows } = await db().from('dishes').select('restaurant_id, human_verified').is('deleted_at', null);
+  // Dish counts per restaurant + overall totals (live dishes only). Paginated —
+  // this is a whole-table scan, and the guide has already grown past the
+  // unpaginated 1000-row cap (see selectAllRows).
+  const dishRows = await selectAllRows<DbRow>((from, to) =>
+    db().from('dishes').select('restaurant_id, human_verified').is('deleted_at', null).range(from, to)
+  );
   const dishCountByRestaurant = new Map<string, number>();
   let dishesTotal = 0;
   let dishesReviewed = 0;
-  for (const d of (dishRows ?? []) as DbRow[]) {
+  for (const d of dishRows) {
     dishesTotal++;
     if (d.human_verified) dishesReviewed++;
     const rid = d.restaurant_id as string;
