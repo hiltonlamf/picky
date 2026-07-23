@@ -63,11 +63,29 @@ export interface Restaurant {
   noMenuConfirmedAt?: string | null;
   /** One- or two-word cuisine type (e.g. "Italian", "Indian"); shown on guide cards. */
   cuisine?: string | null;
+  /** AI-detected primary language the menu was read in (e.g. "English", "Dutch").
+   *  Populated when a non-English menu is extracted. Admin-facing signal. */
+  menuLanguage?: string | null;
   /** Set when an admin has approved this restaurant for public display despite a
    *  review flag (e.g. a tasting menu captured as a single "dish"). null = a
    *  flagged restaurant stays hidden from the public guide until reviewed. */
   guideApprovedAt?: string | null;
+  /** Admin-only annotation (set only by the guide workspace's includeHidden
+   *  path): whether this restaurant is manually hidden from the public guide
+   *  while kept in the admin workspace. Undefined on the public path. */
+  guideHidden?: boolean;
   sections: MenuSection[];
+  createdAt: string;
+}
+
+/** A city guide's lifecycle metadata (draft → published). */
+export interface CityGuide {
+  slug: string;
+  displayName: string;
+  country: string | null;
+  status: 'draft' | 'published';
+  tagline: string | null;
+  publishedAt: string | null;
   createdAt: string;
 }
 

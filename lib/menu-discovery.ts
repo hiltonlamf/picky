@@ -24,8 +24,14 @@ function candidateId(type: MenuCandidateType, ref: string): string {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
+// Course/section words that signal "this text is a menu". English first, then a
+// generic set of common European course words so a non-English menu (Dutch,
+// French, German, Italian, Spanish) isn't rejected just for lacking English
+// words — the app targets NL/UK/IE now but this keeps discovery language-robust
+// wherever a menu can't be read in English. Not exhaustive per language; these
+// are the high-signal, low-false-positive tokens.
 const MENU_WORD_RE =
-  /\b(starter|main|dessert|appetiser|appetizer|entr[ée]e|side|sharing|à la carte|a la carte|course|salad|soup|pasta|pizza|risotto|burger|brunch|lunch|dinner)\b/i;
+  /\b(starter|main|dessert|appetiser|appetizer|entr[ée]e|side|sharing|à la carte|a la carte|course|salad|soup|pasta|pizza|risotto|burger|brunch|lunch|dinner|voorgerecht|hoofdgerecht|nagerecht|tussengerecht|bijgerecht|gerechten|menukaart|lunchkaart|soep|salade|vorspeise|hauptgericht|hauptspeise|nachspeise|nachtisch|beilage|suppe|salat|antipast|prim[io]|second[io]|contorni|dolci|entrantes|principales|postres|ensalada|plats?)\b/i;
 
 // A bare "X.XX" number (no currency symbol) is ambiguous with opening-hours
 // time ranges written the European way ("5.30-9.30", "Mon 12.30-2.30") — a
@@ -55,7 +61,7 @@ export function textLooksLikeMenu(text: string): boolean {
  * food only, so these are dropped before they ever reach the picker.
  */
 export const DRINK_SOURCE_RE =
-  /\b(wine|wines|winelist|drink|drinks|beverage|beverages|cocktail|cocktails|spirits|aperitif|digestif|bar\s?list|bar\s?menu|beer\s?list|gin\s?list|whisk(e)?y\s?list|vino|vinos|boissons|bebidas)\b/i;
+  /\b(wine|wines|winelist|drink|drinks|beverage|beverages|cocktail|cocktails|spirits|aperitif|digestif|bar\s?list|bar\s?menu|beer\s?list|gin\s?list|whisk(e)?y\s?list|vino|vinos|boissons|bebidas|dranken|drankenkaart|wijn|wijnen|wijnkaart|bieren|bierkaart|getr[äa]nke|weinkarte|weine)\b/i;
 
 /**
  * Not real dining menus — allergen sheets, catering/collection/delivery/takeaway

@@ -3,7 +3,7 @@ import { ShieldIcon } from '@/components/icons';
 import LogoutButton from './LogoutButton';
 
 interface Props {
-  active?: 'dashboard' | 'restaurants' | 'feedback' | 'eval' | 'errors' | 'guide';
+  active?: 'dashboard' | 'restaurants' | 'guides' | 'feedback' | 'eval' | 'errors' | 'guide';
 }
 
 export default function AdminNav({ active }: Props) {
@@ -24,6 +24,9 @@ export default function AdminNav({ active }: Props) {
         </Link>
         <Link href="/admin/restaurants" className={tabClass('restaurants')}>
           Restaurants
+        </Link>
+        <Link href="/admin/guides" className={tabClass('guides')}>
+          City guides
         </Link>
         <Link href="/admin/feedback" className={tabClass('feedback')}>
           Feedback

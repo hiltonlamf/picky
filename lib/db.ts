@@ -18,6 +18,7 @@ import type {
   DishReportSummary,
   RestaurantStatus,
   NoMenuReason,
+  CityGuide,
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
@@ -302,6 +303,7 @@ export async function fetchRestaurantWithDishes(
     noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
     noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
+    menuLanguage: r.menu_language ?? null,
     guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
     createdAt: r.created_at,
@@ -450,6 +452,9 @@ export async function saveClassifiedMenu(
       // Only overwrite cuisine when this run actually detected one, so a reparse
       // that omits it doesn't wipe a good existing value.
       ...(menu.cuisine ? { cuisine: menu.cuisine } : {}),
+      // Same for the detected menu language (kept for admin visibility into
+      // which menus were read in a non-English language).
+      ...(menu.language ? { menu_language: menu.language } : {}),
       ...(usage && {
         model_used: usage.model,
         tokens_in: usage.tokensIn,
@@ -882,19 +887,29 @@ export async function saveNpsResponse(
   if (error) throw new Error(`Failed to save NPS response: ${error.message}`);
 }
 
-export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]> {
+export async function getFeaturedRestaurants(
+  city: string,
+  options?: { includeHidden?: boolean }
+): Promise<Restaurant[]> {
   const { data } = await db()
     .from('featured_restaurants')
-    .select('restaurant_id, display_order')
+    .select('restaurant_id, display_order, hidden')
     .eq('city', city)
     .order('display_order');
 
-  const rows = (data ?? []) as Array<{ restaurant_id: string; display_order: number }>;
+  let rows = (data ?? []) as Array<{ restaurant_id: string; display_order: number; hidden?: boolean }>;
+  // The public guide never shows manually-hidden restaurants; the admin
+  // workspace passes includeHidden to see (and unhide) them.
+  if (!options?.includeHidden) rows = rows.filter((r) => !r.hidden);
   if (!rows.length) return [];
 
+  const hiddenById = new Map(rows.map((r) => [r.restaurant_id, !!r.hidden]));
   const results = (await Promise.all(rows.map((r) => fetchRestaurantWithDishes(r.restaurant_id)))).filter(
     Boolean
   ) as Restaurant[];
+  // Annotate each with its hide state so the admin workspace can render the
+  // Hide/Unhide control (harmless/undefined-equivalent on the public path).
+  for (const r of results) r.guideHidden = hiddenById.get(r.id) ?? false;
 
   // Rank best-for-vegetarians first: by the best SINGLE menu's veg count (a diner
   // only sees one menu per visit), tie-broken by the curated display order.
@@ -904,6 +919,184 @@ export async function getFeaturedRestaurants(city: string): Promise<Restaurant[]
     if (diff !== 0) return diff;
     return (orderById.get(a.id) ?? 0) - (orderById.get(b.id) ?? 0);
   });
+}
+
+// ============================================================
+// City guides (draft → published lifecycle)
+// ============================================================
+
+function mapCityGuide(r: DbRow): CityGuide {
+  return {
+    slug: r.slug as string,
+    displayName: r.display_name as string,
+    country: (r.country as string | null) ?? null,
+    status: (r.status as 'draft' | 'published') ?? 'draft',
+    tagline: (r.tagline as string | null) ?? null,
+    publishedAt: (r.published_at as string | null) ?? null,
+    createdAt: r.created_at as string,
+  };
+}
+
+/** Turn a free-text city name into a URL-safe slug ('Amsterdam' → 'amsterdam',
+ *  'New York' → 'new-york'). */
+export function citySlug(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '') // strip combining accents
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** All city guides, newest first, each with live restaurant counts (total /
+ *  publicly-visible / needs-attention) for the admin list. */
+export async function getCityGuides(): Promise<
+  Array<CityGuide & { total: number; visible: number; needsAttention: number }>
+> {
+  const { data } = await db().from('city_guides').select('*').order('created_at', { ascending: false });
+  const guides = ((data ?? []) as DbRow[]).map(mapCityGuide);
+
+  return Promise.all(
+    guides.map(async (g) => {
+      // includeHidden so counts reflect the whole workspace, not just public rows.
+      const restaurants = await getFeaturedRestaurants(g.slug, { includeHidden: true });
+      const visible = restaurants.filter((r) => !r.guideHidden && isPubliclyVisible(r)).length;
+      const needsAttention = restaurants.filter(
+        (r) => !r.guideHidden && !isPubliclyVisible(r) && (r.status === 'done' || r.status === 'error' || r.status === 'no_menu')
+      ).length;
+      return { ...g, total: restaurants.length, visible, needsAttention };
+    })
+  );
+}
+
+export async function getCityGuideBySlug(slug: string): Promise<CityGuide | null> {
+  const { data } = await db().from('city_guides').select('*').eq('slug', slug).maybeSingle();
+  return data ? mapCityGuide(data as DbRow) : null;
+}
+
+/** Create a draft city guide. Derives a unique slug from the display name;
+ *  throws if a guide with that slug already exists. */
+export async function createCityGuide(input: {
+  displayName: string;
+  country?: string | null;
+}): Promise<CityGuide> {
+  const slug = citySlug(input.displayName);
+  if (!slug) throw new Error('City name must contain at least one letter or number');
+
+  const existing = await getCityGuideBySlug(slug);
+  if (existing) throw new Error(`A guide for "${input.displayName}" (${slug}) already exists`);
+
+  const { data, error } = await db()
+    .from('city_guides')
+    .insert({ slug, display_name: input.displayName.trim(), country: input.country ?? null, status: 'draft' })
+    .select('*')
+    .single();
+  if (error) throw new Error(`Failed to create city guide: ${error.message}`);
+  return mapCityGuide(data as DbRow);
+}
+
+/** Publish or unpublish a city guide. Publishing makes its /[city] page
+ *  publicly reachable; unpublishing returns it to draft (public → 404). */
+export async function setCityGuidePublished(slug: string, published: boolean): Promise<void> {
+  const { error } = await db()
+    .from('city_guides')
+    .update({ status: published ? 'published' : 'draft', published_at: published ? new Date().toISOString() : null })
+    .eq('slug', slug);
+  if (error) throw new Error(`Failed to update guide status: ${error.message}`);
+}
+
+/** Manually hide/unhide a restaurant from a city's public guide while keeping
+ *  it in the admin workspace. */
+export async function setFeaturedHidden(restaurantId: string, city: string, hidden: boolean): Promise<void> {
+  const { error } = await db()
+    .from('featured_restaurants')
+    .update({ hidden })
+    .eq('restaurant_id', restaurantId)
+    .eq('city', city);
+  if (error) throw new Error(`Failed to update hidden state: ${error.message}`);
+}
+
+export interface AddToGuideResult {
+  url: string;
+  outcome: 'created' | 'existing' | 'invalid' | 'error';
+  restaurantId?: string;
+  /** Whether the batch-analyze loop should run the pipeline on this row (fresh
+   *  rows, and existing rows that never produced a menu — but never re-spend on
+   *  a restaurant that's already done or a confirmed no-menu). */
+  needsAnalysis?: boolean;
+  message?: string;
+}
+
+/** True if a string looks like a usable http(s) URL / bare domain. */
+function looksLikeUrl(raw: string): boolean {
+  const t = raw.trim();
+  if (!t) return false;
+  try {
+    const u = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
+    return u.hostname.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add a batch of restaurant URLs to a city's guide WITHOUT running any AI —
+ * cheap and fast. New restaurants are created as 'pending' and featured;
+ * existing ones are just featured (never re-analyzed here). The caller (the
+ * admin workspace) then runs the pipeline one at a time via the reparse route,
+ * so spend stays sequential and visible. Idempotent per URL.
+ */
+export async function addRestaurantsToGuide(slug: string, urls: string[]): Promise<AddToGuideResult[]> {
+  // De-dupe within the submitted list (by normalized form) so pasting the same
+  // link twice doesn't create two attempts.
+  const seen = new Set<string>();
+  const results: AddToGuideResult[] = [];
+
+  for (const raw of urls) {
+    const url = raw.trim();
+    if (!url) continue;
+    if (!looksLikeUrl(url)) {
+      results.push({ url, outcome: 'invalid', message: 'Not a valid URL' });
+      continue;
+    }
+    const key = restaurantDedupKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    try {
+      const existing = await findExistingRestaurant(url);
+      if (existing) {
+        await setGuideMembership({ restaurantId: existing.id, city: slug, featured: true });
+        const needsAnalysis = existing.status !== 'done' && existing.status !== 'no_menu';
+        results.push({ url, outcome: 'existing', restaurantId: existing.id, needsAnalysis });
+        continue;
+      }
+
+      let id: string;
+      try {
+        id = await createRestaurantRecord(url, slug);
+      } catch {
+        // Lost a dedup race — treat as existing.
+        const retry = await findExistingRestaurant(url);
+        if (retry) {
+          await setGuideMembership({ restaurantId: retry.id, city: slug, featured: true });
+          results.push({ url, outcome: 'existing', restaurantId: retry.id, needsAnalysis: retry.status !== 'done' && retry.status !== 'no_menu' });
+          continue;
+        }
+        throw new Error('Could not create restaurant');
+      }
+      // Fresh rows sit as 'pending' (queued for the batch loop), not the
+      // 'processing' default which implies an in-flight job.
+      await db().from('restaurants').update({ status: 'pending' }).eq('id', id);
+      await setGuideMembership({ restaurantId: id, city: slug, featured: true });
+      results.push({ url, outcome: 'created', restaurantId: id, needsAnalysis: true });
+    } catch (err) {
+      results.push({ url, outcome: 'error', message: err instanceof Error ? err.message : 'Failed to add' });
+    }
+  }
+
+  return results;
 }
 
 // ============================================================

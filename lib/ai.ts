@@ -69,6 +69,7 @@ CRITICAL — WHAT TO INCLUDE vs. EXCLUDE:
 CRITICAL — MULTI-LANGUAGE / BILINGUAL MENUS:
 - Some menus list each dish in two languages (e.g. French and English, or Spanish and English), either side by side or stacked. Output each dish EXACTLY ONCE — never as two separate entries. Use the dish's primary/original language for the "name" and put any translation in the description.
 - Do not let a translated duplicate inflate the dish count.
+- If a dish is written ONLY in a non-English language (the menu offers no English version of it), KEEP the original-language dish name in "name" and ADD a concise English translation of the dish — and its key ingredients — to the "description", so an English-speaking reader understands it. Do NOT translate the "name" itself, and do not drop the original description; append the English translation to it. This applies to any language (Dutch, French, German, etc.).
 
 CRITICAL — MULTIPLE DISTINCT NAMED MENUS ON ONE PAGE:
 - Some pages present several completely separate, independently-named menus back to back — e.g. "À La Carte Menu", "Tasting Menu", "Set Lunch Menu", "Group Menu" — each with its own set of sections/courses. This is different from one menu with several sections (Starters/Mains/Desserts).

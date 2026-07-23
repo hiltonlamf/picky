@@ -96,7 +96,26 @@ CREATE TABLE IF NOT EXISTS featured_restaurants (
   restaurant_id   UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   city            TEXT NOT NULL,
   display_order   INTEGER NOT NULL DEFAULT 0,
+  -- Manual "hide from public" while keeping the row in the admin guide
+  -- workspace (independent of the automatic ≥7-dish / review-flag gate).
+  hidden          BOOLEAN NOT NULL DEFAULT false,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- City guides: the draft → published lifecycle for a whole city. A guide is
+-- built privately (draft), reviewed, previewed, then published to make its
+-- /[city] page publicly reachable. Restaurants belong to a city via
+-- restaurants.city + featured_restaurants; this table adds the city-level
+-- metadata and publish switch.
+CREATE TABLE IF NOT EXISTS city_guides (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  slug          TEXT NOT NULL UNIQUE,        -- URL segment, e.g. 'amsterdam'
+  display_name  TEXT NOT NULL,               -- 'Amsterdam'
+  country       TEXT,                        -- 'Netherlands'
+  status        TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+  tagline       TEXT,                        -- optional hero override
+  published_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Rate limiting (simple IP-hash based)
@@ -155,6 +174,12 @@ ALTER TABLE restaurants
 -- prompt and shown on guide cards. Nullable; backfilled by scripts/backfill-cuisine.ts.
 ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS cuisine TEXT;
+
+-- AI-detected primary menu language (e.g. 'English', 'Dutch'), emitted by the
+-- extraction prompt. Nullable. Used to show admins which menus were read in a
+-- non-English language (mirrors 20260723120000_add_city_guides.sql).
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS menu_language TEXT;
 
 -- "No menu / dead site" terminal outcome (mirrors
 -- supabase/migrations/20260721120000_add_no_menu_status.sql). Distinct from a
