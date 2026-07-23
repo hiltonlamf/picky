@@ -1,7 +1,4 @@
 import Link from 'next/link';
-import AdminNav from '@/components/admin/AdminNav';
-
-export const metadata = { title: 'Reviewer guide — Picky admin' };
 
 function Step({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
   return (
@@ -17,13 +14,14 @@ function Step({ n, title, children }: { n: string; title: string; children: Reac
   );
 }
 
-export default function AdminGuidePage() {
+/**
+ * The reviewer's how-to. Lives here (not on its own page/tab) so it can be
+ * embedded as an expandable section inside the Evaluation dashboard.
+ */
+export default function ReviewerGuide() {
   return (
-    <div className="max-w-3xl mx-auto px-4 py-10">
-      <AdminNav active="guide" />
-
-      <h1 className="text-2xl font-bold text-evergreen mb-2">How to review restaurants</h1>
-      <p className="text-sm text-evergreen/80 mb-8">
+    <div>
+      <p className="text-sm text-evergreen/80 mb-6">
         This is the human quality-control loop behind Picky. The AI reads menus and classifies dishes automatically;
         your job is to spot-check it, fix what&rsquo;s wrong, and — every time you do — quietly grow a human-verified
         golden set we use to measure whether the app is getting better. You will <strong>not</strong> review every
@@ -31,7 +29,7 @@ export default function AdminGuidePage() {
       </p>
 
       {/* The quality bar */}
-      <section className="card p-5 mb-8">
+      <section className="card p-5 mb-6">
         <h2 className="eyebrow mb-3">What &ldquo;working&rdquo; means — in priority order</h2>
         <ol className="text-sm text-evergreen/90 space-y-2 list-decimal pl-5">
           <li>
@@ -56,7 +54,7 @@ export default function AdminGuidePage() {
       </section>
 
       {/* Daily loop */}
-      <section className="mb-8">
+      <section className="mb-6">
         <h2 className="eyebrow mb-4">Your loop when you sit down</h2>
         <div className="space-y-6">
           <Step n="1" title="Clear the feedback inbox first">
@@ -79,8 +77,7 @@ export default function AdminGuidePage() {
 
           <Step n="2" title="Then sample restaurants proactively">
             <p>
-              Open the <Link href="/admin/eval" className="text-picky-700 hover:underline">Evaluation Dashboard</Link>.
-              Work the problem lists top-down — they&rsquo;re already sorted by what matters:
+              Work the problem lists on this dashboard top-down — they&rsquo;re already sorted by what matters:
             </p>
             <ul className="list-disc pl-5 space-y-1">
               <li><strong>Fetch health</strong> — restaurants that errored or came back empty. Fix these first.</li>
@@ -98,7 +95,7 @@ export default function AdminGuidePage() {
       </section>
 
       {/* Reviewing one restaurant */}
-      <section className="mb-8">
+      <section className="mb-6">
         <h2 className="eyebrow mb-4">Reviewing one restaurant</h2>
         <div className="space-y-6">
           <Step n="1" title="Check the menus are right (menu-level)">

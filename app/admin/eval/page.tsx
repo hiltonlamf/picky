@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import AdminNav from '@/components/admin/AdminNav';
 import RestaurantBadges from '@/components/admin/RestaurantBadges';
+import ReviewerGuide from '@/components/admin/ReviewerGuide';
 import { getEvalDashboardStats } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -33,13 +34,22 @@ export default async function AdminEvalPage() {
           Export CSV
         </a>
       </div>
-      <p className="text-sm text-evergreen/80 mb-8">
+      <p className="text-sm text-evergreen/80 mb-4">
         How well the app is doing, in priority order — getting the menus right matters most, classification least (a
-        human confirms those). All numbers are free DB reads, no AI cost.{' '}
-        <Link href="/admin/guide" className="text-picky-700 hover:underline">
-          How to review →
-        </Link>
+        human confirms those). All numbers are free DB reads, no AI cost.
       </p>
+
+      {/* Reviewer instructions — collapsed by default, expand to read. */}
+      <details className="card p-4 mb-8 group">
+        <summary className="cursor-pointer list-none flex items-center justify-between gap-3 text-sm font-semibold text-evergreen">
+          <span>📖 How to review restaurants — instructions</span>
+          <span className="text-evergreen/50 text-xs group-open:hidden">Click to expand ▸</span>
+          <span className="text-evergreen/50 text-xs hidden group-open:inline">Click to collapse ▾</span>
+        </summary>
+        <div className="mt-5">
+          <ReviewerGuide />
+        </div>
+      </details>
 
       {/* Needs review — featured restaurants the public ISN'T seeing. */}
       <div className={`card p-4 mb-8 ${stats.withheldFeatured.length > 0 ? 'border-l-4 border-l-sun-500' : ''}`}>
