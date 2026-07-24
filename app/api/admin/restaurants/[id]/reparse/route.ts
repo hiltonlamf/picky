@@ -85,7 +85,9 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
     }
     if (err instanceof ExtractionError) {
       await markRestaurantNoMenu(restaurant.id, 'not_listed', msg);
-      return NextResponse.json({ outcome: 'no_menu', message: msg });
+      // Report the failed ladder's spend too — failures are the expensive path,
+      // so the batch analyzer's running cost must count them, not just successes.
+      return NextResponse.json({ outcome: 'no_menu', message: msg, costUsd: err.usage?.costUsd });
     }
     await markRestaurantError(restaurant.id, msg);
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -277,6 +277,67 @@ function resolveUrl(href: string, base: string): string {
   }
 }
 
+/**
+ * When a page declares itself non-English but offers an English version, return
+ * that English URL so the whole pipeline reads the English menu. Generic and
+ * language-agnostic — works for a Dutch, French, German or five-language site
+ * identically; nothing is hardcoded per language. Returns null when the page is
+ * already English (or has no language declared) or offers no English variant.
+ *
+ * Detection order (cheapest, most reliable first):
+ *   1. <html lang> — if it's already English, don't switch.
+ *   2. <link rel="alternate" hreflang="en..."> — the standard signal.
+ *   3. A language-switcher link to English (/en/ path, en. subdomain,
+ *      ?lang=en, or an "EN"/"English" nav link).
+ */
+export function findEnglishVariant($: cheerio.CheerioAPI, currentUrl: string): string | null {
+  const htmlLang = ($('html').attr('lang') ?? '').trim().toLowerCase();
+  // No declared language → assume English and don't pay for a second fetch.
+  if (!htmlLang || htmlLang.startsWith('en')) return null;
+
+  const normalize = (u: string) => u.replace(/#.*$/, '').replace(/\/$/, '');
+  const current = normalize(currentUrl);
+  const isCurrent = (u: string) => normalize(u) === current;
+
+  // 2. Standard hreflang alternate.
+  let found: string | null = null;
+  $('link[rel="alternate"][hreflang]').each((_, el) => {
+    if (found) return;
+    const lang = ($(el).attr('hreflang') ?? '').toLowerCase();
+    if (lang !== 'en' && !lang.startsWith('en-')) return;
+    const abs = resolveUrl($(el).attr('href') ?? '', currentUrl);
+    if (abs && abs.startsWith('http') && !isCurrent(abs)) found = abs;
+  });
+  if (found) return found;
+
+  // 3. Language-switcher anchor.
+  $('a[href]').each((_, el) => {
+    if (found) return;
+    const abs = resolveUrl($(el).attr('href') ?? '', currentUrl);
+    if (!abs || !abs.startsWith('http') || isCurrent(abs)) return;
+    const label = (
+      $(el).text().trim() + ' ' + ($(el).attr('title') ?? '') + ' ' + ($(el).attr('aria-label') ?? '')
+    ).toLowerCase().trim();
+    let path = '';
+    let hostFirst = '';
+    try {
+      const u = new URL(abs);
+      path = (u.pathname + u.search).toLowerCase();
+      hostFirst = u.hostname.split('.')[0];
+    } catch {
+      return;
+    }
+    const looksEnglish =
+      hostFirst === 'en' || // en.example.com
+      /(^|\/)en(\/|-|$)/.test(path) || // /en/ , /en-us/ , /en
+      /[?&](lang|language|locale|hl|l)=en(\b|-|_)/.test(path) || // ?lang=en
+      /\benglish\b/.test(label) ||
+      label === 'en';
+    if (looksEnglish) found = abs;
+  });
+  return found;
+}
+
 // Does NOT mutate the cheerio DOM — only reads text
 function extractText($: cheerio.CheerioAPI): string {
   const $clone = cheerio.load($.html());
@@ -910,7 +971,7 @@ function extractMarkdownLinkLabels(markdown: string): Record<string, string> {
   return labels;
 }
 
-async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
+async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): Promise<HtmlPageResult> {
   let finalUrl = url;
   let staticHtml = '';
   let reader: Awaited<ReturnType<typeof readPage>> = null;
@@ -941,6 +1002,23 @@ async function scrapeHtmlPage(url: string, depth = 0): Promise<HtmlPageResult> {
   // Use the reader's rawHtml for DOM extraction when present (Firecrawl),
   // otherwise the static HTML still carries anchor tags for link discovery.
   const $ = cheerio.load(reader?.html && reader.html.length > staticHtml.length ? reader.html : staticHtml);
+
+  // English-first: if this page declares itself non-English but offers an
+  // English version, read the English one instead (whole pipeline, so menu +
+  // dishes come back in English). Only at the top level, and only once
+  // (allowLangSwitch=false on the re-scrape) to avoid a switch loop. If the
+  // English variant turns out thin/broken, fall through to the original page.
+  if (depth === 0 && allowLangSwitch) {
+    const enUrl = findEnglishVariant($, finalUrl);
+    if (enUrl) {
+      try {
+        const enResult = await scrapeHtmlPage(enUrl, 0, false);
+        if (enResult.text && enResult.text.length >= 200) return enResult;
+      } catch {
+        // English variant unreachable — keep the original-language page.
+      }
+    }
+  }
 
   // Find links and images BEFORE extractText
   const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs, linkLabels } =
