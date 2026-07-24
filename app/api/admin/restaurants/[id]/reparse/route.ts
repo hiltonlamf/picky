@@ -84,10 +84,23 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
       await logUsage(restaurant.id, discovery.finalUrl, err.usage, ctx.title);
     }
     if (err instanceof ExtractionError) {
-      await markRestaurantNoMenu(restaurant.id, 'not_listed', msg);
+      // Distinguish "we read the site and it genuinely has no menu" from "we
+      // FOUND a menu (links/PDFs) but couldn't READ it this time". The latter is
+      // almost always a transient read failure — most often the JS-rendering
+      // reader being rate-limited on a batch — not a menuless restaurant. Recording
+      // it as 'not_listed' (sticky "doesn't publish a menu") is a trust-breaking
+      // wrong verdict AND blocks a retry; 'unavailable' stays retryable, so a
+      // re-run (e.g. after a reader key is added) can succeed. If discovery found
+      // no candidate at all, it really is "no menu here" → 'not_listed'.
+      const foundMenuButUnread = discovery.candidates.length > 0;
+      const reason = foundMenuButUnread ? 'unavailable' : 'not_listed';
+      const userMsg = foundMenuButUnread
+        ? "We found this restaurant's menu but couldn't read all of it this time — the site may have been slow to load. Try again."
+        : msg;
+      await markRestaurantNoMenu(restaurant.id, reason, userMsg);
       // Report the failed ladder's spend too — failures are the expensive path,
       // so the batch analyzer's running cost must count them, not just successes.
-      return NextResponse.json({ outcome: 'no_menu', message: msg, costUsd: err.usage?.costUsd });
+      return NextResponse.json({ outcome: 'no_menu', message: userMsg, costUsd: err.usage?.costUsd });
     }
     await markRestaurantError(restaurant.id, msg);
     return NextResponse.json({ error: msg }, { status: 500 });

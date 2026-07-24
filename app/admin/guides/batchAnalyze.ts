@@ -20,6 +20,14 @@ export interface AnalyzeSummary {
   stopped: boolean;
 }
 
+// Small pause between restaurants. When a site analyses successfully the
+// reparse call already takes 30-60s, so this adds nothing meaningful; its real
+// job is to stop a run of FAST failures (e.g. dead sites) from firing dozens of
+// page-reader calls per minute and tripping the reader's rate limit — the exact
+// failure that made a whole Amsterdam batch come back empty.
+const INTER_RESTAURANT_DELAY_MS = 1500;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function analyzeSequentially(
   ids: string[],
   onProgress: (p: AnalyzeProgress) => void,
@@ -35,6 +43,7 @@ export async function analyzeSequentially(
       stopped = true;
       break;
     }
+    if (i > 0) await sleep(INTER_RESTAURANT_DELAY_MS);
     const id = ids[i];
     onProgress({ index: i + 1, total: ids.length, restaurantId: id, phase: 'start' });
 

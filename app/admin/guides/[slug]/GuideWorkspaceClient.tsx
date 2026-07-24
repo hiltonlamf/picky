@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { analyzeSequentially, type AnalyzeProgress } from '../batchAnalyze';
+import { applyProgress, settleLive, startLive, statusBadge, type LiveState } from '../statusBadge';
 
 export interface WorkspaceRestaurant {
   id: string;
@@ -50,6 +51,7 @@ export default function GuideWorkspaceClient({
   const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
   const [runningCost, setRunningCost] = useState(0);
   const [analyzing, setAnalyzing] = useState(false);
+  const [live, setLive] = useState<Record<string, LiveState>>({});
   const stopRef = useRef(false);
 
   const visible = restaurants.filter((r) => r.publiclyVisible);
@@ -57,6 +59,14 @@ export default function GuideWorkspaceClient({
   const hidden = restaurants.filter((r) => r.hidden);
   const pendingIds = restaurants
     .filter((r) => r.status === 'pending' || r.status === 'processing')
+    .map((r) => r.id);
+  // Restaurants that already ran but came back empty or errored. These are NOT
+  // picked up by "Analyze queued" (they're no longer pending) and re-pasting
+  // their URL won't re-run them either, so a batch that failed — e.g. because
+  // the page-reader was rate-limited — would otherwise be stuck. This lets an
+  // admin re-run them all in one click (e.g. after adding a reader API key).
+  const failedIds = restaurants
+    .filter((r) => r.status === 'no_menu' || r.status === 'error')
     .map((r) => r.id);
 
   async function run(key: string, fn: () => Promise<void>) {
@@ -77,12 +87,16 @@ export default function GuideWorkspaceClient({
     setError(null);
     setAnalyzing(true);
     setRunningCost(0);
+    // Everything in this batch starts as "Queued"; each restaurant then moves to
+    // "Analyzing" and finally to its outcome as the run walks through them.
+    setLive(startLive(ids));
     stopRef.current = false;
     try {
       await analyzeSequentially(
         ids,
         (p) => {
           setProgress(p);
+          setLive((prev) => applyProgress(prev, p));
           if (p.phase === 'result' && typeof p.costUsd === 'number') {
             setRunningCost((c) => c + (p.costUsd ?? 0));
           }
@@ -92,6 +106,7 @@ export default function GuideWorkspaceClient({
     } finally {
       setAnalyzing(false);
       setProgress(null);
+      setLive(settleLive);
       router.refresh();
     }
   }
@@ -221,17 +236,29 @@ export default function GuideWorkspaceClient({
               Analyze {pendingIds.length} queued
             </button>
           )}
+          {failedIds.length > 0 && !analyzing && (
+            <button
+              onClick={() => runAnalyze(failedIds)}
+              disabled={anyBusy}
+              className="btn-secondary text-sm"
+              title="Re-run the restaurants that came back with no menu or an error"
+            >
+              Retry {failedIds.length} failed
+            </button>
+          )}
         </div>
       </div>
 
       {/* Analyze progress */}
       {analyzing && progress && (
-        <div className="card p-4 bg-mint-50 flex items-center justify-between gap-4">
+        <div className="card p-4 bg-mint-50 flex items-center justify-between gap-4" role="status" aria-live="polite">
           <div>
             <p className="text-sm font-medium text-evergreen">
               Analyzing restaurant {progress.index} of {progress.total}&hellip;
             </p>
-            <p className="text-xs text-evergreen/70 mt-1">Running AI cost so far: ${runningCost.toFixed(3)}</p>
+            <p className="text-xs text-evergreen/70 mt-1">
+              {progress.total - progress.index} still queued · running AI cost so far: ${runningCost.toFixed(3)}
+            </p>
           </div>
           <button onClick={() => (stopRef.current = true)} className="btn-ghost text-sm">
             Stop
@@ -247,7 +274,16 @@ export default function GuideWorkspaceClient({
           </h2>
           <div className="card divide-y divide-mint-100 border border-sun-200">
             {needsAttention.map((r) => (
-              <RestaurantRow key={r.id} r={r} guide={guide} run={run} busyKey={busyKey} anyBusy={anyBusy} highlight />
+              <RestaurantRow
+                key={r.id}
+                r={r}
+                guide={guide}
+                run={run}
+                busyKey={busyKey}
+                anyBusy={anyBusy}
+                live={live[r.id]}
+                highlight
+              />
             ))}
           </div>
         </div>
@@ -263,7 +299,15 @@ export default function GuideWorkspaceClient({
         ) : (
           <div className="card divide-y divide-mint-100">
             {restaurants.map((r) => (
-              <RestaurantRow key={r.id} r={r} guide={guide} run={run} busyKey={busyKey} anyBusy={anyBusy} />
+              <RestaurantRow
+                key={r.id}
+                r={r}
+                guide={guide}
+                run={run}
+                busyKey={busyKey}
+                anyBusy={anyBusy}
+                live={live[r.id]}
+              />
             ))}
           </div>
         )}
@@ -272,19 +316,13 @@ export default function GuideWorkspaceClient({
   );
 }
 
-function statusClass(status: string): string {
-  if (status === 'error') return 'bg-sun-50 text-sun-800';
-  if (status === 'done') return 'bg-mint-100 text-picky-700';
-  if (status === 'no_menu') return 'bg-sun-50 text-sun-800';
-  return 'bg-mint-100 text-evergreen/80';
-}
-
 function RestaurantRow({
   r,
   guide,
   run,
   busyKey,
   anyBusy,
+  live,
   highlight,
 }: {
   r: WorkspaceRestaurant;
@@ -292,8 +330,11 @@ function RestaurantRow({
   run: (key: string, fn: () => Promise<void>) => Promise<void>;
   busyKey: string | null;
   anyBusy: boolean;
+  live?: LiveState;
   highlight?: boolean;
 }) {
+  const badge = statusBadge(r.status, live);
+  const dishCount = live?.phase === 'result' && typeof live.dishCount === 'number' ? live.dishCount : r.dishCount;
   return (
     <div className={`flex items-center justify-between gap-3 p-4 ${highlight ? 'bg-sun-50/40' : ''}`}>
       <div className="min-w-0">
@@ -316,12 +357,20 @@ function RestaurantRow({
           )}
         </p>
         <p className="text-xs text-evergreen/70 truncate">
-          {r.dishCount} dish{r.dishCount === 1 ? '' : 'es'} · {r.url.replace(/^https?:\/\//, '')}
+          {dishCount} dish{dishCount === 1 ? '' : 'es'} · {r.url.replace(/^https?:\/\//, '')}
         </p>
         {r.heldBackReason && <p className="text-xs text-sun-800 mt-0.5">⚠ {r.heldBackReason}</p>}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        <span className={`text-xs font-mono uppercase px-2 py-1 rounded-full ${statusClass(r.status)}`}>{r.status}</span>
+        <span
+          className={`inline-flex items-center gap-1.5 text-xs font-mono uppercase px-2 py-1 rounded-full ${badge.className}`}
+          title={badge.title}
+        >
+          {badge.active && (
+            <span className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-pulse" aria-hidden="true" />
+          )}
+          {badge.label}
+        </span>
         <Link href={`/admin/restaurants/${r.id}/review`} className="btn-ghost text-xs px-3 py-1.5">
           Review
         </Link>
