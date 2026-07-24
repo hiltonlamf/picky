@@ -53,7 +53,9 @@ export default function RestaurantPage() {
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
-    fetch(`/api/restaurants/${params.id}`)
+    // no-store so a returning visitor never sees a browser-cached snapshot after
+    // an admin edit (rename/reclassify/removal) — the route is force-dynamic too.
+    fetch(`/api/restaurants/${params.id}`, { cache: 'no-store' })
       .then((r) => {
         if (!r.ok) throw new Error('Restaurant not found');
         return r.json();
@@ -407,6 +409,8 @@ export default function RestaurantPage() {
           restaurantId={restaurant.id}
           restaurantName={restaurant.name ?? null}
           onClose={() => setFeedbackOpen(false)}
+          menuLabels={menuLabels}
+          currentMenuLabel={menuFilter !== 'all' ? menuFilter : null}
         />
       )}
       </div>

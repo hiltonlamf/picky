@@ -10,6 +10,7 @@ const schema = z.object({
   dishId: z.string().uuid(),
   issueType: z.string().min(1).max(64),
   notes: z.string().max(500).optional().default(''),
+  proposedClassification: z.enum(['vegan', 'vegetarian', 'neither', 'unknown']).optional().nullable(),
 });
 
 export async function POST(request: NextRequest) {
@@ -20,16 +21,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
 
-    const { dishId, issueType, notes } = parsed.data;
+    const { dishId, issueType, notes, proposedClassification } = parsed.data;
     const ip = getClientIp(request);
     const ipHash = hashIp(ip);
     const anonId = request.cookies.get(ANON_ID_COOKIE)?.value ?? null;
 
-    await reportDish(dishId, issueType, notes, ipHash, anonId);
+    await reportDish(dishId, issueType, notes, ipHash, anonId, proposedClassification ?? null);
     // Mirrors the dish_reports insert so PostHog and the DB agree.
     await captureServer(anonId ?? ipHash, 'dish_reported', {
       issue_type: issueType,
       dish_id: dishId,
+      proposed_classification: proposedClassification ?? null,
     });
     return NextResponse.json({ success: true });
   } catch (err) {

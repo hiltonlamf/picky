@@ -322,4 +322,14 @@ export interface FeedbackItem {
   restaurantName?: string | null;
   /** Set for guide-level feedback (no single restaurant) — which city guide it's about. */
   city?: string | null;
+  // Deterministic capture (structured feedback). What the user proposed, so an
+  // admin can accept it in one click.
+  proposedClassification?: DietaryClassification | null;
+  proposedDishName?: string | null;
+  proposedName?: string | null;
+  menuLabel?: string | null;
+  /** User's link to a missing menu — shown to the admin, never auto-fetched. */
+  referenceUrl?: string | null;
+  /** What an admin's Accept did (the ledger key), e.g. "reclassified:vegan". */
+  resolutionAction?: string | null;
 }

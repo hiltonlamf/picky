@@ -9,6 +9,9 @@ import {
   GENERAL_FEEDBACK_TYPES,
   GUIDE_FEEDBACK_TYPES,
   SITE_FEEDBACK_TYPES,
+  FEEDBACK_RESOLUTION,
+  PROPOSED_CLASSIFICATION_OPTIONS,
+  type FeedbackResolveAction,
 } from '@/lib/dietary-config';
 
 const ISSUE_LABELS: Record<string, string> = Object.fromEntries(
@@ -16,6 +19,21 @@ const ISSUE_LABELS: Record<string, string> = Object.fromEntries(
     (t) => [t.value, t.label]
   )
 );
+
+const PROPOSED_LABELS: Record<string, string> = Object.fromEntries(
+  PROPOSED_CLASSIFICATION_OPTIONS.map((o) => [o.value, `${o.emoji} ${o.label}`])
+);
+
+// Accept-button copy per action, so the admin sees exactly what Accept does.
+// Only the actions where Accept genuinely changes something appear here; the
+// no-auto-apply ('route') case shows a Dismiss button instead, not an Accept.
+const ACCEPT_LABEL: Partial<Record<FeedbackResolveAction, string>> = {
+  reclassify: 'Accept & apply',
+  remove_dish: 'Accept & remove',
+  remove_menu: 'Accept & remove menu',
+  rename: 'Accept & rename',
+  reparse: 'Accept & reparse',
+};
 
 function FilterTab({ label, value, active }: { label: string; value: string; active: string }) {
   return (
@@ -53,11 +71,34 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
   const [notesById, setNotesById] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
-  async function resolve(item: FeedbackItem, status: 'confirmed' | 'dismissed') {
+  async function reject(item: FeedbackItem) {
     setBusyId(item.id);
     setError(null);
     try {
-      await postResolve({ kind: item.kind, id: item.id, status, resolutionNotes: notesById[item.id] ?? '' });
+      await postResolve({ kind: item.kind, id: item.id, status: 'dismissed', resolutionNotes: notesById[item.id] ?? '' });
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong — the change was not saved.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function accept(item: FeedbackItem, action: FeedbackResolveAction) {
+    setBusyId(item.id);
+    setError(null);
+    try {
+      // Reparse is the one AI-spend path — trigger it via its own route first,
+      // then record the report as resolved. Everything else is applied by the
+      // resolve engine itself.
+      if (action === 'reparse' && item.restaurantId) {
+        const res = await fetch(`/api/admin/restaurants/${item.restaurantId}/reparse`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? 'Reparse failed');
+        }
+      }
+      await postResolve({ kind: item.kind, id: item.id, status: 'confirmed', resolutionNotes: notesById[item.id] ?? '' });
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong — the change was not saved.');
@@ -89,9 +130,11 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
         <FilterTab label="All" value="all" active={activeStatus} />
       </div>
       <p className="text-sm text-evergreen/70 mb-6">
-        For each report: <strong>Open the restaurant</strong> to make any fixes, then resolve it —{' '}
-        <strong>Confirm</strong> if the user was right, <strong>Dismiss</strong> if not. You can add a resolution note
-        either way.
+        Where a fix can be applied in one click — reclassify a dish, remove a not-a-dish or not-a-menu, rename a
+        restaurant, reparse — you get <strong>Accept</strong> (it goes live immediately) and <strong>Reject</strong>.
+        Reports that can&rsquo;t be auto-applied (a missing dish or menu, a feature idea) show a single{' '}
+        <strong>Dismiss</strong> — use <strong>Open restaurant to edit&nbsp;↗</strong> to fix those by hand first. A
+        resolution note is optional.
       </p>
 
       {items.length === 0 && <p className="text-sm text-evergreen/80">Nothing here.</p>}
@@ -114,6 +157,7 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
                   </p>
                 )}
                 {item.notes && <p className="text-sm text-evergreen mt-2 italic">&ldquo;{item.notes}&rdquo;</p>}
+                <ProposalDetails item={item} />
               </div>
               <span className={`text-xs font-mono uppercase px-2 py-1 rounded-full flex-shrink-0 ${statusBadgeClass(item.status)}`}>
                 {item.status}
@@ -131,29 +175,100 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
               </a>
             )}
 
-            {item.status === 'open' && (
-              <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <input
-                  type="text"
-                  placeholder="Resolution note (optional)"
-                  value={notesById[item.id] ?? ''}
-                  onChange={(e) => setNotesById((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  className="flex-1 min-w-[180px] rounded-full border border-mint-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-picky-500"
-                />
-                <button disabled={busyId === item.id} onClick={() => resolve(item, 'confirmed')} className="btn-secondary text-sm px-4 py-1.5">
-                  Confirm (user was right)
-                </button>
-                <button disabled={busyId === item.id} onClick={() => resolve(item, 'dismissed')} className="btn-ghost text-sm">
-                  Dismiss
-                </button>
-              </div>
-            )}
-            {item.status !== 'open' && item.resolutionNotes && (
-              <p className="text-xs text-evergreen/80 mt-2">Resolution: {item.resolutionNotes}</p>
+            {item.status === 'open' && (() => {
+              const action: FeedbackResolveAction = FEEDBACK_RESOLUTION[item.issueOrFeedbackType] ?? 'route';
+              // A reparse needs a restaurant to act on; without one it's not
+              // auto-applicable, so it falls back to the Dismiss-only path.
+              const actionable = action !== 'route' && (action !== 'reparse' || !!item.restaurantId);
+              return (
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  <input
+                    type="text"
+                    placeholder="Resolution note (optional)"
+                    value={notesById[item.id] ?? ''}
+                    onChange={(e) => setNotesById((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                    className="flex-1 min-w-[180px] rounded-full border border-mint-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-picky-500"
+                  />
+                  {actionable ? (
+                    <>
+                      {/* Accept genuinely does something here, so it's a real accept/reject pair. */}
+                      <button
+                        disabled={busyId === item.id}
+                        onClick={() => accept(item, action)}
+                        className="btn-secondary text-sm px-4 py-1.5"
+                        title={action === 'reparse' ? 'Re-runs analysis — this spends AI credit' : undefined}
+                      >
+                        {busyId === item.id ? 'Working…' : ACCEPT_LABEL[action]}
+                      </button>
+                      <button disabled={busyId === item.id} onClick={() => reject(item)} className="btn-ghost text-sm">
+                        Reject
+                      </button>
+                    </>
+                  ) : (
+                    // Nothing auto-applies — it's an FYI (or a manual fix via the
+                    // "Open restaurant to edit ↗" link above). One Dismiss button
+                    // parks it in the Dismissed tab; no misleading "Accept".
+                    <button disabled={busyId === item.id} onClick={() => reject(item)} className="btn-secondary text-sm px-4 py-1.5">
+                      {busyId === item.id ? 'Working…' : 'Dismiss'}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+            {item.status !== 'open' && (item.resolutionAction || item.resolutionNotes) && (
+              <p className="text-xs text-evergreen/80 mt-2">
+                {item.resolutionAction && <span className="font-mono">{item.resolutionAction}</span>}
+                {item.resolutionAction && item.resolutionNotes ? ' · ' : ''}
+                {item.resolutionNotes}
+              </p>
             )}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// The deterministic part of a report: exactly what the user proposed, so the
+// admin can see what Accept will do without opening anything.
+function ProposalDetails({ item }: { item: FeedbackItem }) {
+  const rows: React.ReactNode[] = [];
+
+  if (item.proposedClassification) {
+    // The trust-sensitive direction is making a dish look MORE veggie-friendly.
+    const permissive = item.proposedClassification === 'vegan' || item.proposedClassification === 'vegetarian';
+    rows.push(
+      <span key="cls">
+        Should be: <strong>{PROPOSED_LABELS[item.proposedClassification] ?? item.proposedClassification}</strong>
+        {permissive && <span className="ml-1 text-sun-700" title="Makes this dish read as veggie — double-check before accepting">⚠️</span>}
+      </span>
+    );
+  }
+  if (item.proposedDishName) {
+    rows.push(<span key="dish">Add dish: <strong>{item.proposedDishName}</strong></span>);
+  }
+  if (item.proposedName) {
+    rows.push(<span key="name">Rename to: <strong>{item.proposedName}</strong></span>);
+  }
+  if (item.menuLabel) {
+    rows.push(<span key="menu">Menu: <strong>{item.menuLabel}</strong></span>);
+  }
+
+  if (rows.length === 0 && !item.referenceUrl) return null;
+
+  return (
+    <div className="mt-2 text-sm text-evergreen/90 space-y-0.5">
+      {rows.map((r, i) => (
+        <p key={i}>{r}</p>
+      ))}
+      {item.referenceUrl && (
+        <p>
+          Menu link:{' '}
+          <a href={item.referenceUrl} target="_blank" rel="noopener noreferrer" className="text-picky-700 hover:underline break-all">
+            {item.referenceUrl} ↗
+          </a>
+        </p>
+      )}
     </div>
   );
 }

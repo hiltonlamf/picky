@@ -1,16 +1,22 @@
 import AdminNav from '@/components/admin/AdminNav';
-import { getCorrectionLog } from '@/lib/db';
+import { getCorrectionLog, getFeedbackInbox } from '@/lib/db';
+import { REPORT_ISSUE_TYPES, GENERAL_FEEDBACK_TYPES, GUIDE_FEEDBACK_TYPES, SITE_FEEDBACK_TYPES } from '@/lib/dietary-config';
 import CopyErrorLogButton from './CopyErrorLogButton';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store'; // admin reads must always be live (never a cached DB read after an edit)
+
+const FEEDBACK_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES, ...SITE_FEEDBACK_TYPES].map((t) => [t.value, t.label])
+);
 
 function classPill(c: string) {
   return <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-mint-100 text-evergreen">{c}</span>;
 }
 
 export default async function AdminErrorsPage() {
-  const log = await getCorrectionLog();
+  const [log, feedback] = await Promise.all([getCorrectionLog(), getFeedbackInbox()]);
+  const openFeedback = feedback.filter((f) => f.status === 'open');
   const unsafe = log.dishErrors.filter((e) => e.shouldBe === 'neither' && (e.aiSaid === 'vegan' || e.aiSaid === 'vegetarian'));
   const spuriousTotal = log.discovery.reduce((n, d) => n + d.spurious.length, 0);
   const duplicateTotal = log.discovery.reduce((n, d) => n + d.duplicate.length, 0);
@@ -130,6 +136,49 @@ export default async function AdminErrorsPage() {
                   </li>
                 )}
               </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* User-reported errors — the deterministic feedback ledger. Accepted ones
+          also flow into the dish/discovery sections above via the golden set;
+          this is the full accept/reject record in one place. */}
+      <h2 className="eyebrow mb-3 mt-10">User-reported errors ({feedback.length})</h2>
+      <p className="text-sm text-evergreen/80 mb-3">
+        Everything users flagged, with how it was resolved. Work the{' '}
+        <a href="/admin/feedback" className="text-picky-700 hover:underline">Feedback inbox</a> to accept or reject the{' '}
+        {openFeedback.length} still open.
+      </p>
+      {feedback.length === 0 ? (
+        <p className="text-sm text-evergreen/70">None yet.</p>
+      ) : (
+        <div className="card divide-y divide-mint-100">
+          {feedback.map((f) => (
+            <div key={`${f.kind}-${f.id}`} className="p-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <p className="text-sm text-evergreen">
+                  <span className="font-semibold">{FEEDBACK_TYPE_LABELS[f.issueOrFeedbackType] ?? f.issueOrFeedbackType}</span>
+                  {f.dishName && <span className="text-evergreen/70"> · {f.dishName}</span>}
+                  {f.restaurantName && <span className="text-evergreen/70"> · {f.restaurantName}</span>}
+                  {!f.restaurantId && f.city && <span className="text-evergreen/70"> · {f.city}</span>}
+                </p>
+                <span className={`text-xs font-mono uppercase px-2 py-0.5 rounded-full flex-shrink-0 ${
+                  f.status === 'open' ? 'bg-sun-50 text-sun-800' : f.status === 'confirmed' ? 'bg-mint-100 text-picky-700' : 'bg-mint-100 text-evergreen/70'
+                }`}>{f.status}</span>
+              </div>
+              {(f.proposedClassification || f.proposedName || f.proposedDishName) && (
+                <p className="text-xs text-evergreen/80 mt-0.5">
+                  {f.proposedClassification && <>should be {classPill(f.proposedClassification)} </>}
+                  {f.proposedName && <>rename → &ldquo;{f.proposedName}&rdquo; </>}
+                  {f.proposedDishName && <>missing dish: &ldquo;{f.proposedDishName}&rdquo; </>}
+                </p>
+              )}
+              {f.notes && <p className="text-xs text-evergreen/70 mt-0.5 italic">&ldquo;{f.notes}&rdquo;</p>}
+              <p className="text-[11px] text-evergreen/60 mt-0.5">
+                {new Date(f.createdAt).toLocaleDateString()}
+                {f.resolutionAction ? <> · <span className="font-mono">{f.resolutionAction}</span></> : ''}
+              </p>
             </div>
           ))}
         </div>

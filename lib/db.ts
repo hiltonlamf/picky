@@ -31,7 +31,7 @@ import {
   sniffImageType,
   ESCALATION_MODEL,
 } from './ai';
-import { REPORT_COUNT_WARNING_THRESHOLD } from './dietary-config';
+import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 
@@ -825,7 +825,8 @@ export async function reportDish(
   issueType: string,
   notes: string,
   ipHash: string,
-  anonId?: string | null
+  anonId?: string | null,
+  proposedClassification?: DietaryClassification | null
 ): Promise<void> {
   const row = {
     dish_id: dishId,
@@ -833,8 +834,10 @@ export async function reportDish(
     notes: notes ?? null,
     ip_hash: ipHash,
   };
-  const { error } = await db().from('dish_reports').insert({ ...row, anon_id: anonId ?? null });
-  // Degrade gracefully when the anon_id column is unmigrated.
+  const { error } = await db()
+    .from('dish_reports')
+    .insert({ ...row, anon_id: anonId ?? null, proposed_classification: proposedClassification ?? null });
+  // Degrade gracefully when the anon_id / proposed_classification columns are unmigrated.
   if (error) {
     const retry = await db().from('dish_reports').insert(row);
     if (retry.error) throw new Error(`Failed to save report: ${retry.error.message}`);
@@ -848,6 +851,15 @@ export async function reportDish(
     .eq('id', dishId);
 }
 
+/** Deterministic extras a page-level report can carry (all optional). */
+export interface FeedbackExtras {
+  proposedClassification?: DietaryClassification | null;
+  proposedDishName?: string | null;
+  proposedName?: string | null;
+  menuLabel?: string | null;
+  referenceUrl?: string | null;
+}
+
 export async function submitFeedback(
   restaurantId: string | null,
   restaurantName: string | null,
@@ -855,7 +867,8 @@ export async function submitFeedback(
   notes: string,
   ipHash: string,
   anonId?: string | null,
-  city?: string | null
+  city?: string | null,
+  extras?: FeedbackExtras
 ): Promise<void> {
   const row = {
     restaurant_id: restaurantId, // null for guide-level feedback
@@ -865,8 +878,17 @@ export async function submitFeedback(
     ip_hash: ipHash,
     city: city ?? null,
   };
-  const { error } = await db().from('restaurant_feedback').insert({ ...row, anon_id: anonId ?? null });
-  // Degrade gracefully when the anon_id / city columns aren't migrated yet.
+  const structured = {
+    proposed_classification: extras?.proposedClassification ?? null,
+    proposed_dish_name: extras?.proposedDishName ?? null,
+    proposed_name: extras?.proposedName ?? null,
+    menu_label: extras?.menuLabel ?? null,
+    reference_url: extras?.referenceUrl ?? null,
+  };
+  const { error } = await db()
+    .from('restaurant_feedback')
+    .insert({ ...row, anon_id: anonId ?? null, ...structured });
+  // Degrade gracefully when the anon_id / city / structured columns aren't migrated yet.
   if (error) {
     const { city: _city, ...base } = row;
     const retry = await db().from('restaurant_feedback').insert(base);
@@ -1873,6 +1895,8 @@ export async function getFeedbackInbox(status?: FeedbackStatus): Promise<Feedbac
       dishName: (dish?.name as string | undefined) ?? undefined,
       restaurantId: (dish?.restaurant_id as string | undefined) ?? undefined,
       restaurantName: (restaurant?.name as string | null | undefined) ?? null,
+      proposedClassification: (r.proposed_classification as DietaryClassification | null) ?? null,
+      resolutionAction: (r.resolution_action as string | null) ?? null,
     };
   });
 
@@ -1888,26 +1912,173 @@ export async function getFeedbackInbox(status?: FeedbackStatus): Promise<Feedbac
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
     city: (f.city as string | null) ?? null,
+    proposedClassification: (f.proposed_classification as DietaryClassification | null) ?? null,
+    proposedDishName: (f.proposed_dish_name as string | null) ?? null,
+    proposedName: (f.proposed_name as string | null) ?? null,
+    menuLabel: (f.menu_label as string | null) ?? null,
+    referenceUrl: (f.reference_url as string | null) ?? null,
+    resolutionAction: (f.resolution_action as string | null) ?? null,
   }));
 
   return [...dishItems, ...feedbackItems].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+/**
+ * Resolve one feedback item. On dismiss it only flips status. On confirm it
+ * APPLIES the fix the user proposed — reclassify a dish, remove a not-a-dish /
+ * not-a-menu, rename a restaurant — through the same safe write paths the admin
+ * review screen uses (applyDishVerdict / removeMenu), so an accepted report goes
+ * live in one click.
+ *
+ * SECURITY: the action is derived server-side from the STORED feedback type
+ * (FEEDBACK_RESOLUTION), never from the caller. A user can only ever create an
+ * `open` row; nothing here is reachable except behind the /api/admin auth gate.
+ * All restaurant context (URL/name/city) is looked up from the DB, never trusted
+ * from the client. `reference_url` (a user's link to a missing menu) is NEVER
+ * fetched — it's only surfaced to the admin.
+ *
+ * `reparse` is intentionally NOT run here: it's the one AI-spend path, triggered
+ * deliberately from its own admin route; confirming a reparse-type report just
+ * records that it was handled.
+ */
 export async function resolveFeedback(
   kind: 'dish_report' | 'restaurant_feedback',
   id: string,
   status: 'confirmed' | 'dismissed',
   resolutionNotes?: string | null
-): Promise<void> {
+): Promise<{ resolutionAction: string }> {
   const table = kind === 'dish_report' ? 'dish_reports' : 'restaurant_feedback';
+  const { data: rowData } = await db().from(table).select('*').eq('id', id).maybeSingle();
+  const row = rowData as DbRow | null;
+  if (!row) throw new Error('Feedback item not found');
+
+  let resolutionAction = 'dismissed';
+
+  if (status === 'confirmed') {
+    const type = (kind === 'dish_report' ? row.issue_type : row.feedback_type) as string;
+    const action: FeedbackResolveAction = FEEDBACK_RESOLUTION[type] ?? 'route';
+    resolutionAction = await applyFeedbackAction(kind, action, row);
+  }
+
   await db()
     .from(table)
     .update({
       status,
       resolution_notes: resolutionNotes ?? null,
+      resolution_action: resolutionAction,
       resolved_at: new Date().toISOString(),
     })
     .eq('id', id);
+
+  return { resolutionAction };
+}
+
+/** Carries out an accepted report's fix and returns the resolution_action label. */
+async function applyFeedbackAction(
+  kind: 'dish_report' | 'restaurant_feedback',
+  action: FeedbackResolveAction,
+  row: DbRow
+): Promise<string> {
+  // Dish-level actions: resolve the dish → its restaurant server-side.
+  if (kind === 'dish_report' && (action === 'reclassify' || action === 'remove_dish')) {
+    const dishId = row.dish_id as string;
+    const { data: dishData } = await db()
+      .from('dishes')
+      .select('id, name, classification, section_id, restaurant_id')
+      .eq('id', dishId)
+      .maybeSingle();
+    const dish = dishData as DbRow | null;
+    if (!dish) return 'routed_to_review'; // dish gone (e.g. wiped) — nothing to apply
+    const meta = await getRestaurantMeta(dish.restaurant_id as string);
+    if (!meta) return 'routed_to_review';
+
+    if (action === 'remove_dish') {
+      await applyDishVerdict({
+        restaurantId: meta.id,
+        restaurantUrl: meta.canonicalUrl ?? meta.url,
+        restaurantName: meta.name,
+        city: meta.city,
+        action: 'delete',
+        dishId,
+        reviewerNotes: 'Removed via accepted user report',
+      });
+      return 'removed_dish';
+    }
+
+    // reclassify: need the label the user proposed.
+    const proposed = (row.proposed_classification as DietaryClassification | null) ?? null;
+    if (!proposed) return 'routed_to_review';
+    // Section context for the eval_dishes ground-truth row.
+    let sectionName: string | null = null;
+    let menuLabel: string | null = null;
+    if (dish.section_id) {
+      const { data: sec } = await db()
+        .from('menu_sections')
+        .select('name, menu_label')
+        .eq('id', dish.section_id as string)
+        .maybeSingle();
+      sectionName = ((sec as DbRow | null)?.name as string | null) ?? null;
+      menuLabel = ((sec as DbRow | null)?.menu_label as string | null) ?? null;
+    }
+    await applyDishVerdict({
+      restaurantId: meta.id,
+      restaurantUrl: meta.canonicalUrl ?? meta.url,
+      restaurantName: meta.name,
+      city: meta.city,
+      action: 'upsert',
+      dishId,
+      name: dish.name as string,
+      classification: proposed,
+      // The live label at accept time is what the AI effectively "had" — captured
+      // so dish accuracy stays honest (see applyDishVerdict / eval_dishes).
+      aiOriginalClassification: (dish.classification as DietaryClassification | null) ?? null,
+      sectionName,
+      menuLabel,
+      reviewerNotes: 'Accepted user reclassification',
+      source: 'feedback_confirmed',
+    });
+    return `reclassified:${proposed}`;
+  }
+
+  // Restaurant/menu-level actions on restaurant_feedback.
+  if (kind === 'restaurant_feedback') {
+    const restaurantId = (row.restaurant_id as string | null) ?? null;
+    if (!restaurantId) return 'routed_to_review';
+    const meta = await getRestaurantMeta(restaurantId);
+    if (!meta) return 'routed_to_review';
+
+    if (action === 'remove_menu') {
+      const menuLabel = (row.menu_label as string | null) ?? null;
+      const result = await removeMenu({
+        restaurantId: meta.id,
+        restaurantUrl: meta.canonicalUrl ?? meta.url,
+        restaurantName: meta.name,
+        city: meta.city,
+        menuLabel,
+      });
+      return `removed_menu:${menuLabel ?? '(unlabeled)'} (${result.removedDishCount} dishes)`;
+    }
+
+    if (action === 'rename') {
+      const proposedName = (row.proposed_name as string | null)?.trim();
+      if (!proposedName) return 'routed_to_review';
+      await renameRestaurant(meta.id, proposedName);
+      return `renamed:${proposedName}`;
+    }
+
+    if (action === 'reparse') return 'reparsed'; // handled via the reparse route
+  }
+
+  return 'routed_to_review';
+}
+
+/** Rename a restaurant. Public-facing text only; admin-gated. */
+export async function renameRestaurant(id: string, name: string): Promise<void> {
+  const { error } = await db()
+    .from('restaurants')
+    .update({ name, updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw new Error(`Failed to rename restaurant: ${error.message}`);
 }
 
 export async function getEvalCases(): Promise<EvalCase[]> {
@@ -2233,6 +2404,12 @@ export async function getRestaurantFeedback(
     restaurantId: (f.restaurant_id as string | null | undefined) ?? undefined,
     restaurantName: (f.restaurant_name as string | null) ?? null,
     city: (f.city as string | null) ?? null,
+    proposedClassification: (f.proposed_classification as DietaryClassification | null) ?? null,
+    proposedDishName: (f.proposed_dish_name as string | null) ?? null,
+    proposedName: (f.proposed_name as string | null) ?? null,
+    menuLabel: (f.menu_label as string | null) ?? null,
+    referenceUrl: (f.reference_url as string | null) ?? null,
+    resolutionAction: (f.resolution_action as string | null) ?? null,
   }));
 
   return { dishReports, restaurantFeedback };

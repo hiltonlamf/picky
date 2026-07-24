@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { REPORT_ISSUE_TYPES } from '@/lib/dietary-config';
+import { REPORT_ISSUE_TYPES, PROPOSED_CLASSIFICATION_OPTIONS } from '@/lib/dietary-config';
+import type { DietaryClassification } from '@/types';
 import { CheckIcon, CloseIcon } from './icons';
 
 interface Props {
@@ -12,18 +13,29 @@ interface Props {
 
 export default function ReportModal({ dishId, dishName, onClose }: Props) {
   const [issueType, setIssueType] = useState('');
+  const [proposed, setProposed] = useState<DietaryClassification | ''>('');
   const [notes, setNotes] = useState('');
   const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle');
 
+  // A reclassification report is only actionable if the user says what it should
+  // be — that proposed label is what an admin accepts in one click.
+  const needsProposed = issueType === 'wrong_classification';
+  const canSubmit = !!issueType && (!needsProposed || !!proposed);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!issueType) return;
+    if (!canSubmit) return;
     setState('submitting');
     try {
       const res = await fetch('/api/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dishId, issueType, notes }),
+        body: JSON.stringify({
+          dishId,
+          issueType,
+          notes,
+          proposedClassification: needsProposed ? proposed : undefined,
+        }),
       });
       if (!res.ok) throw new Error('Failed');
       setState('done');
@@ -73,7 +85,7 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
                       name="issueType"
                       value={issue.value}
                       checked={issueType === issue.value}
-                      onChange={() => setIssueType(issue.value)}
+                      onChange={() => { setIssueType(issue.value); setProposed(''); }}
                       className="mt-0.5 accent-picky-600"
                     />
                     <span className="text-sm text-evergreen/80">{issue.label}</span>
@@ -81,6 +93,35 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
                 ))}
               </div>
             </fieldset>
+
+            {needsProposed && (
+              <fieldset className="mb-4">
+                <legend className="text-sm font-medium text-evergreen/80 mb-2">What should it be?</legend>
+                <div className="flex flex-wrap gap-2">
+                  {PROPOSED_CLASSIFICATION_OPTIONS.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={`flex items-center gap-1.5 cursor-pointer rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                        proposed === opt.value
+                          ? 'border-picky-600 bg-mint-100 text-evergreen'
+                          : 'border-mint-200 text-evergreen/80 hover:bg-mint-100'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="proposedClassification"
+                        value={opt.value}
+                        checked={proposed === opt.value}
+                        onChange={() => setProposed(opt.value)}
+                        className="sr-only"
+                      />
+                      <span aria-hidden="true">{opt.emoji}</span>
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
 
             <div className="mb-4">
               <label htmlFor="report-notes" className="text-sm font-medium text-evergreen/80 block mb-1">
@@ -104,7 +145,7 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
             <div className="flex gap-3">
               <button
                 type="submit"
-                disabled={!issueType || state === 'submitting'}
+                disabled={!canSubmit || state === 'submitting'}
                 className="btn-primary flex-1 text-sm py-2"
               >
                 {state === 'submitting' ? 'Submitting...' : 'Submit report'}
