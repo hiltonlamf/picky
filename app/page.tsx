@@ -61,8 +61,8 @@ export default async function HomePage() {
           </h1>
 
           <p className="text-[1.06rem] leading-relaxed text-paper/90 max-w-[50ch]">
-            {HERO.sub}{' '}
-            <span className="text-azalea-400 font-semibold">{HERO.subAccent}</span>
+            {HERO.sub}
+            <span className="block text-azalea-400 font-semibold">{HERO.subAccent}</span>
           </p>
 
           <HeroSearch supportLine={HERO.support} />

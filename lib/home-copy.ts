@@ -12,7 +12,7 @@ export const HERO = {
     after: ' at any restaurant, instantly.',
   },
   sub: "No more showing up in places that only offer mushroom risotto.",
-  subAccent: "Drop any restaurant website — we'll find the menu and the veggie dishes.",
+  subAccent: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
