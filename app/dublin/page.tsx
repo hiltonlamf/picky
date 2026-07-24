@@ -59,7 +59,7 @@ export default async function DublinPage() {
           </p>
           <p className="text-paper/70 max-w-[62ch] text-sm mt-3">{GUIDE_HUMAN_LINE}</p>
           <div className="mt-6">
-            <GuideFeedbackButton city="dublin" />
+            <GuideFeedbackButton city="dublin" tone="dark" />
           </div>
         </div>
       </section>

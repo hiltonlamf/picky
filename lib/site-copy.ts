@@ -18,17 +18,16 @@ export const SITE_TITLE = 'Picky — find veggie dishes in any restaurant';
 
 // ---------------------------------------------------------------- city guides
 
-/** Guide headline. These are popular restaurants read for vegetarians — NOT a
- *  list of vegetarian restaurants, which is the whole point of the product. */
+/** Guide headline. The subject is the *menus* of popular restaurants — the
+ *  product finds the veg options in places everyone already wants to book. */
 export function guideHeadline(city: string): string {
-  return `${city}'s most popular restaurants, read for vegetarians`;
+  return `${city}'s most popular restaurant menus, analysed for vegetarians`;
 }
 
 export function guideIntro(city: string): string {
   return (
-    `These are some of the most talked-about restaurants in ${city} — not vegetarian restaurants. ` +
-    "We've read every menu to show exactly which dishes are vegetarian or vegan, so a vegetarian and " +
-    'their friends can pick somewhere everyone actually wants to go.'
+    `The places everyone in ${city} is trying to book, read menu by menu. ` +
+    "See what's vegetarian and vegan before you go."
   );
 }
 

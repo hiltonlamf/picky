@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
 import { capture } from '@/lib/posthog-client';
@@ -27,6 +27,7 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   const [candidates, setCandidates] = useState<MenuCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Consume an SSE stream from a fetch Response. Resolves 'done' on a terminal
   // outcome (redirect / candidates / error), or the restaurantId to continue
@@ -125,7 +126,13 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
     async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = url.trim();
-      if (!trimmed) return;
+      // The button stays live even with an empty field, so say what's missing
+      // and put the cursor where it's needed.
+      if (!trimmed) {
+        setError('Paste a restaurant link first — a homepage or a menu page both work.');
+        inputRef.current?.focus();
+        return;
+      }
 
       capture('search_submitted', {
         domain: domainOf(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`),
@@ -280,19 +287,24 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   // The white field against the dark hero is deliberate: a translucent input on
   // a dark ground reads as decoration, while a white box reads as "type here".
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-[640px] mt-7">
+    <form onSubmit={handleSubmit} className="w-full max-w-[760px] mt-7">
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <LinkIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-6 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="relative flex-1 min-w-0">
+          <LinkIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              if (error) setError(null);
+            }}
             placeholder="Paste a restaurant website link"
-            className="paste-field pl-[54px] pr-12"
+            className="paste-field pl-[46px] pr-11 text-base"
             autoComplete="url"
             autoFocus
             aria-label="Restaurant website link"
+            aria-invalid={!!error}
+            ref={inputRef}
           />
           {url && (
             <button
@@ -305,12 +317,20 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             </button>
           )}
         </div>
-        <button type="submit" disabled={!url.trim()} className="btn-cta shrink-0">
+        {/* Never greyed out: an inviting CTA that asks for a link if it's empty
+            beats a dead button the visitor can't act on. */}
+        <button type="submit" className="btn-cta shrink-0">
           🥦 Find my veggies →
         </button>
       </div>
 
-      {supportLine && <p className="mt-11 text-sm text-paper/70">{supportLine}</p>}
+      {error && (
+        <p role="alert" className="mt-3 text-sm font-medium text-azalea-400">
+          {error}
+        </p>
+      )}
+
+      {supportLine && <p className="mt-9 text-sm text-paper/70">{supportLine}</p>}
     </form>
   );
 }

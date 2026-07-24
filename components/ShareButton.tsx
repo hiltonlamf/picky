@@ -27,7 +27,7 @@ function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
   const name = restaurant.name ?? 'this restaurant';
 
   const lines: string[] = [
-    `Good news about *${name}*! Our AI already checked the menu 🌱`,
+    `Good news about *${name}* — here's what's on the menu for veggies 🌱`,
     ``,
   ];
 
@@ -44,7 +44,8 @@ function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
   }
 
   lines.push(
-    `Found with *Picky* — AI reads restaurant menus and instantly shows everything vegetarians can eat. Super handy before a night out 🙌`,
+    // Same positioning as the site: AI-assisted, human-verified.
+    `Found with *Picky* — find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified. 🙌`,
     ``,
     `See the full menu with prices → ${pageUrl}`
   );
@@ -95,7 +96,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
     return (
       <button
         onClick={handleNativeShare}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-picky-600 text-white text-sm font-medium hover:bg-picky-700 transition-colors"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-irish text-white text-sm font-semibold hover:bg-picky-700 transition-colors"
       >
         <ShareIcon className="w-4 h-4" />
         Share
@@ -126,7 +127,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
       <button
         onClick={handleCopy}
         title="Copy share message"
-        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
+        className="glass-light inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-forest/90 hover:text-forest transition-colors"
       >
         {copied ? (
           <>
