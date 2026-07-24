@@ -13,6 +13,7 @@ import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import SubmitMenuForm from '@/components/SubmitMenuForm';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
+import { SITE_TITLE } from '@/lib/site-copy';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -84,7 +85,7 @@ export default function RestaurantPage() {
     return () => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
       setRestaurantName(null);
-      document.title = 'Picky — Find your food, your way';
+      document.title = SITE_TITLE;
     };
   }, [load, setRestaurantName]);
 
@@ -116,9 +117,9 @@ export default function RestaurantPage() {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <QuestionMark />
-        <h1 className="text-xl font-bold text-evergreen mb-2">Restaurant not found</h1>
-        <p className="text-evergreen/80 mb-6">{error ?? "This restaurant doesn't exist or was removed."}</p>
-        <Link href="/" className="btn-primary text-sm">
+        <h1 className="font-display text-2xl text-forest mb-2">Restaurant not found</h1>
+        <p className="text-forest/80 mb-6">{error ?? "This restaurant doesn't exist or was removed."}</p>
+        <Link href="/" className="btn-cta inline-block">
           ← Back to search
         </Link>
       </div>
@@ -147,7 +148,7 @@ export default function RestaurantPage() {
       <div className="max-w-lg mx-auto px-4 py-16">
         <div className="text-center mb-6">
           <LeafOutlineIcon className="w-12 h-12 mx-auto mb-4 text-picky-500" />
-          <h1 className="text-xl font-bold text-evergreen mb-2">{copy.heading}</h1>
+          <h1 className="font-display text-2xl text-forest mb-2">{copy.heading}</h1>
           <p className="text-evergreen/80">{copy.body}</p>
         </div>
         <SubmitMenuForm restaurantId={restaurant.id} />
@@ -164,14 +165,14 @@ export default function RestaurantPage() {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <AlertIcon className="w-12 h-12 mx-auto mb-4 text-sun-400" />
-        <h1 className="text-xl font-bold text-evergreen mb-2">Couldn&apos;t read this menu</h1>
+        <h1 className="font-display text-2xl text-forest mb-2">Couldn&apos;t read this menu</h1>
         <p className="text-evergreen/80 mb-2">
           {restaurant.errorMessage ?? 'An error occurred while parsing this restaurant.'}
         </p>
         <p className="text-sm text-evergreen/80 mb-6">
           The menu may be temporarily unavailable, or this website may require JavaScript to load.
         </p>
-        <Link href="/" className="btn-primary text-sm">
+        <Link href="/" className="btn-cta inline-block">
           ← Try a different link
         </Link>
       </div>
@@ -182,13 +183,13 @@ export default function RestaurantPage() {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <SproutIcon className="w-12 h-12 mx-auto mb-4 text-picky-500 animate-pulse-gentle" />
-        <h1 className="text-xl font-bold text-evergreen mb-2">
-          Our AI is reading {restaurant.name ?? 'this menu'}&hellip;
+        <h1 className="font-display text-2xl text-forest mb-2">
+          Reading {restaurant.name ?? 'this menu'}&hellip;
         </h1>
         <p className="text-evergreen/80 mb-6">
           Usually under a minute — this page updates itself the moment it&apos;s ready.
         </p>
-        <Link href="/dublin" className="btn-primary text-sm">
+        <Link href="/dublin" className="btn-guide">
           ← Back to Dublin Guide
         </Link>
       </div>
@@ -213,22 +214,40 @@ export default function RestaurantPage() {
   ];
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <div className="relative">
+      {/* An ambient mesh field so the glass surfaces have something to refract.
+          It lives OUTSIDE the max-width column so it spans the full viewport —
+          inside it, it rendered as a tinted stripe the width of the content. */}
+      <div
+        className="absolute inset-x-0 top-0 h-[560px] overflow-hidden pointer-events-none"
+        aria-hidden="true"
+      >
+        <div className="mesh">
+          <span className="w-[60%] h-[70%] left-[-14%] top-[-18%] bg-picky-400 opacity-[0.16]" />
+          <span className="w-[50%] h-[62%] left-[58%] top-[-12%] bg-azalea-500 opacity-[0.13]" />
+        </div>
+        <div className="grain opacity-[0.06]" />
+      </div>
+
+      <div className="relative max-w-2xl mx-auto px-4 py-8">
       {/* Back */}
-      <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-evergreen/80 hover:text-evergreen mb-6">
+      <Link
+        href="/"
+        className="relative z-[2] inline-flex items-center gap-1.5 text-sm text-forest/75 hover:text-forest mb-6"
+      >
         ← Back to search
       </Link>
 
       {/* Header */}
-      <div className="mb-6">
+      <div className="relative z-[2] mb-6">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-bold text-evergreen">
+          <h1 className="font-display text-[clamp(1.7rem,4vw,2.3rem)] leading-[1.05] tracking-[-0.025em] text-forest">
             {restaurant.name ?? 'Restaurant Menu'}
           </h1>
           <div className="shrink-0 pt-0.5 flex items-center gap-2">
             <button
               onClick={() => { setFeedbackOpen(true); capture('feedback_modal_opened', { restaurant_id: restaurant.id }); }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border-2 border-mint-200 text-sm text-evergreen/80 hover:border-picky-300 hover:text-evergreen transition-colors"
+              className="glass-light inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-forest/90 hover:text-forest transition-colors"
             >
               <ChatIcon className="w-4 h-4" />
               Feedback
@@ -272,44 +291,46 @@ export default function RestaurantPage() {
         </div>
       </div>
 
-      {/* Second-pass AI audit ribbon */}
-      <div className="flex items-center gap-3 rounded-2xl bg-mint-100 text-picky-700 px-4 py-3 mb-6 text-sm">
-        <ShieldIcon className="w-4 h-4 flex-shrink-0" />
+      {/* How this page was produced — honest about the AI's fallibility. */}
+      <div className="glass-light flex items-start gap-3 rounded-2xl px-4 py-3.5 mb-6 text-sm text-forest/90">
+        <ShieldIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-azalea-700" />
         <span>
-          Second-pass AI verification: fish sauce, gelatine and hidden stock get caught before this page reaches you.
+          AI can make errors. We sample and review some results by hand, and are trying our best to
+          improve the accuracy. Spot something off? Tap the flag on any dish to report it.
         </span>
       </div>
 
-      {/* Stats */}
+      {/* Stats — glass capsules over the mesh, but the numbers themselves stay
+          solid green: dietary information must never lose contrast to an effect. */}
       <div className="grid grid-cols-3 gap-3 mb-6">
-        <div className="card p-3 text-center">
+        <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
-          <div className="text-2xl font-bold bg-solar-gradient bg-clip-text text-transparent">{veganCount}</div>
-          <div className="text-xs text-evergreen/80 mt-0.5">Vegan</div>
+          <div className="font-display text-3xl text-picky-700">{veganCount}</div>
+          <div className="text-xs text-forest/75 mt-0.5">Vegan</div>
         </div>
-        <div className="card p-3 text-center">
+        <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍳</div>
-          <div className="text-2xl font-bold text-picky-600">{vegCount}</div>
-          <div className="text-xs text-evergreen/80 mt-0.5">Veggie</div>
+          <div className="font-display text-3xl text-picky-600">{vegCount}</div>
+          <div className="text-xs text-forest/75 mt-0.5">Veggie</div>
         </div>
-        <div className="card p-3 text-center">
+        <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
-          <div className="text-2xl font-bold text-evergreen/80">{totalDishes}</div>
-          <div className="text-xs text-evergreen/80 mt-0.5">Dishes read</div>
+          <div className="font-display text-3xl text-forest/80">{totalDishes}</div>
+          <div className="text-xs text-forest/75 mt-0.5">Dishes read</div>
         </div>
       </div>
 
       {/* Menu selector — only when multiple menus were analysed */}
       {menuLabels.length > 1 && (
-        <div className="mb-4">
-          <label htmlFor="menu-select" className="block text-xs font-medium text-evergreen/80 mb-1.5">
+        <div className="relative z-[2] mb-4">
+          <label htmlFor="menu-select" className="block text-xs font-medium text-forest/75 mb-1.5">
             Menu
           </label>
           <select
             id="menu-select"
             value={menuFilter}
             onChange={(e) => { setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
-            className="w-full sm:w-auto px-4 py-2 rounded-full border-2 border-mint-200 bg-white text-sm font-medium text-evergreen focus:outline-none focus:ring-4 focus:ring-picky-500/15 focus:border-picky-500"
+            className="glass-light w-full sm:w-auto px-4 py-2.5 rounded-full text-sm font-medium text-forest focus:outline-none focus:ring-4 focus:ring-azalea-500/25"
           >
             {menuLabels.map((label) => (
               <option key={label} value={label}>
@@ -321,20 +342,21 @@ export default function RestaurantPage() {
         </div>
       )}
 
-      {/* Filter tabs */}
-      <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
+      {/* Filter tabs — glass when idle, solid forest when active so the current
+          filter is never ambiguous. */}
+      <div className="relative z-[2] flex gap-2 mb-6 overflow-x-auto pb-1">
         {filters.map((f) => (
           <button
             key={f.value}
             onClick={() => { setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: params.id }); }}
-            className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 border-2 ${
+            className={`flex-shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold transition-colors duration-150 ${
               filter === f.value
-                ? 'bg-evergreen border-evergreen text-white'
-                : 'bg-white border-mint-200 text-evergreen/80 hover:border-picky-300'
+                ? 'bg-forest text-paper border-2 border-forest'
+                : 'glass-light text-forest/85 hover:text-forest'
             }`}
           >
             {f.label}
-            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-lime' : 'text-evergreen/80'}`}>
+            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-azalea-400' : 'text-forest/70'}`}>
               {f.count}
             </span>
           </button>
@@ -354,7 +376,7 @@ export default function RestaurantPage() {
             if (group.length === 0) return null;
             return (
               <div key={label} className="mb-8">
-                <h2 className="text-lg font-bold text-evergreen mb-3 pb-2 border-b-[1.5px] border-mint-200">{label}</h2>
+                <h2 className="font-display text-xl text-forest mb-3 pb-2 border-b-[1.5px] border-forest/15">{label}</h2>
                 {group.map((section) => (
                   <MenuSection key={section.id} section={section} activeFilter={filter} />
                 ))}
@@ -387,6 +409,7 @@ export default function RestaurantPage() {
           onClose={() => setFeedbackOpen(false)}
         />
       )}
+      </div>
     </div>
   );
 }

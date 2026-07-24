@@ -28,6 +28,28 @@ const config: Config = {
           light: '#187552',
           line: '#2a7a56',
         },
+        // Riso direction (2026-07-24): forest ground + warm paper, the two
+        // surfaces every public page is built from.
+        forest: {
+          DEFAULT: '#12352a',
+          deep: '#0b241b',
+          lift: '#1b4a37',
+          line: '#2c5a46',
+        },
+        paper: {
+          DEFAULT: '#fff8f3',
+          line: '#e6dbd1',
+        },
+        // Pink accent (Azalea). Split by ground because no single pink is
+        // readable on both: 400 on forest = 4.8:1, 700 on paper = 4.9:1.
+        azalea: {
+          400: '#ff5fae',
+          500: '#ff2d8f',
+          700: '#ca2286',
+        },
+        // Irish green — reserved for the city-guide CTA (white on it: 5.4:1).
+        irish: '#0b7a48',
+        gold: '#c8890b',
         // The "future" accents — the signature gradient + AI layer
         lime: '#c6f542',
         aqua: '#2fd8c4',
@@ -52,15 +74,24 @@ const config: Config = {
       },
       fontFamily: {
         sans: ['var(--font-sora)', 'system-ui', 'sans-serif'],
+        // Bricolage Grotesque — headlines and buttons only.
+        display: ['var(--font-display)', 'var(--font-sora)', 'system-ui', 'sans-serif'],
         mono: ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       backgroundImage: {
         // The signature Solar gradient: green → lime → aqua
         'solar-gradient': 'linear-gradient(100deg, #00c46a, #7ee23f 55%, #2fd8c4)',
+        // The primary CTA: a pink mesh with a specular sheen over it.
+        'liquid-pink': 'linear-gradient(118deg, #ff2d8f 0%, #d81a78 40%, #ff4fa3 72%, #ff86c2 100%)',
+        // Same treatment in Irish green for the city-guide CTA. Stops are kept
+        // dark enough that white stays ≥4.4:1 across the whole sweep.
+        'liquid-green': 'linear-gradient(118deg, #0b7a48 0%, #065c36 40%, #0f8a52 74%, #0d9152 100%)',
       },
       boxShadow: {
         glow: '0 6px 18px rgba(0, 196, 106, 0.28)',
+        'glow-pink': '0 16px 38px rgba(255, 45, 143, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.5)',
         'card-soft': '0 4px 14px rgba(5, 44, 28, 0.05)',
+        'card-pop': '6px 6px 0 #ff2d8f',
       },
       animation: {
         'fade-in': 'fadeIn 0.4s ease-out',

@@ -15,6 +15,25 @@ export function SproutIcon({ className }: IconProps) {
   );
 }
 
+/** Irish harp — marks the Dublin guide. Gold frame with forest strings so it
+ *  stays visible on the paper ground (plain gold on cream washes out). */
+export function HarpIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path d="M6.5 20.5C6.5 11.5 10 5.2 17.3 3.4" stroke="#c8890b" strokeWidth={2.1} strokeLinecap="round" />
+      <path d="M17.3 3.4V20.5" stroke="#c8890b" strokeWidth={2.1} strokeLinecap="round" />
+      <path d="M5.6 20.5h12.6" stroke="#c8890b" strokeWidth={2.1} strokeLinecap="round" />
+      <path
+        d="M9.9 19.4 11.6 8.2M12.4 19.4 13.9 6.5M14.9 19.4 16 5.4"
+        stroke="#12352a"
+        strokeWidth={0.95}
+        strokeLinecap="round"
+        opacity={0.55}
+      />
+    </svg>
+  );
+}
+
 export function LinkIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" className={className} aria-hidden="true">

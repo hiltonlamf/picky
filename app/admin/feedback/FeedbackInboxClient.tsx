@@ -4,10 +4,17 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { FeedbackItem } from '@/types';
-import { REPORT_ISSUE_TYPES, GENERAL_FEEDBACK_TYPES, GUIDE_FEEDBACK_TYPES } from '@/lib/dietary-config';
+import {
+  REPORT_ISSUE_TYPES,
+  GENERAL_FEEDBACK_TYPES,
+  GUIDE_FEEDBACK_TYPES,
+  SITE_FEEDBACK_TYPES,
+} from '@/lib/dietary-config';
 
 const ISSUE_LABELS: Record<string, string> = Object.fromEntries(
-  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES].map((t) => [t.value, t.label])
+  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES, ...SITE_FEEDBACK_TYPES].map(
+    (t) => [t.value, t.label]
+  )
 );
 
 function FilterTab({ label, value, active }: { label: string; value: string; active: string }) {

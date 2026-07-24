@@ -6,6 +6,7 @@ import DietaryBadge from './DietaryBadge';
 import ReportModal from './ReportModal';
 import { capture } from '@/lib/posthog-client';
 import { CONFIDENCE_THRESHOLD_WARNING } from '@/lib/dietary-config';
+import { formatPrice } from '@/lib/format-price';
 import { AlertIcon, QuestionIcon, FlagIcon } from './icons';
 
 interface Props {
@@ -50,6 +51,8 @@ export default function DishCard({ dish, activeFilter }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
 
   const isLowConfidence = dish.confidence < CONFIDENCE_THRESHOLD_WARNING;
+  // Menus often list a bare "4"; without a symbol it doesn't read as a price.
+  const price = formatPrice(dish.price);
 
   // Hide dishes that don't match the active filter (if set). 'unknown'
   // dishes are included under vegetarian (a "maybe, please confirm" option)
@@ -90,8 +93,10 @@ export default function DishCard({ dish, activeFilter }: Props) {
           <div className="flex-1 min-w-0">
             <div className="flex items-start gap-2 flex-wrap">
               <h3 className="text-sm font-semibold text-evergreen leading-tight">{dish.name}</h3>
-              {dish.price && (
-                <span className="text-sm text-evergreen/80 flex-shrink-0">{dish.price}</span>
+              {price && (
+                <span className="text-sm font-semibold text-forest/75 flex-shrink-0 tabular-nums">
+                  {price}
+                </span>
               )}
             </div>
             {dish.description && (
