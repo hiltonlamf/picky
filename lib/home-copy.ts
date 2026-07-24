@@ -7,19 +7,19 @@ export const HERO = {
   badge: 'AI-assisted · Human-verified · Made in Dublin',
   /** The headline is split so the middle part can be set in pink. */
   headline: {
-    before: 'The popular restaurants that are ',
-    accent: 'actually good',
-    after: ' for vegetarians.',
+    before: 'See all ',
+    accent: 'veggie dishes',
+    after: ' at any restaurant, instantly.',
   },
-  sub: "Not a list of vegetarian restaurants — the places everyone's trying to book, sorted by what's really on the menu for the vegetarian at the table.",
-  subAccent: 'For vegetarians, and for the friends and family eating with them.',
-  support: "Any restaurant website — we'll find the menu ourselves, PDFs and photo menus included.",
+  sub: "No more showing up in places that only offer mushroom risotto.",
+  subAccent: "Drop any restaurant website — we'll find the menu and the veggie dishes.",
+  support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
 export const GUIDE = {
-  eyebrow: 'Dublin, already read for you',
-  headline: "See the veggie dishes in Dublin's most popular restaurants, curated for you",
-  lede: "These aren't vegetarian restaurants. They're the spots people are actually going to right now — we've read every menu so you can see what's there for vegetarians and vegans before you book.",
+  eyebrow: 'Dublin, already tofu-analysed for you',
+  headline: "Veggie dishes in Dublin's most popular restaurants",
+  lede: "These are the hottest spots in Dublin — we've read every menu so you can see what's there for vegetarians and vegans before you book.",
   cta: 'View Dublin Guide →',
 } as const;
 
@@ -27,11 +27,11 @@ export const STORY = {
   eyebrow: 'Why this exists',
   headline: 'I used to spend hours reading menus to look for restaurants for my vegetarian partner.',
   paragraphs: [
-    "I'm a data scientist in Dublin. My partner is vegetarian, and so is his mum. Every time we wanted to eat somewhere good, I'd spend hours on it — going through the newest, most talked-about restaurants from the Irish Times and the food blogs, opening menu after menu, only to find the same thing.",
+    "I like eating nice food. My partner is vegetarian, and so is his mum. Every time we wanted to eat somewhere good, I'd spend hours on it — going through the newest, most talked-about restaurants from the Irish Times and the food blogs, opening menu after menu, only to find the same thing.",
   ],
-  pullQuote: 'One half-hearted vegetarian dish. Mushroom risotto. Pasta arrabbiata. €25, please.',
+  pullQuote: 'One half-hearted vegetarian dish: Mushroom risotto. Pasta arrabbiata. €25, please.',
   paragraphsAfter: [
-    'They were so sick of it. So I built Picky — not a directory of vegetarian restaurants, but a way to find which of the restaurants everyone wants to go to have something genuinely good for the vegetarian at the table. Useful if you’re vegetarian, and just as useful if you’re the one booking for them.',
+    'They were so sick of it. So I built Picky — an app to find the best veggie-friendly places in town for vegetarians, and their friends and family.',
   ],
   bylineName: 'Hilton',
   bylineRole: 'Loving boyfriend of a vegetarian in Dublin',
@@ -69,6 +69,6 @@ export const FEEDBACK_CTA = {
     before: 'Got an idea, or ',
     accent: 'something we got wrong?',
   },
-  body: 'A missing restaurant, a dish we mislabelled, a city you want next — tell us. It goes straight to a person, not a queue.',
+  body: 'A missing restaurant, a dish we mislabelled, a city you want next — tell us. It goes straight to a person, not an AI.',
   button: 'Share your feedback →',
 } as const;

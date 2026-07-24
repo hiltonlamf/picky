@@ -168,13 +168,26 @@
     filter: blur(6px);
   }
 
-  /* City-guide CTA — Irish green, so "go to a place" never competes with
-     "act now". White on #0b7a48 is 5.4:1. */
+  /* City-guide CTA — same liquid treatment as .btn-cta but in Irish green, so
+     "go to a place" reads as a sibling of "act now" without competing with it.
+     White stays ≥4.4:1 across every stop of the gradient. */
   .btn-guide {
-    @apply inline-flex items-center gap-2.5 rounded-full font-display text-white
-           bg-irish px-6 py-3.5 text-xl leading-none whitespace-nowrap
-           shadow-[0_10px_28px_rgba(11,122,72,0.32)]
+    @apply relative overflow-hidden inline-flex items-center gap-2.5 rounded-full
+           font-display text-white bg-liquid-green px-7 py-4 text-xl leading-none whitespace-nowrap
+           shadow-[0_14px_34px_rgba(11,122,72,0.40),inset_0_1px_0_rgba(255,255,255,0.35)]
            transition-transform duration-150 hover:-translate-y-0.5;
+  }
+
+  .btn-guide::after {
+    content: '';
+    position: absolute;
+    left: -10%;
+    top: -70%;
+    width: 70%;
+    height: 150%;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.3), transparent 62%);
+    filter: blur(6px);
   }
 
   .paste-field {

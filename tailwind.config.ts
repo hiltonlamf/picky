@@ -83,6 +83,9 @@ const config: Config = {
         'solar-gradient': 'linear-gradient(100deg, #00c46a, #7ee23f 55%, #2fd8c4)',
         // The primary CTA: a pink mesh with a specular sheen over it.
         'liquid-pink': 'linear-gradient(118deg, #ff2d8f 0%, #d81a78 40%, #ff4fa3 72%, #ff86c2 100%)',
+        // Same treatment in Irish green for the city-guide CTA. Stops are kept
+        // dark enough that white stays ≥4.4:1 across the whole sweep.
+        'liquid-green': 'linear-gradient(118deg, #0b7a48 0%, #065c36 40%, #0f8a52 74%, #0d9152 100%)',
       },
       boxShadow: {
         glow: '0 6px 18px rgba(0, 196, 106, 0.28)',
