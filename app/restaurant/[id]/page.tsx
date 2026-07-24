@@ -214,10 +214,14 @@ export default function RestaurantPage() {
   ];
 
   return (
-    <div className="relative max-w-2xl mx-auto px-4 py-8">
-      {/* An ambient mesh field so the glass surfaces above have something to
-          refract. Sits behind everything and never under body text. */}
-      <div className="absolute inset-x-0 top-0 h-[520px] overflow-hidden pointer-events-none" aria-hidden="true">
+    <div className="relative">
+      {/* An ambient mesh field so the glass surfaces have something to refract.
+          It lives OUTSIDE the max-width column so it spans the full viewport —
+          inside it, it rendered as a tinted stripe the width of the content. */}
+      <div
+        className="absolute inset-x-0 top-0 h-[560px] overflow-hidden pointer-events-none"
+        aria-hidden="true"
+      >
         <div className="mesh">
           <span className="w-[60%] h-[70%] left-[-14%] top-[-18%] bg-picky-400 opacity-[0.16]" />
           <span className="w-[50%] h-[62%] left-[58%] top-[-12%] bg-azalea-500 opacity-[0.13]" />
@@ -225,6 +229,7 @@ export default function RestaurantPage() {
         <div className="grain opacity-[0.06]" />
       </div>
 
+      <div className="relative max-w-2xl mx-auto px-4 py-8">
       {/* Back */}
       <Link
         href="/"
@@ -371,7 +376,7 @@ export default function RestaurantPage() {
             if (group.length === 0) return null;
             return (
               <div key={label} className="mb-8">
-                <h2 className="text-lg font-bold text-evergreen mb-3 pb-2 border-b-[1.5px] border-mint-200">{label}</h2>
+                <h2 className="font-display text-xl text-forest mb-3 pb-2 border-b-[1.5px] border-forest/15">{label}</h2>
                 {group.map((section) => (
                   <MenuSection key={section.id} section={section} activeFilter={filter} />
                 ))}
@@ -404,6 +409,7 @@ export default function RestaurantPage() {
           onClose={() => setFeedbackOpen(false)}
         />
       )}
+      </div>
     </div>
   );
 }
