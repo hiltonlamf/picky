@@ -3,7 +3,6 @@ import Link from 'next/link';
 import HeroSearch from '@/components/HeroSearch';
 import RestaurantCard from '@/components/RestaurantCard';
 import SiteFeedbackButton from '@/components/SiteFeedbackButton';
-import { HarpIcon } from '@/components/icons';
 import { getFeaturedRestaurants } from '@/lib/db';
 import { isPubliclyVisible } from '@/lib/review-flags';
 import { FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
@@ -76,7 +75,7 @@ export default async function HomePage() {
             <div className="flex-1 basis-[420px]">
               <span className="eyebrow-pink">{GUIDE.eyebrow}</span>
               <h2 className="font-display text-[clamp(1.8rem,3.5vw,2.5rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[24ch] text-balance">
-                <HarpIcon className="inline-block w-8 h-8 align-[-0.16em] mr-1.5" />
+                <span className="mr-2" role="img" aria-label="Ireland">🇮🇪</span>
                 {GUIDE.headline}
               </h2>
               <p className="mt-3.5 max-w-[60ch] leading-relaxed text-forest/85">{GUIDE.lede}</p>

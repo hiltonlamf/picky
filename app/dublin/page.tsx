@@ -4,7 +4,7 @@ import RestaurantCard from '@/components/RestaurantCard';
 import Link from 'next/link';
 import { DUBLIN_RESTAURANTS as DUBLIN_LIST } from '@/lib/init-dublin';
 import { isPubliclyVisible } from '@/lib/review-flags';
-import { HarpIcon, SproutIcon } from '@/components/icons';
+import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 
@@ -51,7 +51,7 @@ export default async function DublinPage() {
             Dublin, Ireland
           </span>
           <h1 className="font-display text-[clamp(2rem,4.6vw,3.1rem)] leading-[1.04] tracking-[-0.025em] mt-5 mb-4 max-w-[20ch] text-balance">
-            <HarpIcon className="inline-block w-9 h-9 align-[-0.16em] mr-2" />
+            <span className="mr-2" role="img" aria-label="Ireland">🇮🇪</span>
             {guideHeadline('Dublin')}
           </h1>
           <p className="text-paper/90 max-w-[62ch] text-[1.02rem] leading-relaxed">
