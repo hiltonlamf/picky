@@ -126,12 +126,12 @@ export default function NewGuideForm() {
       )}
 
       {busy && progress && (
-        <div className="card p-4 bg-mint-50">
+        <div className="card p-4 bg-mint-50" role="status" aria-live="polite">
           <p className="text-sm font-medium text-evergreen">
             Analyzing restaurant {progress.index} of {progress.total}&hellip;
           </p>
           <p className="text-xs text-evergreen/70 mt-1">
-            Running AI cost so far: ${runningCost.toFixed(3)}
+            {progress.total - progress.index} still queued · running AI cost so far: ${runningCost.toFixed(3)}
           </p>
         </div>
       )}
