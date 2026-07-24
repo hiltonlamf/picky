@@ -270,6 +270,28 @@ back "cool and bold, but it doesn't look AI":
   small type, and both need a `prefers-reduced-motion` path (no perpetual
   drifting).
 
+The green+pink riso direction shipped as **PR #19** (merged 2026-07-24); the
+tokens live in `tailwind.config.ts`/`app/globals.css` (`forest`/`paper`/
+`azalea`, `.glass`/`.mesh`/`.plate`, `bg-liquid-pink`/`bg-liquid-green`).
+Note on the two CTAs: **pink `.btn-cta` = "do the thing"** (Find my veggies),
+**green `.btn-guide` = "go to the place"** (View Dublin Guide) — same liquid
+treatment, different job; keep them as siblings, don't collapse them.
+
+### Editing homepage copy — the founder does this himself
+All homepage prose lives in `lib/home-copy.ts` (rendered by `app/page.tsx`).
+The founder edits it directly and asks Claude to proofread + push. Three bugs
+recur in his hand-edits — check all three before pushing:
+- **Apostrophes break single-quoted strings** (`'we'll…'` fails to build).
+  Wrap any copy with an apostrophe in `"double quotes"`. This actually broke
+  the PR #19 build.
+- **Split-headline fields concatenate with no separator** — each of
+  `before`/`accent`/`after` needs its own trailing/leading space, or it renders
+  "See allveggie dishesat any restaurant".
+- **Two lines meant to read as separate lines** need a separate `<p>` or a
+  `block` span in `app/page.tsx`. To keep a long line on one row on desktop
+  only, use `md:whitespace-nowrap` — never an unconditional `whitespace-nowrap`
+  (it overflows the viewport on mobile).
+
 ### Process for any significant redesign
 - **Prototype before implementing.** For the Solar redesign, several full
   visual directions were built as one interactive HTML Artifact (same
