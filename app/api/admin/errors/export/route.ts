@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
-import { getCorrectionLog } from '@/lib/db';
+import { getCorrectionLog, getFeedbackInbox } from '@/lib/db';
+import { REPORT_ISSUE_TYPES, GENERAL_FEEDBACK_TYPES, GUIDE_FEEDBACK_TYPES, SITE_FEEDBACK_TYPES } from '@/lib/dietary-config';
 
 export const dynamic = 'force-dynamic';
+
+const FEEDBACK_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES, ...SITE_FEEDBACK_TYPES].map((t) => [t.value, t.label])
+);
 
 // A human-and-Claude-readable Markdown report of every AI mistake a reviewer has
 // corrected — meant to be handed to Claude Code to fix the pipeline (prompts in
 // lib/ai.ts) at the root, instead of correcting dishes one at a time.
 export async function GET() {
-  const log = await getCorrectionLog();
+  const [log, feedback] = await Promise.all([getCorrectionLog(), getFeedbackInbox()]);
 
   const lines: string[] = [];
   lines.push('# Picky — AI Error Log');
@@ -77,6 +82,33 @@ export async function GET() {
   } else {
     for (const h of log.hallucinatedDishes) {
       lines.push(`- "${h.name}" [${h.restaurantName ?? h.url}]`);
+    }
+  }
+  lines.push('');
+
+  // 4. User-reported errors — the deterministic feedback ledger (every accept/
+  // reject decision in one place, to surface recurring problems at scale).
+  const openCount = feedback.filter((f) => f.status === 'open').length;
+  lines.push(`## 4. User-reported errors — ${feedback.length} report(s), ${openCount} still open`);
+  lines.push('');
+  if (feedback.length === 0) {
+    lines.push('_None yet._');
+  } else {
+    lines.push('Format: [status] type — subject (proposal) — resolution — date');
+    lines.push('');
+    for (const f of feedback) {
+      const label = FEEDBACK_TYPE_LABELS[f.issueOrFeedbackType] ?? f.issueOrFeedbackType;
+      const subject = [f.dishName, f.restaurantName ?? (!f.restaurantId ? f.city : null)].filter(Boolean).join(' · ');
+      const proposal = [
+        f.proposedClassification ? `should be ${f.proposedClassification}` : null,
+        f.proposedName ? `rename → "${f.proposedName}"` : null,
+        f.proposedDishName ? `missing dish "${f.proposedDishName}"` : null,
+        f.referenceUrl ? `link ${f.referenceUrl}` : null,
+      ].filter(Boolean).join('; ');
+      lines.push(
+        `- [${f.status}] ${label}${subject ? ` — ${subject}` : ''}${proposal ? ` (${proposal})` : ''}` +
+          `${f.resolutionAction ? ` — ${f.resolutionAction}` : ''}${f.notes ? ` — "${f.notes}"` : ''} — ${new Date(f.createdAt).toISOString().slice(0, 10)}`
+      );
     }
   }
   lines.push('');

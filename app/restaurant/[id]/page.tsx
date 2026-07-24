@@ -407,6 +407,8 @@ export default function RestaurantPage() {
           restaurantId={restaurant.id}
           restaurantName={restaurant.name ?? null}
           onClose={() => setFeedbackOpen(false)}
+          menuLabels={menuLabels}
+          currentMenuLabel={menuFilter !== 'all' ? menuFilter : null}
         />
       )}
       </div>

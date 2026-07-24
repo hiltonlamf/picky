@@ -303,6 +303,24 @@ ALTER TABLE restaurant_feedback
   ADD COLUMN IF NOT EXISTS resolution_notes TEXT,
   ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 
+-- Structured / deterministic feedback (mirrors
+-- supabase/migrations/20260724120000_add_structured_feedback.sql). The user
+-- states exactly what's wrong AND what it should be, so an admin can accept it
+-- in one click; resolution_action records what that Accept did (the ledger key).
+ALTER TABLE dish_reports
+  ADD COLUMN IF NOT EXISTS proposed_classification TEXT
+    CHECK (proposed_classification IN ('vegan','vegetarian','neither','unknown')),
+  ADD COLUMN IF NOT EXISTS resolution_action TEXT;
+ALTER TABLE restaurant_feedback
+  ADD COLUMN IF NOT EXISTS proposed_classification TEXT
+    CHECK (proposed_classification IN ('vegan','vegetarian','neither','unknown')),
+  ADD COLUMN IF NOT EXISTS proposed_dish_name TEXT,
+  ADD COLUMN IF NOT EXISTS proposed_name TEXT,   -- corrected restaurant name (wrong_name)
+  ADD COLUMN IF NOT EXISTS menu_label TEXT,       -- which menu a menu-level report is about
+  -- User-provided link to a menu we missed. Reference ONLY — never auto-fetched.
+  ADD COLUMN IF NOT EXISTS reference_url TEXT,
+  ADD COLUMN IF NOT EXISTS resolution_action TEXT;
+
 -- ============================================================
 -- Unique constraints
 -- ============================================================

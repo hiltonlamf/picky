@@ -87,6 +87,8 @@ export default function ReviewClient({
   const [inGuide, setInGuide] = useState(inGuideInitial);
   const [approvedAt, setApprovedAt] = useState<string | null>(restaurant.guideApprovedAt ?? null);
   const [copied, setCopied] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(restaurant.name ?? '');
   // Local copy of recorded verdicts so a click reflects immediately (the server
   // value is refreshed on router.refresh()).
   const [verdicts, setVerdicts] = useState<Record<string, MenuCandidateVerdict>>(candidateVerdicts);
@@ -304,6 +306,25 @@ export default function ReviewClient({
     });
   }
 
+  async function saveName() {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === restaurant.name) {
+      setEditingName(false);
+      return;
+    }
+    await run('rename', async () => {
+      const res = await fetch(`/api/admin/restaurants/${restaurant.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Rename failed');
+      setEditingName(false);
+      router.refresh();
+    });
+  }
+
   async function copyId() {
     try {
       await navigator.clipboard.writeText(restaurant.id);
@@ -424,7 +445,35 @@ export default function ReviewClient({
       )}
 
       <div className="mb-6">
-        <h1 className="text-xl font-bold text-evergreen">{restaurant.name ?? restaurant.url}</h1>
+        {editingName ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false); }}
+              autoFocus
+              maxLength={200}
+              className="rounded-lg border border-mint-200 px-3 py-1.5 text-xl font-bold text-evergreen focus:outline-none focus:ring-2 focus:ring-picky-500"
+            />
+            <button disabled={busy === 'rename'} onClick={saveName} className="btn-secondary text-sm px-3 py-1.5">
+              {busy === 'rename' ? 'Saving…' : 'Save'}
+            </button>
+            <button onClick={() => { setEditingName(false); setNameDraft(restaurant.name ?? ''); }} className="btn-ghost text-sm">
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-evergreen">{restaurant.name ?? restaurant.url}</h1>
+            <button
+              onClick={() => { setNameDraft(restaurant.name ?? ''); setEditingName(true); }}
+              className="text-[11px] font-medium text-picky-700 hover:underline"
+            >
+              Edit name
+            </button>
+          </div>
+        )}
         <p className="text-sm text-evergreen/80">{restaurant.canonicalUrl ?? restaurant.url}</p>
         <div className="mt-1 flex items-center gap-2">
           <span className="text-[11px] font-mono text-evergreen/50 select-all" title="Restaurant ID">

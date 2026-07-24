@@ -185,6 +185,62 @@ async function main() {
 
     const feedbackForRestaurant = await getRestaurantFeedback(id);
     check('getRestaurantFeedback returns the dish report + general feedback', feedbackForRestaurant.dishReports.length === 1 && feedbackForRestaurant.restaurantFeedback.length === 1);
+
+    // --- STRUCTURED FEEDBACK: Accept auto-applies the user's fix ---
+    // (1) Reclassify: a user says Garden Salad should be vegan → Accept flips the
+    // live dish AND records feedback_confirmed ground truth, in one call.
+    console.log('\n[Structured feedback → Accept applies]');
+    const salad2 = await findDish(id, 'Garden Salad'); // currently 'vegetarian'
+    await reportDish(salad2!.id, 'wrong_classification', 'contains no dairy', 'testhash', null, 'vegan');
+    const { data: reclassRow } = await db.from('dish_reports').select('id').eq('dish_id', salad2!.id).eq('issue_type', 'wrong_classification').single();
+    const reclassRes = await resolveFeedback('dish_report', reclassRow.id, 'confirmed', '');
+    const saladAfter = await findDish(id, 'Garden Salad');
+    check('reclassify: live dish flipped to vegan + human_verified', saladAfter!.classification === 'vegan' && saladAfter!.humanVerified);
+    check('reclassify: resolution_action recorded', reclassRes.resolutionAction === 'reclassified:vegan');
+    {
+      const ec = await getEvalCaseByUrl(URL);
+      const { data: ed } = await db.from('eval_dishes').select('expected_classification, source').eq('eval_case_id', ec!.id).ilike('name', 'Garden Salad').single();
+      check('reclassify: eval_dish expected=vegan, source=feedback_confirmed', ed.expected_classification === 'vegan' && ed.source === 'feedback_confirmed');
+    }
+
+    // (2) Not-a-dish: user flags an item that isn't food → Accept soft-deletes it.
+    // Re-fetch a CURRENT section id — the reparse above recreated sections with
+    // new ids, so the original `section.id` is now stale.
+    const liveSection = (await fetchRestaurantWithDishes(id, { includeDeleted: true }))!.sections.find((s) => (s.menuLabel ?? null) === null)!;
+    await applyDishVerdict({ ...base, restaurantId: id, action: 'upsert', sectionId: liveSection.id, sectionName: 'Mains', name: 'Onion Sauce', classification: 'unknown' });
+    const sauce = await findDish(id, 'Onion Sauce');
+    await reportDish(sauce!.id, 'not_a_dish', "it's a condiment", 'testhash', null, null);
+    const { data: sauceReport } = await db.from('dish_reports').select('id').eq('dish_id', sauce!.id).eq('issue_type', 'not_a_dish').single();
+    const sauceRes = await resolveFeedback('dish_report', sauceReport.id, 'confirmed', '');
+    const saucePublic = (await fetchRestaurantWithDishes(id))!.sections.flatMap((s) => s.dishes).some((d) => d.name === 'Onion Sauce');
+    check('not-a-dish: removed from public view', !saucePublic);
+    check('not-a-dish: resolution_action=removed_dish', sauceRes.resolutionAction === 'removed_dish');
+
+    // (3) Not-a-menu: flag a whole (labelled) menu → Accept removes just that menu.
+    await saveClassifiedMenu(id, URL, 'Drinks', {
+      restaurantName: 'Admin Actions Test',
+      sections: [{ name: 'Cocktails', menuLabel: 'Drinks', dishes: [{ name: 'Mojito', classification: 'vegan', confidence: 0.6 }] }],
+    } as ClassifiedMenu);
+    const { data: notMenuFb } = await db.from('restaurant_feedback').insert({ restaurant_id: id, restaurant_name: 'Admin Actions Test', feedback_type: 'not_a_menu', menu_label: 'Drinks', ip_hash: 'testhash' }).select('id').single();
+    const notMenuRes = await resolveFeedback('restaurant_feedback', notMenuFb.id, 'confirmed', '');
+    const drinksGone = !(await fetchRestaurantWithDishes(id))!.sections.some((s) => s.menuLabel === 'Drinks');
+    const mainsIntact = (await fetchRestaurantWithDishes(id))!.sections.some((s) => (s.menuLabel ?? null) === null);
+    check('not-a-menu: the Drinks menu was removed', drinksGone);
+    check('not-a-menu: the main menu is untouched', mainsIntact);
+    check('not-a-menu: resolution_action names the menu', notMenuRes.resolutionAction!.startsWith('removed_menu:Drinks'));
+
+    // (4) Wrong name: user proposes the correct name → Accept renames live.
+    const { data: renameFb } = await db.from('restaurant_feedback').insert({ restaurant_id: id, restaurant_name: 'Admin Actions Test', feedback_type: 'wrong_name', proposed_name: 'Cornucopia', ip_hash: 'testhash' }).select('id').single();
+    const renameRes = await resolveFeedback('restaurant_feedback', renameFb.id, 'confirmed', '');
+    const { data: renamed } = await db.from('restaurants').select('name').eq('id', id).single();
+    check('wrong-name: restaurant renamed live', renamed.name === 'Cornucopia');
+    check('wrong-name: resolution_action=renamed:Cornucopia', renameRes.resolutionAction === 'renamed:Cornucopia');
+
+    // SECURITY: a page report for a type that has no auto-apply just routes —
+    // it must never mutate live data.
+    const { data: featFb } = await db.from('restaurant_feedback').insert({ restaurant_id: id, restaurant_name: 'Cornucopia', feedback_type: 'feature_request', notes: 'add gluten filter', ip_hash: 'testhash' }).select('id').single();
+    const featRes = await resolveFeedback('restaurant_feedback', featFb.id, 'confirmed', '');
+    check('feature-request accept only routes (no data mutation)', featRes.resolutionAction === 'routed_to_review');
   } finally {
     await db.from('restaurants').delete().eq('id', id);
     await db.from('eval_cases').delete().ilike('url', URL);

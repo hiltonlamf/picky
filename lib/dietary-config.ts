@@ -1,4 +1,4 @@
-import type { DietaryFilterConfig } from '@/types';
+import type { DietaryFilterConfig, DietaryClassification } from '@/types';
 
 export const DIETARY_FILTERS: Record<string, DietaryFilterConfig> = {
   vegan: {
@@ -50,23 +50,70 @@ export const DIETARY_FILTERS: Record<string, DietaryFilterConfig> = {
   // gluten_free: { ... },
 };
 
+// Per-dish reports (the flag on each dish). Deterministic options first — the
+// ones an admin can accept in one click — with open-ended "something else" last.
 export const REPORT_ISSUE_TYPES = [
-  { value: 'wrong_classification', label: 'Wrong dietary label (e.g. marked vegan but contains dairy)' },
-  { value: 'hidden_ingredient', label: 'Hidden non-vegetarian ingredient not mentioned' },
+  { value: 'wrong_classification', label: 'Wrong dietary label — it should be something else' },
+  { value: 'not_a_dish', label: "This isn't a dish (it's a sauce, add-on, or a heading)" },
   { value: 'dish_removed', label: 'This dish is no longer on the menu' },
-  { value: 'incorrect_info', label: 'Name or description is wrong' },
+  { value: 'duplicate_dish', label: 'This is a duplicate — the same dish appears twice' },
+  { value: 'hidden_ingredient', label: 'Hidden non-vegetarian ingredient not mentioned' },
+  { value: 'incorrect_info', label: 'Name, description or price is wrong' },
   { value: 'other', label: 'Something else' },
 ];
 
 // General, page-level feedback — distinct from REPORT_ISSUE_TYPES, which is
-// always about one specific dish's label.
+// always about one specific dish's label. Deterministic options first.
 export const GENERAL_FEEDBACK_TYPES = [
-  { value: 'missing_dish', label: "A dish is missing — it's on the menu but not in our results" },
-  { value: 'wrong_menu', label: 'This looks like the wrong menu, or the wrong restaurant entirely' },
+  { value: 'not_a_menu', label: "This isn't a real menu — it shouldn't be listed here" },
+  { value: 'missing_menu', label: 'A whole menu is missing (e.g. no dinner menu)' },
+  { value: 'menu_no_dishes', label: 'A menu is shown but its dishes are missing or too few' },
   { value: 'menu_outdated', label: 'This menu looks out of date — the restaurant has changed it' },
+  { value: 'missing_dish', label: "A dish is missing — it's on the menu but not in our results" },
+  { value: 'wrong_name', label: 'The restaurant name is wrong' },
+  { value: 'wrong_menu', label: 'This looks like the wrong menu, or the wrong restaurant entirely' },
   { value: 'feature_request', label: 'I have an idea for a feature' },
   { value: 'other', label: 'Something else' },
 ];
+
+// The three labels a user can propose for a misclassified dish. "Non-vegetarian"
+// maps to the internal `neither`. Emoji mirror DietaryBadge for consistency.
+export const PROPOSED_CLASSIFICATION_OPTIONS: { value: DietaryClassification; label: string; emoji: string }[] = [
+  { value: 'vegan', label: 'Vegan', emoji: '🌱' },
+  { value: 'vegetarian', label: 'Vegetarian', emoji: '🍳' },
+  { value: 'neither', label: 'Non-vegetarian', emoji: '🥩' },
+];
+
+// How an admin's "Accept" resolves each feedback/issue type. Shared by the
+// accept engine (app/api/admin/feedback-resolve) and the inbox UI so the two
+// never drift. `route` = no auto-apply; open the review screen and fix by hand.
+export type FeedbackResolveAction =
+  | 'reclassify'  // dish → applyDishVerdict upsert with the proposed label
+  | 'remove_dish' // dish → applyDishVerdict delete (not-a-dish, duplicate, off-menu)
+  | 'remove_menu' // menu → removeMenu keyed on menu_label (not-a-menu, duplicate menu)
+  | 'rename'      // restaurant → update restaurants.name to the proposed name
+  | 'reparse'     // restaurant → re-run analysis (the one AI-spend path)
+  | 'route';      // manual: open review (missing dish/menu, wrong info, open-ended)
+
+export const FEEDBACK_RESOLUTION: Record<string, FeedbackResolveAction> = {
+  // dish reports
+  wrong_classification: 'reclassify',
+  not_a_dish: 'remove_dish',
+  dish_removed: 'remove_dish',
+  duplicate_dish: 'remove_dish',
+  hidden_ingredient: 'route',
+  incorrect_info: 'route',
+  // page feedback
+  not_a_menu: 'remove_menu',
+  missing_menu: 'route',
+  menu_no_dishes: 'reparse',
+  menu_outdated: 'reparse',
+  missing_dish: 'route',
+  wrong_name: 'rename',
+  wrong_menu: 'route',
+  feature_request: 'route',
+  other: 'route',
+};
 
 // Site-level feedback — the footer / homepage button, not tied to any
 // restaurant or city. Shares the /api/feedback route (restaurantId is null).

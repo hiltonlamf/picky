@@ -17,8 +17,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' }, { status: 400 });
     }
 
-    await resolveFeedback(parsed.data.kind, parsed.data.id, parsed.data.status, parsed.data.resolutionNotes ?? null);
-    return NextResponse.json({ success: true });
+    const { resolutionAction } = await resolveFeedback(
+      parsed.data.kind,
+      parsed.data.id,
+      parsed.data.status,
+      parsed.data.resolutionNotes ?? null
+    );
+    return NextResponse.json({ success: true, resolutionAction });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Server error';
     return NextResponse.json({ error: msg }, { status: 500 });
