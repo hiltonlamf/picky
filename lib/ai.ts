@@ -31,12 +31,17 @@ export type AIUsage = {
   costUsd: number;
 };
 
-/** True for Anthropic account failures (credits exhausted, invalid/missing
- *  API key) — callers must surface these instead of swallowing them into
- *  "couldn't read the menu" fallbacks. */
+/** True for Anthropic account failures (credits exhausted, monthly usage cap
+ *  reached, invalid/missing API key) — callers must surface these instead of
+ *  swallowing them into "couldn't read the menu" fallbacks. A swallowed account
+ *  failure is a trust bug: it makes EVERY restaurant look like it has no menu
+ *  (uniform failures, $0 logged) when the real cause is that the AI is switched
+ *  off. The monthly-cap message ("You have reached your specified API usage
+ *  limits. You will regain access on …") shares none of the credit/key wording,
+ *  so it must be matched explicitly. */
 export function isBillingError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /credit balance|billing|purchase credits|authentication_error|invalid x-api-key|api key/i.test(msg);
+  return /credit balance|billing|purchase credits|usage limit|authentication_error|invalid x-api-key|api key/i.test(msg);
 }
 
 function calcCost(model: string, tokensIn: number, tokensOut: number): number {
