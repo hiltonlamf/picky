@@ -58,6 +58,14 @@ export default function GuideWorkspaceClient({
   const pendingIds = restaurants
     .filter((r) => r.status === 'pending' || r.status === 'processing')
     .map((r) => r.id);
+  // Restaurants that already ran but came back empty or errored. These are NOT
+  // picked up by "Analyze queued" (they're no longer pending) and re-pasting
+  // their URL won't re-run them either, so a batch that failed — e.g. because
+  // the page-reader was rate-limited — would otherwise be stuck. This lets an
+  // admin re-run them all in one click (e.g. after adding a reader API key).
+  const failedIds = restaurants
+    .filter((r) => r.status === 'no_menu' || r.status === 'error')
+    .map((r) => r.id);
 
   async function run(key: string, fn: () => Promise<void>) {
     setError(null);
@@ -219,6 +227,16 @@ export default function GuideWorkspaceClient({
           {pendingIds.length > 0 && !analyzing && (
             <button onClick={() => runAnalyze(pendingIds)} disabled={anyBusy} className="btn-secondary text-sm">
               Analyze {pendingIds.length} queued
+            </button>
+          )}
+          {failedIds.length > 0 && !analyzing && (
+            <button
+              onClick={() => runAnalyze(failedIds)}
+              disabled={anyBusy}
+              className="btn-secondary text-sm"
+              title="Re-run the restaurants that came back with no menu or an error"
+            >
+              Retry {failedIds.length} failed
             </button>
           )}
         </div>
