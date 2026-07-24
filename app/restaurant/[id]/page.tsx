@@ -13,6 +13,7 @@ import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import SubmitMenuForm from '@/components/SubmitMenuForm';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
+import { SITE_TITLE } from '@/lib/site-copy';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -84,7 +85,7 @@ export default function RestaurantPage() {
     return () => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
       setRestaurantName(null);
-      document.title = 'Picky — Find your food, your way';
+      document.title = SITE_TITLE;
     };
   }, [load, setRestaurantName]);
 
