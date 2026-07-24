@@ -24,14 +24,15 @@ const PROPOSED_LABELS: Record<string, string> = Object.fromEntries(
   PROPOSED_CLASSIFICATION_OPTIONS.map((o) => [o.value, `${o.emoji} ${o.label}`])
 );
 
-// Button copy per resolution action, so the admin sees exactly what Accept does.
-const ACCEPT_LABEL: Record<FeedbackResolveAction, string> = {
+// Accept-button copy per action, so the admin sees exactly what Accept does.
+// Only the actions where Accept genuinely changes something appear here; the
+// no-auto-apply ('route') case shows a Dismiss button instead, not an Accept.
+const ACCEPT_LABEL: Partial<Record<FeedbackResolveAction, string>> = {
   reclassify: 'Accept & apply',
   remove_dish: 'Accept & remove',
   remove_menu: 'Accept & remove menu',
   rename: 'Accept & rename',
   reparse: 'Accept & reparse',
-  route: 'Accept & open review',
 };
 
 function FilterTab({ label, value, active }: { label: string; value: string; active: string }) {
@@ -129,9 +130,11 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
         <FilterTab label="All" value="all" active={activeStatus} />
       </div>
       <p className="text-sm text-evergreen/70 mb-6">
-        <strong>Accept</strong> applies the user&rsquo;s fix directly — reclassify a dish, remove a not-a-dish or
-        not-a-menu, rename a restaurant — and it goes live immediately. <strong>Reject</strong> dismisses it. Reports we
-        can&rsquo;t auto-apply link you into the restaurant to fix by hand. A resolution note is optional either way.
+        Where a fix can be applied in one click — reclassify a dish, remove a not-a-dish or not-a-menu, rename a
+        restaurant, reparse — you get <strong>Accept</strong> (it goes live immediately) and <strong>Reject</strong>.
+        Reports that can&rsquo;t be auto-applied (a missing dish or menu, a feature idea) show a single{' '}
+        <strong>Dismiss</strong> — use <strong>Open restaurant to edit&nbsp;↗</strong> to fix those by hand first. A
+        resolution note is optional.
       </p>
 
       {items.length === 0 && <p className="text-sm text-evergreen/80">Nothing here.</p>}
@@ -174,8 +177,9 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
 
             {item.status === 'open' && (() => {
               const action: FeedbackResolveAction = FEEDBACK_RESOLUTION[item.issueOrFeedbackType] ?? 'route';
-              // A reparse needs a restaurant to act on; without one, fall back to manual.
-              const canReparse = action !== 'reparse' || !!item.restaurantId;
+              // A reparse needs a restaurant to act on; without one it's not
+              // auto-applicable, so it falls back to the Dismiss-only path.
+              const actionable = action !== 'route' && (action !== 'reparse' || !!item.restaurantId);
               return (
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
                   <input
@@ -185,17 +189,29 @@ export default function FeedbackInboxClient({ items, activeStatus }: { items: Fe
                     onChange={(e) => setNotesById((prev) => ({ ...prev, [item.id]: e.target.value }))}
                     className="flex-1 min-w-[180px] rounded-full border border-mint-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-picky-500"
                   />
-                  <button
-                    disabled={busyId === item.id || !canReparse}
-                    onClick={() => accept(item, action)}
-                    className="btn-secondary text-sm px-4 py-1.5"
-                    title={action === 'reparse' ? 'Re-runs analysis — this spends AI credit' : undefined}
-                  >
-                    {busyId === item.id ? 'Working…' : ACCEPT_LABEL[action]}
-                  </button>
-                  <button disabled={busyId === item.id} onClick={() => reject(item)} className="btn-ghost text-sm">
-                    Reject
-                  </button>
+                  {actionable ? (
+                    <>
+                      {/* Accept genuinely does something here, so it's a real accept/reject pair. */}
+                      <button
+                        disabled={busyId === item.id}
+                        onClick={() => accept(item, action)}
+                        className="btn-secondary text-sm px-4 py-1.5"
+                        title={action === 'reparse' ? 'Re-runs analysis — this spends AI credit' : undefined}
+                      >
+                        {busyId === item.id ? 'Working…' : ACCEPT_LABEL[action]}
+                      </button>
+                      <button disabled={busyId === item.id} onClick={() => reject(item)} className="btn-ghost text-sm">
+                        Reject
+                      </button>
+                    </>
+                  ) : (
+                    // Nothing auto-applies — it's an FYI (or a manual fix via the
+                    // "Open restaurant to edit ↗" link above). One Dismiss button
+                    // parks it in the Dismissed tab; no misleading "Accept".
+                    <button disabled={busyId === item.id} onClick={() => reject(item)} className="btn-secondary text-sm px-4 py-1.5">
+                      {busyId === item.id ? 'Working…' : 'Dismiss'}
+                    </button>
+                  )}
                 </div>
               );
             })()}
