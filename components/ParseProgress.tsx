@@ -9,7 +9,23 @@ interface Props {
   error: string | null;
 }
 
-const PHASES = ['Finding the menu', 'Reading dishes', 'Verifying labels', 'Saving'];
+const PHASES = ['Found the menu', 'Reading dishes', 'Double-checking', 'Saving'];
+
+// Playful, and honest about what the model is hunting for. Purely decorative:
+// aria-hidden so it never competes with the real narration below, which is the
+// live region screen-reader users actually follow.
+const TICKER_WORDS = [
+  'tofu…',
+  'tempeh…',
+  'halloumi…',
+  'jackfruit…',
+  'aubergine…',
+  'chickpeas…',
+  'butter beans…',
+  'harissa…',
+  'anything but another mushroom risotto…',
+];
+const TICKER_MS = 1600;
 
 /**
  * Classify a free-form server narration line into a coarse phase. The
@@ -50,53 +66,79 @@ function useElapsed(startedAt: number | null): string {
   return `${((now - startedAt) / 1000).toFixed(1)}s`;
 }
 
+/** Rotating ingredient word. Frozen for anyone who asked for reduced motion. */
+function useTickerWord(active: boolean): string {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const id = setInterval(() => setIndex((i) => (i + 1) % TICKER_WORDS.length), TICKER_MS);
+    return () => clearInterval(id);
+  }, [active]);
+  return TICKER_WORDS[index];
+}
+
 export default function ParseProgress({ log, startedAt, error }: Props) {
   const elapsed = useElapsed(startedAt);
   const feedRef = useRef<HTMLDivElement>(null);
   const lastStep = log[log.length - 1] ?? '';
   const activePhase = phaseOf(lastStep);
+  const tickerWord = useTickerWord(!error);
 
   useEffect(() => {
     feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight });
   }, [log]);
 
   return (
-    <div className="ai-trace w-full max-w-md p-5">
-      <div className="flex items-baseline justify-between gap-3 mb-1">
-        <p className="font-bold text-mint-50">The AI is reading the menu</p>
-        <span className="font-mono text-xs text-aqua tabular-nums bg-evergreen-light rounded-md px-2 py-0.5">
+    <div className="glass w-full max-w-[480px] rounded-3xl p-6 text-paper">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="font-display text-lg">Reading the whole menu</p>
+        <span className="font-mono text-xs text-white bg-azalea-500/85 rounded-lg px-2.5 py-1 tabular-nums">
           {elapsed}
         </span>
       </div>
-      <p className="text-xs text-mint-200/80 mb-4">
-        Usually under a minute — this is the model actually working, narrated live below.
+      <p className="text-[0.8rem] text-paper/70 mt-2 leading-relaxed">
+        Usually under a minute. This is the real thing working — narrated live below, not a fake
+        progress bar.
       </p>
 
       {error ? (
-        <div role="alert" className="rounded-xl bg-sun-50 p-4">
+        <div role="alert" className="rounded-xl bg-sun-50 p-4 mt-4">
           <p className="text-sm font-semibold text-sun-800 mb-1 flex items-center gap-2">
             <AlertIcon className="w-4 h-4" />
-            The AI hit a snag
+            That one didn&apos;t work
           </p>
           <p className="text-sm text-sun-800/90">{error}</p>
+          <p className="text-xs text-sun-800/80 mt-2">
+            If this keeps happening on a site that definitely has a menu, tell us — we read what
+            comes in.
+          </p>
         </div>
       ) : (
         <>
-          <div className="flex gap-1.5 flex-wrap mb-4">
+          <div
+            className="glass rounded-2xl px-4 py-3 mt-4 flex items-baseline gap-2 text-[0.8rem]"
+            aria-hidden="true"
+          >
+            <span className="text-paper/65">Looking for</span>
+            <span className="font-display text-base text-azalea-400">{tickerWord}</span>
+          </div>
+
+          <div className="flex gap-1.5 flex-wrap mt-4">
             {PHASES.map((label, i) => (
               <div
                 key={label}
-                className={`flex-1 min-w-[90px] flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] font-mono transition-colors ${
+                className={`flex-1 min-w-[96px] flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] font-mono transition-colors ${
                   i < activePhase
-                    ? 'border-picky-500/40 text-picky-500'
+                    ? 'border-lime/45 text-lime'
                     : i === activePhase
-                    ? 'border-lime text-lime'
-                    : 'border-evergreen-line text-mint-200/80'
+                    ? 'border-azalea-400/85 text-azalea-400 bg-azalea-500/15'
+                    : 'border-white/15 text-paper/60'
                 }`}
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                    i <= activePhase ? 'bg-current' : 'bg-evergreen-line'
+                    i <= activePhase ? 'bg-current' : 'bg-white/30'
                   } ${i === activePhase ? 'animate-blink' : ''}`}
                 />
                 {label}
@@ -110,24 +152,25 @@ export default function ParseProgress({ log, startedAt, error }: Props) {
             aria-live="polite"
             aria-atomic="false"
             aria-relevant="additions"
-            className="max-h-52 overflow-y-auto space-y-2 pr-1"
+            className="max-h-52 overflow-y-auto space-y-2 pr-1 mt-4"
           >
-            {log.length === 0 && (
-              <p className="text-mint-200/80 text-xs">Connecting…</p>
-            )}
+            {log.length === 0 && <p className="text-paper/60 text-xs font-mono">Connecting…</p>}
             {log.map((line, i) => (
               <p
                 key={i}
-                className={`animate-rise text-[13px] leading-relaxed ${
-                  i === log.length - 1 ? 'text-lime font-medium' : 'text-mint-200/80'
+                className={`animate-rise text-[13px] leading-relaxed font-mono ${
+                  i === log.length - 1 ? 'text-lime' : 'text-paper/75'
                 }`}
               >
-                <span className="text-aqua mr-2 tabular-nums">
+                <span className="text-azalea-400 mr-2 tabular-nums">
                   {String(i + 1).padStart(2, '0')}
                 </span>
                 {line}
                 {i === log.length - 1 && (
-                  <span className="inline-block w-1.5 h-3.5 bg-lime ml-1 align-middle animate-blink" aria-hidden="true" />
+                  <span
+                    className="inline-block w-1.5 h-3.5 bg-lime ml-1 align-middle animate-blink"
+                    aria-hidden="true"
+                  />
                 )}
               </p>
             ))}

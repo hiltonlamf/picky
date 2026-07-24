@@ -8,6 +8,7 @@ import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } 
 import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import { ADMIN_COOKIE_NAME, expectedAdminCookieValue } from '@/lib/admin-auth';
+import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
 
 // Reads the DB per request and must reflect the latest edits/publish state, so
@@ -31,8 +32,8 @@ export async function generateMetadata({ params }: { params: { city: string } })
   }
   const where = guide.country ? `${guide.displayName}, ${guide.country}` : guide.displayName;
   return {
-    title: `Vegetarian & Vegan Restaurants in ${guide.displayName}`,
-    description: `Discover vegetarian and vegan-friendly restaurants in ${where}. Browse dish-level dietary information for the best plant-based eating in the city.`,
+    title: `Vegetarian & Vegan Options in ${guide.displayName}’s Most Popular Restaurants`,
+    description: guideMetaDescription(guide.displayName, where),
   };
 }
 
@@ -114,19 +115,21 @@ export default async function CityGuidePage({ params }: { params: { city: string
       )}
 
       {/* Header */}
-      <div className="mb-10 text-center sm:text-left">
-        <div className="inline-flex items-center gap-2 bg-evergreen text-lime text-xs font-medium px-4 py-1.5 rounded-full mb-4 font-mono tracking-[0.12em] uppercase">
-          <span className="live-dot" />
+      <div className="mb-10">
+        <div className="inline-flex items-center gap-2 bg-forest text-paper text-xs font-medium px-4 py-1.5 rounded-full mb-4 font-mono tracking-[0.12em] uppercase">
+          <span className="w-1.5 h-1.5 rounded-full bg-azalea-500 animate-blink" />
           <span>{guide.country ? `${guide.displayName}, ${guide.country}` : guide.displayName}</span>
         </div>
-        <h1 className="text-3xl sm:text-4xl font-bold text-evergreen mb-3 tracking-tight">
-          {guide.tagline ?? `${guide.displayName}, pre-scouted by AI`}
+        <h1 className="font-display text-[clamp(1.9rem,4.2vw,2.8rem)] leading-[1.04] tracking-[-0.025em] text-forest mb-4 max-w-[20ch] text-balance">
+          {guide.tagline ?? guideHeadline(guide.displayName)}
         </h1>
-        <p className="text-evergreen/80 max-w-2xl sm:text-lg mb-5">
-          Our AI has already read and verified the menus at these {guide.displayName} restaurants, so you can
-          see exactly which dishes are veggie or vegan before you visit.
+        <p className="text-forest/85 max-w-[62ch] text-[1.02rem] leading-relaxed">
+          {guideIntro(guide.displayName)}
         </p>
-        <GuideFeedbackButton city={slug} />
+        <p className="text-forest/65 max-w-[62ch] text-sm mt-3">{GUIDE_HUMAN_LINE}</p>
+        <div className="mt-6">
+          <GuideFeedbackButton city={slug} />
+        </div>
       </div>
 
       {/* Initialising banner */}
@@ -135,7 +138,7 @@ export default async function CityGuidePage({ params }: { params: { city: string
           <SproutIcon className="w-5 h-5 text-picky-600 mt-0.5 animate-pulse-gentle flex-shrink-0" />
           <div>
             <p className="text-sm font-semibold text-evergreen mb-0.5">
-              Our AI is scouting {guide.displayName} menus&hellip;
+              Reading the {guide.displayName} menus&hellip;
             </p>
             <p className="text-sm text-evergreen/80">
               This page updates itself automatically as each restaurant finishes.
@@ -157,9 +160,9 @@ export default async function CityGuidePage({ params }: { params: { city: string
       {pendingRestaurants.length > 0 && (
         <div className="grid sm:grid-cols-2 gap-4 mb-6">
           {pendingRestaurants.map((r) => (
-            <div key={r.id} className="card p-5 bg-mint-50">
-              <p className="font-semibold text-evergreen/80 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
-              <p className="text-xs text-picky-600 animate-pulse-gentle">AI reading the menu&hellip;</p>
+            <div key={r.id} className="rounded-[20px] border-2 border-forest/25 p-5 bg-white/60">
+              <p className="font-display text-forest/70 mb-1 truncate">{r.name ?? 'Restaurant'}</p>
+              <p className="text-xs text-azalea-700 animate-pulse-gentle font-mono">Reading the menu&hellip;</p>
             </div>
           ))}
         </div>
@@ -173,32 +176,33 @@ export default async function CityGuidePage({ params }: { params: { city: string
       )}
 
       {/* Search CTA */}
-      <div className="relative overflow-hidden rounded-3xl bg-evergreen p-6 sm:p-8">
-        <div
-          className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 rounded-full"
-          style={{ background: 'radial-gradient(circle, rgba(198,245,66,0.25), transparent 70%)' }}
-        />
-        <div className="relative">
-          <h2 className="text-xl font-bold text-lime mb-2">Don&apos;t see your restaurant?</h2>
-          <p className="text-sm text-mint-100 mb-4">
-            Drop any restaurant link and our AI will read the menu for you, instantly.
+      <div className="relative overflow-hidden rounded-3xl bg-forest text-paper p-7 sm:p-9">
+        <div className="mesh" aria-hidden="true">
+          <span className="w-[52%] h-[90%] left-[58%] top-[-22%] bg-azalea-500 opacity-30" />
+          <span className="w-[50%] h-[80%] left-[-8%] top-[16%] bg-[#0f7a52] opacity-50" />
+        </div>
+        <div className="relative z-[2]">
+          <h2 className="font-display text-2xl mb-2">Don&apos;t see your restaurant?</h2>
+          <p className="text-sm text-paper/85 mb-5 max-w-[46ch]">
+            Paste any restaurant link and we&apos;ll read the menu for you, dish by dish.
           </p>
-          <Link href="/" className="btn-primary text-sm">
-            Search a restaurant →
+          <Link href="/" className="btn-cta inline-block">
+            🥦 Find my veggies →
           </Link>
         </div>
       </div>
 
       {/* SEO content */}
-      <section className="mt-12 prose prose-sm max-w-none text-evergreen/80">
-        <h2 className="text-lg font-semibold text-evergreen not-prose mb-3">
+      <section className="mt-12 max-w-3xl text-forest/80 text-[0.95rem] leading-relaxed space-y-4">
+        <h2 className="font-display text-xl text-forest">
           About vegetarian dining in {guide.displayName}
         </h2>
         <p>
-          Picky helps you find the best vegetarian and vegan options in {guide.displayName} without having to
-          ring ahead or scan through menus yourself. Our AI reads every dish on the menu and flags which are
-          vegetarian or vegan — including checking for hidden non-vegetarian ingredients like fish sauce, beef
-          stock, and anchovies that often appear in otherwise plant-friendly dishes.
+          Picky helps you find which of {guide.displayName}&apos;s most popular restaurants are actually
+          good for vegetarians, without ringing ahead or scanning menus yourself. The AI reads every dish
+          and flags which are vegetarian or vegan — including hidden non-vegetarian ingredients like fish
+          sauce, beef stock and anchovies that often appear in otherwise plant-friendly dishes. We sample
+          and review those results by hand before they go live.
         </p>
       </section>
     </div>

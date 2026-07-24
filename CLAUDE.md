@@ -218,6 +218,58 @@ rules for any future visual or product work, not just that one PR.
   - **Everything else** (navigation, decoration, source-type icons) uses
     the custom SVG set in `components/icons.tsx` — no emoji there.
 
+### The five UX principles (founder, 2026-07-24) — read before any design work
+
+1. **Cool, bold and intelligent.** Big confident display type, flat blocks of
+   colour, no timid pastel. It should feel like walking into a good café, not
+   into a dashboard.
+2. **Green leads, pink accents.** Deep forest green carries roughly three
+   quarters of any page; pink arrives at full strength as headlines, primary
+   buttons, seams and mesh points — never as a pastel wash blended into the
+   green.
+3. **Green always means plants.** Vegan/vegetarian/veggie signalling is green
+   (plus the emoji set) everywhere, without exception. Pink must never carry
+   dietary meaning — a pink dish badge could read as "not for you".
+4. **Liquid glass + mesh gradient = the intelligence layer.** Use them so the
+   product reads as AI without the copy having to say so (see the section
+   below for the how and the limits).
+5. **AI-assisted, human-verified — never AI slop.** Every surface should make
+   it clear a person is behind this: sampling and reviewing classifications,
+   working the error log, reading the feedback. Copy credits the AI for what
+   it does (reading thousands of menus) and the human for the judgement.
+
+**The standard one-line description of the app** — use this verbatim wherever a
+short blurb is needed (meta description, OG/Twitter card, share text, footer):
+
+> Picky — find veggie dishes in any restaurant, instantly. AI-assisted.
+> Human-verified.
+
+### "Cool, bold AND futuristic" — the intelligence layer (2026-07-24)
+
+Standing founder directive, learned when a green+pink poster direction came
+back "cool and bold, but it doesn't look AI":
+
+- **Bold alone is not enough. The UI must also *look intelligent*.** Flat
+  two-colour poster design reads as a nice restaurant brand; this product is
+  an AI product and the interface should say so without the copy having to.
+- The two devices the founder explicitly asked for (both current in 2026, and
+  the reason competitor AI products read as "smart"):
+  - **Liquid glass** — translucent panels with a real backdrop blur, a
+    hairline light edge and an inner top highlight. Use it on anything that
+    represents the machine thinking or accepting input: the URL bar, the live
+    analysis/trace panel, status chips, overlays.
+  - **Mesh gradients** — soft, blurred multi-point colour fields (with a
+    light grain) behind statement sections and section seams, in the existing
+    palette only. They are the "ambient intelligence" texture; they must never
+    become a purple-indigo AI-slop hero (see the avoid-list below).
+- **Constraint: same colour system.** Glass and mesh are built from the
+  existing greens and the pink accent — introducing new hues to get the effect
+  is not the fix.
+- **Legibility outranks the effect.** Glass surfaces still need measured
+  contrast for their text, mesh must sit *behind* content and never under
+  small type, and both need a `prefers-reduced-motion` path (no perpetual
+  drifting).
+
 ### Process for any significant redesign
 - **Prototype before implementing.** For the Solar redesign, several full
   visual directions were built as one interactive HTML Artifact (same

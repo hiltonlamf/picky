@@ -5,7 +5,19 @@
 @layer base {
   :root {
     --font-sora: 'Sora', system-ui, sans-serif;
+    --font-display: 'Bricolage Grotesque', 'Sora', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    /* How far each section plate slides over the one above it. Section padding
+       adds this back at the bottom, or the last line looks squashed. */
+    --overlap: 46px;
+    /* Printed-light grain laid over the mesh fields. */
+    --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  }
+
+  @media (max-width: 767px) {
+    :root {
+      --overlap: 32px;
+    }
   }
 
   html {
@@ -15,11 +27,7 @@
   }
 
   body {
-    @apply bg-mint-50 text-evergreen;
-    background-image:
-      radial-gradient(60% 40% at 8% 0%, rgba(198, 245, 66, 0.14), transparent 60%),
-      radial-gradient(55% 38% at 96% 4%, rgba(47, 216, 196, 0.12), transparent 60%);
-    background-attachment: fixed;
+    @apply bg-paper text-forest;
   }
 
   * {
@@ -28,6 +36,94 @@
 }
 
 @layer components {
+  /* ============================================================
+     The intelligence layer — liquid glass + mesh gradient.
+     Glass goes only on surfaces that represent the machine (the paste
+     field's siblings, the live trace panel, status chips, the header).
+     Mesh sits BEHIND content, never under small type.
+     ============================================================ */
+  .glass {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(18px) saturate(1.5);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    border: 1px solid rgba(255, 255, 255, 0.26);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.34),
+      0 14px 34px rgba(4, 22, 15, 0.3);
+  }
+
+  /* Glass on the light/paper ground (e.g. the veg-count capsule on a card). */
+  .glass-light {
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    border: 1px solid rgba(202, 34, 134, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 8px 22px rgba(90, 30, 60, 0.07);
+  }
+
+  .mesh {
+    position: absolute;
+    inset: -25% -10%;
+    z-index: 0;
+    pointer-events: none;
+    filter: blur(72px);
+    opacity: 0.95;
+  }
+
+  .mesh span {
+    position: absolute;
+    display: block;
+    border-radius: 9999px;
+  }
+
+  .grain {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background-image: var(--grain-tile);
+    opacity: 0.12;
+    mix-blend-mode: overlay;
+  }
+
+  /* Sections stack as plates with a lit top edge — the seam device. */
+  .band {
+    @apply relative overflow-hidden;
+    padding-top: 78px;
+    padding-bottom: calc(78px + var(--overlap));
+  }
+
+  .plate {
+    border-radius: var(--overlap) var(--overlap) 0 0;
+    margin-top: calc(-1 * var(--overlap));
+  }
+
+  .plate::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: var(--overlap);
+    z-index: 2;
+    pointer-events: none;
+    border-radius: var(--overlap) var(--overlap) 0 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.5);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent);
+  }
+
+  /* Onto paper the lit edge reads pink instead of white. */
+  .plate-paper::before {
+    border-top-color: rgba(202, 34, 134, 0.5);
+    background: linear-gradient(180deg, rgba(255, 45, 143, 0.1), transparent);
+  }
+
+  .band-inner {
+    @apply relative z-[2] max-w-5xl mx-auto px-6;
+  }
+
   .card {
     @apply bg-white rounded-2xl shadow-card-soft border-[1.5px] border-mint-200;
   }
@@ -49,6 +145,46 @@
            rounded-full px-4 py-2 transition-colors duration-150;
   }
 
+  /* The primary public CTA: liquid pink. Label is deliberately ≥19px bold —
+     white on this pink is 3.5:1, which only clears WCAG at large-text size. */
+  .btn-cta {
+    @apply relative overflow-hidden rounded-full font-display text-white
+           bg-liquid-pink shadow-glow-pink
+           px-8 py-4 text-xl leading-none
+           transition-transform duration-150 hover:-translate-y-0.5
+           disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0;
+  }
+
+  /* Specular sheen — the "liquid" read, same trick as the glass panels. */
+  .btn-cta::after {
+    content: '';
+    position: absolute;
+    left: -10%;
+    top: -70%;
+    width: 70%;
+    height: 150%;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.42), transparent 62%);
+    filter: blur(6px);
+  }
+
+  /* City-guide CTA — Irish green, so "go to a place" never competes with
+     "act now". White on #0b7a48 is 5.4:1. */
+  .btn-guide {
+    @apply inline-flex items-center gap-2.5 rounded-full font-display text-white
+           bg-irish px-6 py-3.5 text-xl leading-none whitespace-nowrap
+           shadow-[0_10px_28px_rgba(11,122,72,0.32)]
+           transition-transform duration-150 hover:-translate-y-0.5;
+  }
+
+  .paste-field {
+    @apply w-full rounded-full bg-white border-0
+           px-7 py-4 text-[1.04rem] text-forest placeholder-forest/55
+           shadow-[0_18px_40px_rgba(4,22,15,0.34)]
+           focus:outline-none focus:ring-4 focus:ring-azalea-500/35
+           transition-shadow duration-150;
+  }
+
   .input-url {
     @apply w-full rounded-full border-2 border-mint-200 bg-white
            px-5 py-3.5 text-evergreen placeholder-evergreen/55
@@ -59,6 +195,15 @@
   /* Mono "AI layer" — badges, eyebrows, timestamps, source chips */
   .eyebrow {
     @apply font-mono text-[11px] tracking-[0.14em] uppercase text-picky-700;
+  }
+
+  /* Eyebrow on the paper ground (pink) and on the forest ground (cream). */
+  .eyebrow-pink {
+    @apply font-mono text-[11px] tracking-[0.16em] uppercase text-azalea-700;
+  }
+
+  .eyebrow-light {
+    @apply font-mono text-[11px] tracking-[0.16em] uppercase text-paper/60;
   }
 
   .live-dot {
@@ -96,6 +241,33 @@
   .ai-trace {
     @apply bg-evergreen rounded-2xl border border-evergreen-line font-mono text-[13px];
   }
+}
+
+/* Mesh fields drift slowly so the "thinking" surfaces feel alive. The
+   reduce-motion block below flattens this to a single 0.01ms cycle, and the
+   keyframes start and end in the same place, so it simply stops. */
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2.5%, -3%, 0) scale(1.06);
+  }
+}
+
+.mesh-animate span {
+  animation: drift 26s ease-in-out infinite;
+}
+
+.mesh-animate span:nth-child(2) {
+  animation-duration: 34s;
+  animation-direction: reverse;
+}
+
+.mesh-animate span:nth-child(3) {
+  animation-duration: 30s;
+  animation-delay: -8s;
 }
 
 /* Progress bar animation (legacy hook still referenced by older markup) */

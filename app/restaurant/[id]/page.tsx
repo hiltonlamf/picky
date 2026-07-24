@@ -222,7 +222,7 @@ export default function RestaurantPage() {
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-bold text-evergreen">
+          <h1 className="font-display text-[clamp(1.7rem,4vw,2.3rem)] leading-[1.05] tracking-[-0.025em] text-forest">
             {restaurant.name ?? 'Restaurant Menu'}
           </h1>
           <div className="shrink-0 pt-0.5 flex items-center gap-2">
@@ -272,11 +272,12 @@ export default function RestaurantPage() {
         </div>
       </div>
 
-      {/* Second-pass AI audit ribbon */}
-      <div className="flex items-center gap-3 rounded-2xl bg-mint-100 text-picky-700 px-4 py-3 mb-6 text-sm">
-        <ShieldIcon className="w-4 h-4 flex-shrink-0" />
+      {/* How this page was produced — AI, then people. */}
+      <div className="flex items-start gap-3 rounded-2xl bg-mint-100 text-picky-700 px-4 py-3 mb-6 text-sm">
+        <ShieldIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
         <span>
-          Second-pass AI verification: fish sauce, gelatine and hidden stock get caught before this page reaches you.
+          Read by AI, then double-checked for hidden fish sauce, gelatine and stock. We sample and
+          review these results by hand — spot something off? Tap the flag on any dish.
         </span>
       </div>
 
@@ -329,12 +330,12 @@ export default function RestaurantPage() {
             onClick={() => { setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: params.id }); }}
             className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors duration-150 border-2 ${
               filter === f.value
-                ? 'bg-evergreen border-evergreen text-white'
-                : 'bg-white border-mint-200 text-evergreen/80 hover:border-picky-300'
+                ? 'bg-forest border-forest text-paper'
+                : 'bg-white border-forest/20 text-forest/80 hover:border-azalea-400'
             }`}
           >
             {f.label}
-            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-lime' : 'text-evergreen/80'}`}>
+            <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-azalea-400' : 'text-forest/70'}`}>
               {f.count}
             </span>
           </button>

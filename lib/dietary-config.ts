@@ -68,6 +68,15 @@ export const GENERAL_FEEDBACK_TYPES = [
   { value: 'other', label: 'Something else' },
 ];
 
+// Site-level feedback — the footer / homepage button, not tied to any
+// restaurant or city. Shares the /api/feedback route (restaurantId is null).
+export const SITE_FEEDBACK_TYPES = [
+  { value: 'idea', label: 'I have an idea for Picky' },
+  { value: 'restaurant_request', label: 'Add a restaurant or a city' },
+  { value: 'something_wrong', label: 'Something looks wrong' },
+  { value: 'other', label: 'Something else' },
+];
+
 // Guide-level feedback (not tied to one restaurant) — shown on the city guide.
 export const GUIDE_FEEDBACK_TYPES = [
   { value: 'suggest_restaurant', label: 'Suggest a restaurant to add to this guide' },

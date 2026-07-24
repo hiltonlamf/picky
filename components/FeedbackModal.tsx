@@ -5,19 +5,34 @@ import { GENERAL_FEEDBACK_TYPES } from '@/lib/dietary-config';
 import { CheckIcon, CloseIcon } from './icons';
 
 interface Props {
-  restaurantId: string;
+  /** null for site-level feedback, which isn't tied to a restaurant. */
+  restaurantId: string | null;
   restaurantName: string | null;
   onClose: () => void;
+  /** Defaults to the per-restaurant list; the footer passes SITE_FEEDBACK_TYPES. */
+  types?: { value: string; label: string }[];
+  title?: string;
+  subtitle?: string;
 }
 
 const NOTES_PLACEHOLDER: Record<string, string> = {
   missing_dish: 'e.g. Falafel wrap — I saw it on the menu but it\'s not in the results',
   wrong_menu: 'e.g. This looks like the lunch menu, but I was checking dinner',
   feature_request: "e.g. A filter for gluten-free dishes would be amazing",
+  idea: 'e.g. I would love a filter for gluten-free dishes',
+  restaurant_request: 'e.g. Add Fia in Rathgar — great veggie brunch',
+  something_wrong: 'e.g. The dish list for X looks like the wrong menu',
   other: 'Tell us more (optional)',
 };
 
-export default function FeedbackModal({ restaurantId, restaurantName, onClose }: Props) {
+export default function FeedbackModal({
+  restaurantId,
+  restaurantName,
+  onClose,
+  types = GENERAL_FEEDBACK_TYPES,
+  title = 'Share feedback',
+  subtitle = 'Missing dish, wrong menu, feature idea — anything goes.',
+}: Props) {
   const [feedbackType, setFeedbackType] = useState('');
   const [notes, setNotes] = useState('');
   const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle');
@@ -62,10 +77,8 @@ export default function FeedbackModal({ restaurantId, restaurantName, onClose }:
           <form onSubmit={submit}>
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-evergreen">Share feedback</h3>
-                <p className="text-sm text-evergreen/80 mt-0.5">
-                  Missing dish, wrong menu, feature idea — anything goes.
-                </p>
+                <h3 className="text-base font-semibold text-evergreen">{title}</h3>
+                <p className="text-sm text-evergreen/80 mt-0.5">{subtitle}</p>
               </div>
               <button type="button" onClick={onClose} className="btn-ghost p-2 -mr-2 -mt-2 text-evergreen/80">
                 <CloseIcon className="w-4 h-4" />
@@ -75,7 +88,7 @@ export default function FeedbackModal({ restaurantId, restaurantName, onClose }:
             <fieldset className="mb-4">
               <legend className="text-sm font-medium text-evergreen/80 mb-2">What&apos;s this about?</legend>
               <div className="space-y-2">
-                {GENERAL_FEEDBACK_TYPES.map((issue) => (
+                {types.map((issue) => (
                   <label key={issue.value} className="flex items-start gap-3 cursor-pointer">
                     <input
                       type="radio"

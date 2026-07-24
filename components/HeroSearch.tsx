@@ -17,7 +17,7 @@ const TYPE_META: Record<MenuCandidate['type'], { Icon: typeof DocIcon; source: s
   subpage: { Icon: LinkIcon, source: 'Menu page' },
 };
 
-export default function HeroSearch() {
+export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   const router = useRouter();
   const [url, setUrl] = useState('');
   const [state, setState] = useState<AppState>('idle');
@@ -196,11 +196,15 @@ export default function HeroSearch() {
   if (state === 'selecting') {
     const allSelected = selectedIds.length === candidates.length;
     return (
-      <div className="w-full max-w-xl flex flex-col gap-4">
-        <div className="text-center">
-          <p className="eyebrow mb-2">AI scout · {candidates.length} menus found</p>
-          <h2 className="text-lg font-bold text-evergreen">Three menus. Your call.</h2>
-          <p className="text-sm text-evergreen/80">Pick what matters, or let the AI read them all.</p>
+      <div className="w-full max-w-xl flex flex-col gap-4 mt-7">
+        <div>
+          <p className="eyebrow-light mb-2">
+            {candidates.length} {candidates.length === 1 ? 'menu' : 'menus'} found
+          </p>
+          <h2 className="font-display text-xl text-paper">
+            {candidates.length === 1 ? 'One menu. Shall we read it?' : `${candidates.length} menus. Your call.`}
+          </h2>
+          <p className="text-sm text-paper/75 mt-1">Pick what matters, or let it read them all.</p>
         </div>
         <ul className="flex flex-col gap-2.5">
           {candidates.map((c) => {
@@ -212,25 +216,25 @@ export default function HeroSearch() {
                   type="button"
                   onClick={() => toggle(c.id)}
                   aria-pressed={checked}
-                  className={`w-full flex items-start gap-3.5 rounded-2xl border-2 px-4 py-3.5 text-left transition ${
-                    checked ? 'border-picky-500 bg-picky-50' : 'border-mint-200 hover:border-mint-200/70 bg-white'
+                  className={`glass w-full flex items-start gap-3.5 rounded-2xl px-4 py-3.5 text-left transition ${
+                    checked ? '!border-azalea-400 bg-azalea-500/15' : 'hover:bg-white/[0.16]'
                   }`}
                 >
-                  <span className="w-9 h-9 rounded-xl bg-mint-100 text-picky-600 flex items-center justify-center flex-shrink-0">
+                  <span className="w-9 h-9 rounded-xl bg-white/15 text-azalea-400 flex items-center justify-center flex-shrink-0">
                     <Icon className="w-4 h-4" />
                   </span>
                   <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-semibold text-evergreen">{c.label}</span>
+                    <span className="block text-sm font-semibold text-paper">{c.label}</span>
                     {c.description && (
-                      <span className="block text-xs text-evergreen/80 mt-0.5">{c.description}</span>
+                      <span className="block text-xs text-paper/75 mt-0.5">{c.description}</span>
                     )}
-                    <span className="inline-block text-[10px] font-mono uppercase tracking-wide text-evergreen/80 bg-mint-100 rounded px-1.5 py-0.5 mt-1.5">
+                    <span className="inline-block text-[10px] font-mono uppercase tracking-wide text-paper/80 bg-white/10 rounded px-1.5 py-0.5 mt-1.5">
                       {source}
                     </span>
                   </span>
                   <span
                     className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                      checked ? 'border-picky-500 bg-picky-500 text-white' : 'border-mint-200 text-transparent'
+                      checked ? 'border-azalea-400 bg-azalea-500 text-white' : 'border-white/40 text-transparent'
                     }`}
                   >
                     <CheckIcon className="w-3 h-3" />
@@ -241,32 +245,31 @@ export default function HeroSearch() {
           })}
         </ul>
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={handleAnalyzeSelected}
-            disabled={selectedIds.length === 0}
-            className="btn-primary text-base"
-          >
+          <button onClick={handleAnalyzeSelected} disabled={selectedIds.length === 0} className="btn-cta">
             {allSelected
               ? `Read all ${candidates.length} menus`
               : selectedIds.length === 0
               ? 'Pick at least one menu'
               : `Read ${selectedIds.length} ${selectedIds.length === 1 ? 'menu' : 'menus'}`}
           </button>
-          <button onClick={reset} className="btn-ghost text-sm">
+          <button onClick={reset} className="text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2">
             ← Start over
           </button>
         </div>
-        <p className="text-xs text-evergreen/80 font-mono">~20–40s per menu · narrated live</p>
+        <p className="text-xs text-paper/70 font-mono">~20–40s per menu · narrated live</p>
       </div>
     );
   }
 
   if (state === 'parsing' || state === 'error') {
     return (
-      <div className="flex flex-col items-center gap-6">
+      <div className="flex flex-col items-start gap-5 mt-7 w-full">
         <ParseProgress log={log} startedAt={startedAt} error={state === 'error' ? error : null} />
         {state === 'error' && (
-          <button onClick={reset} className="btn-ghost text-sm">
+          <button
+            onClick={reset}
+            className="text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2"
+          >
             ← Try a different link
           </button>
         )}
@@ -274,43 +277,40 @@ export default function HeroSearch() {
     );
   }
 
+  // The white field against the dark hero is deliberate: a translucent input on
+  // a dark ground reads as decoration, while a white box reads as "type here".
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-xl">
-      <div className="flex flex-col gap-3">
-        <div className="relative">
+    <form onSubmit={handleSubmit} className="w-full max-w-[640px] mt-7">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <LinkIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-6 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="drop a restaurant link…"
-            className="input-url pr-12 text-base"
+            placeholder="Paste a restaurant website link"
+            className="paste-field pl-[54px] pr-12"
             autoComplete="url"
             autoFocus
-            aria-label="Restaurant URL"
+            aria-label="Restaurant website link"
           />
           {url && (
             <button
               type="button"
               onClick={() => setUrl('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-evergreen/80 hover:text-evergreen p-1"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-forest/60 hover:text-forest p-1"
               aria-label="Clear"
             >
               <CloseIcon className="w-4 h-4" />
             </button>
           )}
         </div>
-        <button
-          type="submit"
-          disabled={!url.trim()}
-          className="btn-primary text-base w-full sm:w-auto sm:self-start"
-        >
-          Find my food →
+        <button type="submit" disabled={!url.trim()} className="btn-cta shrink-0">
+          🥦 Find my veggies →
         </button>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-evergreen/80">
-        <span>Works with any restaurant website — the AI finds the menu itself.</span>
-      </div>
+      {supportLine && <p className="mt-11 text-sm text-paper/70">{supportLine}</p>}
     </form>
   );
 }
