@@ -6,6 +6,7 @@ import { DUBLIN_RESTAURANTS as DUBLIN_LIST } from '@/lib/init-dublin';
 import { isPubliclyVisible } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
+import GuideViewTracker from '@/components/GuideViewTracker';
 import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 
 export const metadata: Metadata = {
@@ -80,7 +81,9 @@ export default async function DublinPage() {
           </div>
         )}
 
-        {/* Featured restaurants grid — publicly-visible ones only */}
+        <GuideViewTracker city={'dublin'} restaurantCount={visibleRestaurants.length} />
+
+      {/* Featured restaurants grid — publicly-visible ones only */}
         {visibleRestaurants.length > 0 && (
           <div className="grid sm:grid-cols-2 gap-4 mb-8">
             {visibleRestaurants.map((r) => (

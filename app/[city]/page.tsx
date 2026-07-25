@@ -7,6 +7,7 @@ import RestaurantCard from '@/components/RestaurantCard';
 import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
+import GuideViewTracker from '@/components/GuideViewTracker';
 import { ADMIN_COOKIE_NAME, expectedAdminCookieValue } from '@/lib/admin-auth';
 import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
@@ -146,6 +147,8 @@ export default async function CityGuidePage({ params }: { params: { city: string
           </div>
         </div>
       )}
+
+      <GuideViewTracker city={slug} restaurantCount={visibleRestaurants.length} />
 
       {/* Featured restaurants grid — publicly-visible ones only */}
       {visibleRestaurants.length > 0 && (

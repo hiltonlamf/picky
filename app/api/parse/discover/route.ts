@@ -15,7 +15,7 @@ import {
   logParseAttempt,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
@@ -81,12 +81,17 @@ export async function POST(request: NextRequest) {
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
-      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number, errorMessage?: string) =>
         captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,
           dish_count: dishCount ?? 0,
+          domain: attemptUrl ? domainOf(attemptUrl) : null,
+          // success:false alone gave no clue why. The stable code is what the
+          // dashboard groups and alerts on; the raw message is for debugging.
+          failure_reason: success ? null : classifyError(errorMessage),
+          error_message: success ? null : errorMessage ?? null,
         });
 
       try {
@@ -170,7 +175,7 @@ export async function POST(request: NextRequest) {
             "This website looks like it's down or not live yet. If that's not right, share a direct link to the menu and we'll read it.";
           await markRestaurantNoMenu(restaurantId, 'unavailable', rawMsg);
           await logAttempt(false, rawMsg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, rawMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -187,7 +192,7 @@ export async function POST(request: NextRequest) {
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -204,7 +209,7 @@ export async function POST(request: NextRequest) {
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -274,13 +279,13 @@ export async function POST(request: NextRequest) {
           if (err instanceof ExtractionError) {
             await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
             await logAttempt(false, msg);
-            await emitAnalysisCompleted(false);
+            await emitAnalysisCompleted(false, 0, msg);
             send({ type: 'no_menu', restaurantId });
             return close();
           }
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -295,7 +300,7 @@ export async function POST(request: NextRequest) {
         Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         await logAttempt(false, msg);
-        await emitAnalysisCompleted(false);
+        await emitAnalysisCompleted(false, 0, msg);
         send({ type: 'error', error: msg });
       }
       close();

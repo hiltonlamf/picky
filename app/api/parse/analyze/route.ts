@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
@@ -63,12 +63,17 @@ export async function POST(request: NextRequest) {
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
-      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number, errorMessage?: string) =>
         captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,
           dish_count: dishCount ?? 0,
+          domain: attemptUrl ? domainOf(attemptUrl) : null,
+          // success:false alone gave no clue why. The stable code is what the
+          // dashboard groups and alerts on; the raw message is for debugging.
+          failure_reason: success ? null : classifyError(errorMessage),
+          error_message: success ? null : errorMessage ?? null,
         });
 
       try {
@@ -189,7 +194,7 @@ export async function POST(request: NextRequest) {
           // (spend already recorded by callClaude when the API call returned)
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -203,7 +208,7 @@ export async function POST(request: NextRequest) {
           // (spend already recorded by callClaude when the API call returned)
           await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
           await logAttempt(false, NO_MENU_MSG);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -228,7 +233,7 @@ export async function POST(request: NextRequest) {
         Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         await logAttempt(false, msg);
-        await emitAnalysisCompleted(false);
+        await emitAnalysisCompleted(false, 0, msg);
         send({ type: 'error', error: msg });
       }
       close();

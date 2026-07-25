@@ -1,5 +1,9 @@
 import * as Sentry from '@sentry/nextjs';
 import { capture } from './posthog-client';
+import { classifyError, type ErrorCode } from './telemetry';
+
+export { classifyError };
+export type { ErrorCode };
 
 /**
  * Every analytics event name in one place.
@@ -43,26 +47,6 @@ export const EVENTS = {
 } as const;
 
 /**
- * Stable error codes.
- *
- * Raw error messages are useless for grouping — one wording change and PostHog
- * shows two unrelated-looking problems, and a chart broken down by message is a
- * list of fifty one-offs instead of five real issues. The message is still kept
- * as a property for debugging; the code is what we count.
- */
-export type ErrorCode =
-  | 'timeout'
-  | 'connection_dropped'
-  | 'invalid_url'
-  | 'rate_limited'
-  | 'site_unreachable'
-  | 'no_menu_readable'
-  | 'not_found'
-  | 'network'
-  | 'server_error'
-  | 'unknown';
-
-/**
  * Codes worth waking Sentry for.
  *
  * Deliberately excludes the *expected* failures — a bad URL or a rate limit is
@@ -70,31 +54,6 @@ export type ErrorCode =
  * attention) for no diagnostic value. PostHog still counts every one of them.
  */
 const SENTRY_WORTHY = new Set<ErrorCode>(['server_error', 'unknown', 'timeout', 'connection_dropped']);
-
-const PATTERNS: Array<[RegExp, ErrorCode]> = [
-  [/rate limit|too many requests|slow down/i, 'rate_limited'],
-  [/connection dropped|no response body|stream closed/i, 'connection_dropped'],
-  [/taking much longer|timed? ?out|took longer than expected/i, 'timeout'],
-  [/invalid url|invalid request|enter a valid|must be a valid/i, 'invalid_url'],
-  // Apostrophes are matched as a class: the app's user-facing copy uses curly
-  // ’ (U+2019), so a pattern written with a straight ' silently never matches
-  // and the error lands in 'unknown'. Caught by tests/analytics.test.ts, which
-  // asserts against the real strings rather than retyped approximations.
-  [/not found|does ?n['’]?o?t exist|was removed/i, 'not_found'],
-  [/could ?n['’]?o?t read a menu|no menu|unreadable/i, 'no_menu_readable'],
-  [/failed to fetch|network ?error|load failed|econnrefused|enotfound/i, 'network'],
-  [/unreachable|refused|dns|certificate|ssl|tls/i, 'site_unreachable'],
-  [/^(internal )?server error|^5\d\d\b/i, 'server_error'],
-];
-
-/** Map a raw error message to a stable code. Order matters — first match wins. */
-export function classifyError(message: string | null | undefined): ErrorCode {
-  if (!message) return 'unknown';
-  for (const [pattern, code] of PATTERNS) {
-    if (pattern.test(message)) return code;
-  }
-  return 'unknown';
-}
 
 /**
  * The single way a user-visible error gets reported.

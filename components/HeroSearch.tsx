@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
 import { capture } from '@/lib/posthog-client';
+import { EVENTS, captureError, classifyError } from '@/lib/analytics';
 import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
 import type { ParseEvent, MenuCandidate } from '@/types';
 import { CloseIcon, DocIcon, CameraIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
@@ -65,6 +66,14 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             setCandidates(event.candidates);
             setSelectedIds(event.candidates.map((c) => c.id)); // default: all selected
             setState('selecting');
+            // The picker screen is its own funnel step: menus_selected only
+            // fires for people who go on to continue, so without this an
+            // abandonment here looked identical to never reaching it.
+            capture(EVENTS.MENU_CANDIDATES_SHOWN, {
+              restaurant_id: event.restaurantId,
+              count: event.candidates.length,
+              types: event.candidates.map((c) => c.type),
+            });
             return 'done';
           } else if (event.type === 'continue') {
             return { continueWith: event.restaurantId };
@@ -80,13 +89,15 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             // Not an error: the site has no readable menu / is down. The results
             // page renders a friendly, actionable screen (paste a link / upload
             // a photo) keyed off the restaurant's no_menu_reason.
-            capture('no_menu_result', { restaurant_id: event.restaurantId });
+            // The reason lives on the restaurant row, not the SSE event, so
+            // it's attached to results_viewed on the results page instead.
+            capture(EVENTS.NO_MENU_RESULT, { restaurant_id: event.restaurantId });
             router.push(`/restaurant/${event.restaurantId}`);
             return 'done';
           } else if (event.type === 'error') {
             setError(event.error ?? 'An error occurred');
             setState('error');
-            capture('search_error_occurred', { error: event.error ?? 'An error occurred' });
+            captureError({ surface: 'search', message: event.error ?? 'An error occurred' });
             return 'done';
           }
         }
@@ -122,6 +133,42 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
     [consumeStream]
   );
 
+  /**
+   * The main drop-off in the product: analysis is slow, and until now someone
+   * closing the tab mid-wait was indistinguishable from someone who never
+   * searched. Recording elapsed time is what turns "people leave" into "people
+   * leave after N seconds", which is the number that decides whether the wait
+   * needs work.
+   *
+   * Refs rather than state so the listener always sees current values without
+   * being torn down and re-attached on every progress line.
+   */
+  const parsingRef = useRef<{ startedAt: number; step: string; domain: string | null } | null>(null);
+  parsingRef.current =
+    state === 'parsing' && startedAt
+      ? { startedAt, step: log[log.length - 1] ?? 'starting', domain: domainOf(url.trim()) }
+      : null;
+
+  useEffect(() => {
+    const report = () => {
+      const p = parsingRef.current;
+      if (!p) return;
+      parsingRef.current = null; // once per abandonment
+      capture(EVENTS.ANALYSIS_ABANDONED, {
+        elapsed_ms: Date.now() - p.startedAt,
+        last_step: p.step,
+        domain: p.domain,
+      });
+    };
+    // pagehide beats beforeunload on mobile Safari, where beforeunload often
+    // never fires at all — and mobile is where a slow wait hurts most.
+    window.addEventListener('pagehide', report);
+    return () => {
+      window.removeEventListener('pagehide', report);
+      report(); // also covers client-side navigation away mid-analysis
+    };
+  }, []);
+
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -134,8 +181,14 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
         return;
       }
 
-      capture('search_submitted', {
-        domain: domainOf(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`),
+      const submittedUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+      capture(EVENTS.SEARCH_SUBMITTED, {
+        domain: domainOf(submittedUrl),
+        // Whether they pasted a bare homepage or a deep menu link — it strongly
+        // predicts whether discovery succeeds, so the funnel can be split on it.
+        url_has_path: (() => {
+          try { return new URL(submittedUrl).pathname.replace(/\/$/, '').length > 0; } catch { return false; }
+        })(),
       });
 
       setState('parsing');
@@ -157,9 +210,10 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
         const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
         setError(msg);
         setState('error');
-        capture('search_error_occurred', {
-          domain: domainOf(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`),
-          error: msg,
+        captureError({
+          surface: 'search',
+          message: msg,
+          extra: { domain: domainOf(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`) },
         });
       }
     },
@@ -182,8 +236,13 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
       });
       await followStream(response);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      setError(msg);
       setState('error');
+      // Previously silent: this path showed the visitor an error while its
+      // sibling in handleSubmit reported one, so post-picker failures were
+      // invisible.
+      captureError({ surface: 'menu_selection', message: msg, restaurantId });
     }
   }, [restaurantId, selectedIds, candidates, followStream]);
 
