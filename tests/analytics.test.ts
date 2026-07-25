@@ -52,7 +52,11 @@ function installDom(opts: { consent?: string | null; pathname?: string; search?:
   const jar = new Map<string, string>([['picky_anon_id', ANON]]);
   (globalThis as Record<string, unknown>).document = {
     get cookie() {
-      return [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+      // forEach rather than spreading the Map: this project's tsconfig target
+      // rejects Map iteration without --downlevelIteration, and CI runs tsc.
+      const parts: string[] = [];
+      jar.forEach((v, k) => parts.push(`${k}=${v}`));
+      return parts.join('; ');
     },
     set cookie(raw: string) {
       const [pair] = raw.split(';');
