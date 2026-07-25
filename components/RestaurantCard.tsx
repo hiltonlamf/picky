@@ -47,22 +47,11 @@ export default function RestaurantCard({ restaurant }: Props) {
         <h3 className="font-display text-lg leading-tight tracking-[-0.02em] text-forest">
           {restaurant.name ?? 'Restaurant'}
         </h3>
-        <div className="shrink-0 flex items-center gap-1.5">
-          {restaurant.cuisine && (
-            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-forest border-[1.5px] border-forest rounded-full px-2.5 py-1">
-              {restaurant.cuisine}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => setFeedbackOpen(true)}
-            className="p-1.5 rounded-full text-forest/50 hover:text-forest hover:bg-mint-100 transition-colors"
-            aria-label={`Report an issue with ${restaurant.name ?? 'this restaurant'}`}
-            title="Report an issue"
-          >
-            <FlagIcon className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        {restaurant.cuisine && (
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.06em] text-forest border-[1.5px] border-forest rounded-full px-2.5 py-1">
+            {restaurant.cuisine}
+          </span>
+        )}
       </div>
 
       {/* Dietary counts stay green with their emoji — pink never carries
@@ -110,6 +99,16 @@ export default function RestaurantCard({ restaurant }: Props) {
       )}
 
       <p className="relative font-display text-[0.85rem] text-azalea-700 mt-0.5">View full menu →</p>
+
+      <button
+        type="button"
+        onClick={() => setFeedbackOpen(true)}
+        className="absolute bottom-3 right-3 p-1.5 rounded-full text-forest/50 hover:text-forest hover:bg-mint-100 transition-colors"
+        aria-label={`Report an issue with ${restaurant.name ?? 'this restaurant'}`}
+        title="Report an issue"
+      >
+        <FlagIcon className="w-3.5 h-3.5" />
+      </button>
 
       {feedbackOpen && (
         <FeedbackModal
