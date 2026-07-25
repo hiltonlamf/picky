@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { GENERAL_FEEDBACK_TYPES, PROPOSED_CLASSIFICATION_OPTIONS } from '@/lib/dietary-config';
 import type { DietaryClassification } from '@/types';
 import { CheckIcon, CloseIcon } from './icons';
@@ -95,7 +96,10 @@ export default function FeedbackModal({
     }
   }
 
-  return (
+  // Portal to <body> — a fixed-position modal must escape any ancestor that
+  // creates its own containing block (e.g. RestaurantCard's hover transform),
+  // or it gets trapped and clipped inside that ancestor instead of the viewport.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50"
       onClick={(e) => e.target === e.currentTarget && onClose()}
@@ -274,6 +278,7 @@ export default function FeedbackModal({
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
