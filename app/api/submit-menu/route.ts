@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     // whether or not it succeeds).
     const { allowed } = await checkRateLimit(ip);
     if (!allowed) {
-      await captureServer(distinctId, 'rate_limit_hit', { stage: 'submit_menu' });
+      await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'submit_menu' });
       return NextResponse.json(
         { error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} submissions per hour. Please try again later.` },
         { status: 429 }
@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
             label: 'Menu',
           });
 
-    await captureServer(distinctId, 'user_menu_submission_succeeded', {
+    await captureServer(request, distinctId, 'user_menu_submission_succeeded', {
       restaurant_id: restaurant.id,
       mode: parsed.data.mode,
       dish_count: result.addedDishCount,

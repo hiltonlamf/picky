@@ -1,4 +1,10 @@
 import { PostHog } from 'posthog-node';
+import { hasServerAnalyticsConsent } from './telemetry';
+
+export { hasServerAnalyticsConsent };
+
+/** Just the bit of NextRequest we need, so this stays easy to call and test. */
+type CookieReader = { cookies: { get(name: string): { value: string } | undefined } };
 
 let _client: PostHog | null = null;
 
@@ -21,12 +27,25 @@ function client(): PostHog | null {
  * Server-side event capture. Awaits the flush so the event leaves the
  * function before Vercel suspends it. Never throws — analytics must not
  * break the request it's riding on.
+ *
+ * Takes the `request` rather than a consent boolean **on purpose**: it makes
+ * the consent check impossible to forget at a call site. The browser's
+ * localStorage gate is invisible here, so before this existed, server events
+ * were sent for people who had accepted nothing — confirmed on the PR #21
+ * preview, where `analysis_completed` and `dish_reported` arrived from a
+ * session that never touched the banner.
+ *
+ * This gates *PostHog only*. Operational records (parse_attempts, ai_usage_log)
+ * are written by their own code paths and must keep running regardless — they're
+ * how we run the service and account for its cost, not behavioural analytics.
  */
 export async function captureServer(
+  request: CookieReader,
   distinctId: string,
   event: string,
   properties?: Record<string, unknown>
 ): Promise<void> {
+  if (!hasServerAnalyticsConsent(request)) return;
   const ph = client();
   if (!ph) return;
   try {

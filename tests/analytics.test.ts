@@ -37,14 +37,29 @@ function installDom(opts: { consent?: string | null; pathname?: string; search?:
   if (opts.consent != null) store.set('picky-cookie-consent', opts.consent);
 
   (globalThis as Record<string, unknown>).window = {
-    location: { pathname: opts.pathname ?? '/', search: opts.search ?? '' },
+    location: { pathname: opts.pathname ?? '/', search: opts.search ?? '', protocol: 'https:' },
   };
   (globalThis as Record<string, unknown>).localStorage = {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => void store.set(k, v),
     removeItem: (k: string) => void store.delete(k),
   };
-  (globalThis as Record<string, unknown>).document = { cookie: `picky_anon_id=${ANON}` };
+
+  // A real document.cookie *appends* on assignment; a plain string property
+  // replaces. Modelling that faithfully matters — with a naive string stub,
+  // writing the consent cookie wiped picky_anon_id and the test reported a
+  // failure the browser would never have.
+  const jar = new Map<string, string>([['picky_anon_id', ANON]]);
+  (globalThis as Record<string, unknown>).document = {
+    get cookie() {
+      return [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    },
+    set cookie(raw: string) {
+      const [pair] = raw.split(';');
+      const idx = pair.indexOf('=');
+      if (idx > 0) jar.set(pair.slice(0, idx).trim(), pair.slice(idx + 1).trim());
+    },
+  };
   return store;
 }
 
@@ -219,6 +234,51 @@ describe('traffic exclusions', () => {
 
     expect(posthog.init).not.toHaveBeenCalled();
     expect(posthog.capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('server-side consent gate', () => {
+  // The browser's localStorage gate is invisible inside an API route, so
+  // server events went out regardless of consent. Confirmed on the PR #21
+  // preview: analysis_completed and dish_reported arrived from a session that
+  // never answered the banner.
+  const req = (cookie?: string) => ({
+    cookies: { get: (n: string) => (cookie && n === 'picky_analytics_consent' ? { value: cookie } : undefined) },
+  });
+
+  it('treats a missing cookie as no consent', async () => {
+    const { hasServerAnalyticsConsent } = await import('@/lib/telemetry');
+    expect(hasServerAnalyticsConsent(req())).toBe(false);
+  });
+
+  it('treats an explicit refusal as no consent', async () => {
+    const { hasServerAnalyticsConsent } = await import('@/lib/telemetry');
+    expect(hasServerAnalyticsConsent(req('0'))).toBe(false);
+  });
+
+  it('recognises consent', async () => {
+    const { hasServerAnalyticsConsent } = await import('@/lib/telemetry');
+    expect(hasServerAnalyticsConsent(req('1'))).toBe(true);
+  });
+});
+
+describe('consent cookie for the server', () => {
+  it('is written on accept so API routes can see the decision', async () => {
+    installDom({ consent: null });
+    const { grantConsent } = await loadClient();
+    grantConsent();
+
+    expect(document.cookie).toContain('picky_analytics_consent=1');
+    // The anon ID must survive — it's the join key across client, server and DB.
+    expect(document.cookie).toContain(`picky_anon_id=${ANON}`);
+  });
+
+  it('is written on refusal too, so the server knows to stay quiet', async () => {
+    installDom({ consent: null });
+    const { denyConsent } = await loadClient();
+    denyConsent();
+
+    expect(document.cookie).toContain('picky_analytics_consent=0');
   });
 });
 

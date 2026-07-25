@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     await reportDish(dishId, issueType, notes, ipHash, anonId, proposedClassification ?? null);
     // Mirrors the dish_reports insert so PostHog and the DB agree.
-    await captureServer(anonId ?? ipHash, 'dish_reported', {
+    await captureServer(request, anonId ?? ipHash, 'dish_reported', {
       issue_type: issueType,
       dish_id: dishId,
       proposed_classification: proposedClassification ?? null,

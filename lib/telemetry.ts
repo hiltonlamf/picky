@@ -9,6 +9,41 @@ import type { MenuCandidate } from '@/types';
  */
 export const ANON_ID_COOKIE = 'picky_anon_id';
 
+/**
+ * Mirrors the browser's analytics consent so *server* code can see it.
+ *
+ * The client-side consent gate can't reach API routes: server events are sent
+ * by posthog-node inside the route handler, with no access to localStorage. So
+ * `analysis_completed` and `dish_reported` were reaching PostHog for visitors
+ * who had never accepted anything (confirmed on the PR #21 preview).
+ *
+ * Written by grantConsent()/denyConsent(), read by captureServer(). Not
+ * httpOnly, because the client is what sets it.
+ *
+ * Note the deliberate limit of what this gates: **only third-party analytics.**
+ * Our own operational records — parse_attempts, ai_usage_log, feedback — carry
+ * on regardless. Those are how the service is run and how its costs are
+ * accounted for, not behavioural tracking, and losing them would leave us
+ * unable to tell whether the product works or what it costs.
+ */
+export const ANALYTICS_CONSENT_COOKIE = 'picky_analytics_consent';
+
+/** Just the bit of NextRequest we need, so this stays easy to call and test. */
+type CookieReader = { cookies: { get(name: string): { value: string } | undefined } };
+
+/**
+ * Whether this visitor agreed to analytics, from the cookie the browser sets.
+ *
+ * Lives here rather than beside captureServer deliberately: it's pure cookie
+ * logic with no dependency on posthog-node, and keeping it separate means
+ * testing it doesn't drag the whole SDK into the test run.
+ *
+ * Fails closed — no cookie means no consent.
+ */
+export function hasServerAnalyticsConsent(request: CookieReader): boolean {
+  return request.cookies.get(ANALYTICS_CONSENT_COOKIE)?.value === '1';
+}
+
 /** localStorage key: timestamp (ms) of this browser's first successful
  *  analysis — the anchor for the day-7+ NPS prompt. */
 export const FIRST_ANALYSIS_KEY = 'picky-first-analysis-at';

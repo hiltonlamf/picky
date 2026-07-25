@@ -1,5 +1,5 @@
 import posthog from 'posthog-js';
-import { anonIdFromDocument } from './telemetry';
+import { anonIdFromDocument, ANALYTICS_CONSENT_COOKIE } from './telemetry';
 
 // Same key CookieConsent.tsx writes: '1' = accepted, '0' = declined,
 // absent = not asked yet. The old code only ever wrote '1', so a dismissal
@@ -51,6 +51,21 @@ let initialized = false;
 let consentGranted = false;
 
 export type ConsentState = 'granted' | 'denied' | 'unasked';
+
+/**
+ * Mirror the decision into a cookie so API routes can see it.
+ *
+ * Server events are sent by posthog-node inside the route handler, which can't
+ * read localStorage — so without this, `analysis_completed` and `dish_reported`
+ * reach PostHog for people who accepted nothing.
+ */
+function writeConsentCookie(accepted: boolean): void {
+  if (typeof document === 'undefined') return;
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie =
+    `${ANALYTICS_CONSENT_COOKIE}=${accepted ? '1' : '0'}` +
+    `; Max-Age=${60 * 60 * 24 * 365}; Path=/; SameSite=Lax${secure}`;
+}
 
 export function consentState(): ConsentState {
   if (typeof window === 'undefined') return 'unasked';
@@ -158,6 +173,7 @@ export const initPostHogIfConsented = initPostHog;
 export function grantConsent(): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(CONSENT_KEY, '1');
+  writeConsentCookie(true);
   initPostHog();
   if (!initialized) return;
 
@@ -181,6 +197,7 @@ export function grantConsent(): void {
 export function denyConsent(): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(CONSENT_KEY, '0');
+  writeConsentCookie(false);
   consentGranted = false;
   initPostHog();
   // Bypasses capture()'s allowlist on purpose: a refusal is a single

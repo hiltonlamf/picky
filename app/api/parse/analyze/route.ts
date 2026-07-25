@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
       const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(distinctId, 'analysis_completed', {
+        captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,

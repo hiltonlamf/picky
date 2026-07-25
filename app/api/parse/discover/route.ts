@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
       const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(distinctId, 'analysis_completed', {
+        captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
         // consume another, so the whole flow costs the user a single slot.
         const { allowed } = await checkRateLimit(ip);
         if (!allowed) {
-          await captureServer(distinctId, 'rate_limit_hit', { stage: 'discover' });
+          await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'discover' });
           send({ type: 'error', error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} new-restaurant searches per hour. Please try again later.` });
           return close();
         }
