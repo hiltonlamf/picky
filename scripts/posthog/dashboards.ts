@@ -94,6 +94,12 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
       ], {
         breakdownFilter: { breakdown: 'accepted', breakdown_type: 'event' },
       }),
+      trend(
+        'TOP SEARCHED RESTAURANTS',
+        'What people actually come here to look up, by domain. Read this next to "Searched restaurants — did they work?" on dashboard ③: a domain high in both lists is a popular restaurant we are failing, which is the most valuable thing to fix. NOTE: PostHog only sees consenting visitors and only the domain — /admin/searches has every search and the full URL.',
+        [ev('search_submitted')],
+        { breakdownFilter: { breakdown: 'domain', breakdown_type: 'event' } }
+      ),
     ],
   },
   {
@@ -215,6 +221,22 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
       trend('No-menu reasons', 'Separates "site is down" from "site has no menu online" — different fixes.', [
         ev('no_menu_result'),
       ]),
+      trend(
+        'Searched restaurants — did they work?',
+        'Every searched domain split by success, so a popular restaurant that quietly fails is visible rather than hidden inside an overall rate. Pair with "TOP SEARCHED RESTAURANTS" on dashboard ①.',
+        [ev('analysis_completed')],
+        { breakdownFilter: { breakdown: 'domain', breakdown_type: 'event' } }
+      ),
+      trend(
+        'Successful searches by domain',
+        'The same list filtered to successes — subtract it from the one above to see which restaurants people look up but never get a menu for.',
+        [
+          ev('analysis_completed', {
+            properties: [{ key: 'success', value: ['true'], operator: 'exact', type: 'event' }],
+          }),
+        ],
+        { breakdownFilter: { breakdown: 'domain', breakdown_type: 'event' } }
+      ),
       trend('Worst domains', 'Where to point the next pipeline fix. Cross-reference parse_attempts for full URLs.', [
         ev('analysis_completed', {
           properties: [{ key: 'success', value: ['false'], operator: 'exact', type: 'event' }],
