@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default function RestaurantCard({ restaurant }: Props) {
-  const { maxVegOptions, bestMenu, perMenu, highlights } = guideInsights(restaurant);
+  const { maxVegOptions, bestMenu, perMenu, highlights, highlightsAreThin } = guideInsights(restaurant);
 
   // Per-menu breakdown only matters when there's more than one source menu.
   const namedMenus = perMenu.filter((m) => m.label);
@@ -63,9 +63,22 @@ export default function RestaurantCard({ restaurant }: Props) {
       )}
 
       {highlights.length > 0 && (
-        <p className="relative text-[0.82rem] leading-relaxed text-forest/80">
-          <span className="font-semibold text-forest">Highlights:</span> {highlights.join(' · ')}
-        </p>
+        <div className="relative text-[0.82rem] leading-relaxed text-forest/80">
+          <p className="font-semibold text-forest">Highlights:</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {highlights.map((h, i) => (
+              <li key={i}>
+                {h.name}
+                {h.price && <span className="text-forest/60"> · {h.price}</span>}
+              </li>
+            ))}
+          </ul>
+          {highlightsAreThin && (
+            <p className="mt-1 text-forest/60 italic">
+              😢 That&rsquo;s everything veggie we found here.
+            </p>
+          )}
+        </div>
       )}
 
       <p className="relative font-display text-[0.85rem] text-azalea-700 mt-0.5">View full menu →</p>
