@@ -2,6 +2,8 @@
 
 import * as Sentry from '@sentry/nextjs';
 import { useEffect } from 'react';
+import { capture } from '@/lib/posthog-client';
+import { EVENTS } from '@/lib/analytics';
 
 /**
  * Root error boundary — catches React rendering crashes that would
@@ -17,6 +19,14 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     Sentry.captureException(error);
+    // Counted in PostHog too, so a crash appears in the drop-off funnel
+    // alongside every other reason someone leaves — not only in Sentry.
+    capture(EVENTS.APP_CRASHED, {
+      message: error.message,
+      digest: error.digest ?? null,
+      path: typeof window !== 'undefined' ? window.location.pathname : null,
+      fatal: true,
+    });
   }, [error]);
 
   return (

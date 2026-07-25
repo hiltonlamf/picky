@@ -51,5 +51,8 @@ export async function middleware(request: NextRequest) {
 export const config = {
   // Pages and API routes only — skip static assets and files. Already
   // covers /admin and /api/admin, so one matcher serves both jobs above.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)'],
+  // /ingest is excluded because it's the PostHog analytics proxy (see
+  // next.config.js): running the cookie/admin logic on every analytics
+  // beacon adds latency to it and would rewrite the proxied response.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|ingest|.*\\..*).*)'],
 };

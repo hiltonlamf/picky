@@ -1,21 +1,24 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { initPostHogIfConsented, capture } from '@/lib/posthog-client';
+import { consentState, grantConsent, denyConsent } from '@/lib/posthog-client';
 
 export default function CookieConsent() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const accepted = localStorage.getItem('picky-cookie-consent');
-    if (!accepted) setVisible(true);
+    // Only ask people we haven't asked. A previous "no" is remembered now,
+    // so declining actually sticks instead of re-prompting every visit.
+    if (consentState() === 'unasked') setVisible(true);
   }, []);
 
   function accept() {
-    localStorage.setItem('picky-cookie-consent', '1');
-    // Analytics only ever starts here (or on a later visit) — after consent.
-    initPostHogIfConsented();
-    capture('cookie_consent_given');
+    grantConsent();
+    setVisible(false);
+  }
+
+  function decline() {
+    denyConsent();
     setVisible(false);
   }
 
@@ -29,17 +32,18 @@ export default function CookieConsent() {
       aria-label="Cookie consent"
     >
       <p className="text-sm text-evergreen/80 mb-3">
-        Picky uses minimal cookies to remember your preferences and measure anonymous usage — a random ID that isn&apos;t linked to your identity. We don&apos;t track you for advertising.
+        Picky counts anonymous visits using a random ID set when you arrive — never linked to your
+        identity, never used for advertising. Say yes and we&apos;ll also remember your preferences
+        and measure which features actually get used, so we can make Picky better.
       </p>
+      {/* Equal-sized buttons on purpose: making "no" harder to click than
+          "yes" is a dark pattern, and a compliance risk under GDPR. */}
       <div className="flex gap-2">
         <button onClick={accept} className="btn-primary text-sm py-2 px-4">
-          Got it
+          Yes, that&apos;s fine
         </button>
-        <button
-          onClick={() => setVisible(false)}
-          className="btn-ghost text-sm py-2 px-4"
-        >
-          Dismiss
+        <button onClick={decline} className="btn-ghost text-sm py-2 px-4">
+          No thanks
         </button>
       </div>
     </div>
