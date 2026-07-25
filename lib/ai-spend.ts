@@ -40,6 +40,23 @@ export function withSpendContext<T>(ctx: SpendContext, fn: () => Promise<T>): Pr
 }
 
 /**
+ * Fill in attribution once it's known.
+ *
+ * An analysis starts before the restaurant row exists — discovery runs first,
+ * and the URL is only validated a few lines in — so the context has to be opened
+ * empty and completed later. Mutates the stored object in place, which works
+ * because AsyncLocalStorage holds the reference, not a copy.
+ *
+ * Without this, spend rows are written but land unattributed: verified on the
+ * preview, where a real analysis produced 11 correctly-costed rows that couldn't
+ * be tied to the restaurant that caused them.
+ */
+export function updateSpendContext(patch: SpendContext): void {
+  const ctx = store.getStore();
+  if (ctx) Object.assign(ctx, patch);
+}
+
+/**
  * Append one row to `ai_usage_log`.
  *
  * Awaited rather than fire-and-forget: on Vercel the function can freeze the

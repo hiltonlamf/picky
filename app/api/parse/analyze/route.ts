@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
+import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
@@ -35,6 +36,10 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Attribution is filled in once the request body is parsed — see
+      // lib/ai-spend.ts. Spend is recorded either way; this decides whether the
+      // rows name the restaurant that caused them.
+      await withSpendContext({}, async () => {
       const send = (event: ParseEvent) => {
         try {
           controller.enqueue(encode(event));
@@ -90,6 +95,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
         const { restaurantId, candidateIds } = parsed.data;
+        updateSpendContext({ restaurantId });
 
         const payload = await getMenuCandidates(restaurantId).catch(() => null);
         if (!payload || !payload.candidates?.length) {
@@ -124,6 +130,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
         attemptUrl = payload.finalUrl;
+        updateSpendContext({ url: payload.finalUrl });
         attemptCategory = state.category ?? menuCategory(payload.candidates);
 
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 1, totalSteps: 2 });
@@ -237,6 +244,7 @@ export async function POST(request: NextRequest) {
         send({ type: 'error', error: msg });
       }
       close();
+      });
     },
   });
 

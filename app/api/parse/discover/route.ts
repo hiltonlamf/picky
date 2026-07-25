@@ -15,6 +15,7 @@ import {
   logParseAttempt,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
+import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
@@ -51,6 +52,10 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Opened empty and filled in below: discovery runs before the restaurant
+      // row exists, so attribution can't be known here yet. Spend is recorded
+      // either way — this only decides whether the rows say which restaurant.
+      await withSpendContext({}, async () => {
       const send = (event: ParseEvent) => {
         try {
           controller.enqueue(encode(event));
@@ -111,6 +116,7 @@ export async function POST(request: NextRequest) {
         }
         const { url } = parsed.data;
         attemptUrl = url;
+        updateSpendContext({ url });
 
         // Cache check FIRST. A restaurant that's already in our database and
         // fresh is served with ZERO LLM calls, so it must NOT count against the
@@ -155,6 +161,7 @@ export async function POST(request: NextRequest) {
         let restaurantId = existing?.id ?? '';
         if (!restaurantId) {
           restaurantId = await createRestaurantRecord(url);
+          updateSpendContext({ restaurantId });
         } else {
           await resetRestaurantForReparse(restaurantId);
         }
@@ -304,6 +311,7 @@ export async function POST(request: NextRequest) {
         send({ type: 'error', error: msg });
       }
       close();
+      });
     },
   });
 
