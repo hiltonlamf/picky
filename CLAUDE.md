@@ -151,6 +151,14 @@ his **experienced technical co-founder**. That means:
    - Be conservative about anything that touches scraped restaurant data
      going live without a sanity check (e.g. auto-publishing new cities).
 
+5. **Instrumentation.** Every change must consider whether analytics
+   (PostHog) and error tracking (Sentry) need to change with it. A feature
+   that ships without its instrumentation is invisible: the dashboards keep
+   showing the old picture, and we draw confident conclusions from data that
+   no longer describes the product. **Breaking user tracking is worse than
+   having none**, because it misleads rather than merely omitting. See the
+   dedicated section below — it is a full checklist, not a reminder.
+
 ## Evaluation & the quality bar
 
 The founder's quality priorities, in **strict order of importance**. This
@@ -191,6 +199,154 @@ this same order:
 When evaluating or improving the pipeline, weight the work by this order,
 and use the exportable **AI error log** (`/admin/errors`) as the concrete
 list of what to fix at the prompt level.
+
+## Instrumentation & error tracking (PR #21, 2026-07-25)
+
+**Every PR must ask: does this change what we can see?** Analytics and error
+tracking are not a follow-up task. A new screen with no events is a hole in the
+funnel; a new `catch` with no report is a failure nobody hears about; a renamed
+field silently zeroes a chart that someone will still trust. We are our own first
+users of this data, and misleading data is worse than missing data.
+
+### The PR checklist
+
+- **New user-facing surface?** Does it need a funnel event, and does it need its
+  own feedback/survey capture point?
+- **New `catch`, new error screen, new failure path?** It must call
+  `captureError()`. A silent `catch` is a bug, not a style choice.
+- **New AI call?** It must go through `callClaude()` or its spend is invisible.
+- **Renamed or removed an event/property?** Check `scripts/posthog/` — dashboards
+  and surveys reference names, and a rename reads as zero, not as an error.
+- **Changed the pipeline?** Does the outcome taxonomy still describe reality?
+- **Touched consent, the banner, or `lib/posthog-client.ts`?** Re-verify against
+  real traffic (below). This is the one area where a subtle break is both a
+  privacy problem and invisible.
+
+### Architecture — three deliberate choke points
+
+Each exists because the alternative (reporting at each call site) had already
+failed in practice. Route new code through them rather than around them.
+
+| Choke point | Where | Guards against |
+|---|---|---|
+| `capture()` | `lib/posthog-client.ts` | Events escaping the consent gate |
+| `captureError()` | `lib/analytics.ts` | Silent `catch` blocks; ungrouped error strings |
+| `callClaude()` | `lib/ai.ts` | AI spend going unrecorded |
+
+`EVENTS` in `lib/analytics.ts` is the event-name schema — import from it so a
+rename is a compile error instead of a silently-zero chart.
+
+**`classifyError()` lives in `lib/telemetry.ts`, not `lib/analytics.ts`** — and
+must stay there. `lib/analytics.ts` imports `posthog-js` (browser-only), so an
+API route importing from it drags the browser SDK into the server bundle.
+`lib/telemetry.ts` is the server-safe home for anything both sides need.
+
+### The consent model, and its two non-obvious traps
+
+Founder's decision: count visits cookielessly, unlock behaviour on consent.
+Pre-consent PostHog runs with `persistence: 'memory'`, no person profile, and
+`capture()` allows only `$pageview`/`$pageleave`. Consent upgrades in place via
+`set_config` so the visitor keeps the same `distinct_id` and their earlier
+pageviews still belong to them.
+
+Two traps, both found only by looking at real traffic:
+
+1. **posthog-js has its own collectors that never pass through `capture()`.**
+   Autocapture, web vitals, heatmaps and dead clicks are internal, so gating our
+   wrapper is not enough — 45 autocapture events fired pre-consent before this
+   was caught, and autocapture records clicked element *text*. They are config
+   flags (`behaviouralCollectors()` in `lib/posthog-client.ts`), flipped together
+   on consent. Any new posthog-js feature must be added to that list.
+2. **Server-side events cannot see the consent gate.** `localStorage` is
+   invisible in an API route, so `captureServer()` takes the `request` and checks
+   the `picky_analytics_consent` cookie. Taking the request rather than a boolean
+   is deliberate: it makes the check impossible to forget at a call site.
+
+### Consent-gated vs operational — know which you are writing to
+
+This split is load-bearing, not incidental:
+
+- **PostHog** = consented users only. Behavioural. Domain-level, never full URLs.
+- **`parse_attempts`, `ai_usage_log`** = everyone, always. Operational: how the
+  service performed and what it cost. Different legal basis (running the product,
+  not third-party profiling), so it is not consent-gated.
+
+Consequence: `/admin/searches` sees **every** search while the PostHog dashboards
+see only the consenting subset. That gap is expected. Proven the day it shipped —
+a real analysis by a visitor who declined cookies produced zero PostHog events
+(correctly) while `parse_attempts` captured it, and that row is what diagnosed the
+failure. **Never compute a rate with a consented numerator and an unconsented
+denominator.**
+
+### Verification: green tests do not mean working instrumentation
+
+Three separate bugs shipped past a green build and full test suite in this work,
+and every one was found the same way — by querying what actually landed after a
+real run:
+
+1. `analysis_abandoned` fired on **success** (terminal branches navigate away
+   while state is still `'parsing'`). Would have read ~100% abandonment forever.
+2. `failure_reason` came back `'unknown'` because the live copy says "couldn't
+   read a **food** menu" and the pattern matched "read a menu". Would have made
+   the whole failure breakdown one useless bucket.
+3. `$autocapture` firing pre-consent (see above).
+
+So after any instrumentation change, **verify against the real systems**:
+
+```bash
+# What actually landed in PostHog (needs query:read on the personal key)
+curl -sS -X POST -H "Authorization: Bearer $POSTHOG_PERSONAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":{"kind":"HogQLQuery","query":"select timestamp, event, properties.$pathname from events where timestamp > now() - interval 30 minute order by timestamp"}}' \
+  "https://eu.posthog.com/api/projects/226285/query/"
+```
+
+Then check `ai_usage_log` (one row per API call — a successful restaurant is
+~11 calls, roughly $0.05) and `parse_attempts` (one row per stage).
+
+Two sandbox gotchas that cost real time here:
+- **`next dev` and sometimes `vitest`/`tsc` hang or return nothing.** An empty
+  output file is **not** a passing check — always capture the exit code, and let
+  CI be the verdict rather than waiting it out.
+- **Each Vercel preview deploy is a new origin**, so browser storage resets and
+  consent is asked again. Handy for testing the pre-consent path; it also means a
+  tester must accept cookies *again* on each new deploy before any behavioural
+  event will fire.
+
+### Where things live
+
+| What | Where |
+|---|---|
+| Client capture + consent state machine | `lib/posthog-client.ts` |
+| Server capture + consent cookie check | `lib/posthog-server.ts` |
+| Event-name schema, `captureError` | `lib/analytics.ts` |
+| `classifyError`, cookie names (server-safe) | `lib/telemetry.ts` |
+| AI spend recording | `lib/ai-spend.ts`, `callClaude()` in `lib/ai.ts` |
+| Dashboards + surveys as code | `scripts/posthog/` |
+| Searched restaurants (admin) | `/admin/searches`, 180-day retention |
+
+PostHog project is **226285** (EU). `POSTHOG_PERSONAL_API_KEY` in `.env.local` —
+never `NEXT_PUBLIC_*`, which would ship it to every visitor. Re-apply dashboards
+and surveys with `npx tsx scripts/posthog/dashboards.ts` and `apply-surveys.ts`
+(both idempotent, matched by name). Surveys are created as **drafts** on purpose;
+launching them is a human decision.
+
+### Fire-once discipline
+
+Two events must fire exactly once per visit, and both broke when they didn't:
+`results_viewed` (the results page re-polls every 4s while analysing) and
+`results_engaged`. Guard with a ref, not with state. Any new "did they reach X"
+event needs the same treatment — a step that fires twice corrupts every rate
+built on it.
+
+### Thin menus are their own outcome
+
+Not a success. `outcome` in `parse_attempts` is
+`menu | thin | no_menu | error`, and `results_viewed` carries `is_thin`
+(`dish_count < 7`). Three dishes and forty dishes are not the same result;
+averaging them hides the failure users notice most. Never fold thin menus into a
+composite health score. Note the threshold of 7 may be too low — a real Chinese
+restaurant returned 9 dishes and did not trip it.
 
 ## Design & UX guidelines
 
