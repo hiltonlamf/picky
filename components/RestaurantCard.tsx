@@ -1,6 +1,11 @@
+'use client';
+
+import { useState } from 'react';
 import Link from 'next/link';
 import type { Restaurant } from '@/types';
 import { guideInsights } from '@/lib/menu-insights';
+import FeedbackModal from './FeedbackModal';
+import { FlagIcon } from './icons';
 
 interface Props {
   restaurant: Restaurant;
@@ -8,17 +13,29 @@ interface Props {
 
 export default function RestaurantCard({ restaurant }: Props) {
   const { maxVegOptions, bestMenu, perMenu, highlights, highlightsAreThin } = guideInsights(restaurant);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // Per-menu breakdown only matters when there's more than one source menu.
   const namedMenus = perMenu.filter((m) => m.label);
   const showPerMenu = namedMenus.length > 1;
+  const menuLabels = namedMenus.map((m) => m.label as string);
 
   return (
-    <Link
-      href={`/restaurant/${restaurant.id}`}
+    <div
       className="group relative overflow-hidden bg-white border-2 border-forest rounded-[20px] p-5 flex flex-col gap-2.5
                  transition-all duration-200 hover:-translate-y-[3px] hover:border-azalea-500 hover:shadow-card-pop"
     >
+      {/* Covers the whole card so it stays clickable like before; the real
+          content below is `relative`, which paints it above this overlay
+          (same stacking trick already used for the mesh decoration) — that's
+          what lets the flag button below sit on top and take its own clicks
+          instead of navigating. */}
+      <Link
+        href={`/restaurant/${restaurant.id}`}
+        className="absolute inset-0"
+        aria-label={`View menu for ${restaurant.name ?? 'this restaurant'}`}
+      />
+
       {/* A breath of the mesh field, so the card belongs to the same world. */}
       <span
         aria-hidden="true"
@@ -30,11 +47,22 @@ export default function RestaurantCard({ restaurant }: Props) {
         <h3 className="font-display text-lg leading-tight tracking-[-0.02em] text-forest">
           {restaurant.name ?? 'Restaurant'}
         </h3>
-        {restaurant.cuisine && (
-          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.06em] text-forest border-[1.5px] border-forest rounded-full px-2.5 py-1">
-            {restaurant.cuisine}
-          </span>
-        )}
+        <div className="shrink-0 flex items-center gap-1.5">
+          {restaurant.cuisine && (
+            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-forest border-[1.5px] border-forest rounded-full px-2.5 py-1">
+              {restaurant.cuisine}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setFeedbackOpen(true)}
+            className="p-1.5 rounded-full text-forest/50 hover:text-forest hover:bg-mint-100 transition-colors"
+            aria-label={`Report an issue with ${restaurant.name ?? 'this restaurant'}`}
+            title="Report an issue"
+          >
+            <FlagIcon className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Dietary counts stay green with their emoji — pink never carries
@@ -82,6 +110,15 @@ export default function RestaurantCard({ restaurant }: Props) {
       )}
 
       <p className="relative font-display text-[0.85rem] text-azalea-700 mt-0.5">View full menu →</p>
-    </Link>
+
+      {feedbackOpen && (
+        <FeedbackModal
+          restaurantId={restaurant.id}
+          restaurantName={restaurant.name ?? null}
+          menuLabels={menuLabels}
+          onClose={() => setFeedbackOpen(false)}
+        />
+      )}
+    </div>
   );
 }
