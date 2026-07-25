@@ -383,6 +383,29 @@ averaging them hides the failure users notice most. Never fold thin menus into a
 composite health score. Note the threshold of 7 may be too low — a real Chinese
 restaurant returned 9 dishes and did not trip it.
 
+## Keep the PR description current — every commit, not just the first
+
+**A PR description written at the first commit is stale by the third.** Update it
+as the work grows, so it always describes what will actually merge. This matters
+here specifically because these PRs get long: PR #21 opened as "fix SPA
+pageviews" and merged as eighteen commits spanning consent, the funnel, error
+tracking, cost accounting, surveys and dashboards. A description frozen at commit
+one would have hidden most of it, and the description is what the founder reads
+to decide whether to merge — a stale one either wastes his time or gets a bigger
+change waved through than he realised.
+
+Practically, on every push to an open PR:
+
+- Add the new work to the description; don't leave it implied by the commit list.
+- Keep the **verification status** honest and current — what is proven, what is
+  only typechecked, what is still unverified.
+- Keep the **"what's yours"** section current: decisions still needed, things
+  only he can do (launch a survey, open a page in a browser, raise a cap).
+- If the scope grew beyond the original title, change the title too.
+
+`gh pr edit <num> --body-file <file>` is the least error-prone way — a long body
+passed inline gets mangled by the shell (backticks become command substitution).
+
 ## Design & UX guidelines
 
 The app was fully redesigned in July 2026 ("Solar" direction, PR #8) after
