@@ -1,4 +1,5 @@
 import type { Restaurant, MenuSection, Dish } from '@/types';
+import { formatPrice } from '@/lib/format-price';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -44,6 +45,12 @@ export interface PerMenuVeg {
   vegOptions: number;
 }
 
+export interface HighlightDish {
+  name: string;
+  /** Display-formatted price ("€24"), or null if the menu doesn't state one. */
+  price: string | null;
+}
+
 export interface GuideInsights {
   /** Best single menu's veg count — the guide headline + ranking key. */
   maxVegOptions: number;
@@ -55,10 +62,33 @@ export interface GuideInsights {
   totalDishes: number;
   /** Up to 3 example veg dishes — priciest first (≈ the mains); falls back to
    *  veg dishes in menu order for tasting/prix-fixe menus with no prices. */
-  highlights: string[];
+  highlights: HighlightDish[];
+  /** True when the highlight list isn't a real showcase: fewer than 3 veg
+   *  dishes were found at all, or every highlighted dish comes from a
+   *  side/dessert/nibble/bread section rather than a main. The card should
+   *  show an honest, lighter caption instead of implying these are picks. */
+  highlightsAreThin: boolean;
 }
 
 const MAX_HIGHLIGHTS = 3;
+
+// Best-effort text match on section names (same pattern as isDrinkSectionName
+// in lib/ai.ts) to tell "no real mains here" restaurants apart from a
+// legitimate short menu. Substring match, not an exact set, since section
+// names vary more here ("Side Dishes", "Sweet Treats", "Bar Snacks").
+// Deliberately narrow — English-only, a display nicety not a data check.
+// Starters excluded on purpose: they can be substantial.
+const NON_MAIN_SECTION_KEYWORDS = [
+  'dessert', 'sweet', 'pudding',
+  'side',
+  'nibble', 'snack', 'bar bites',
+  'bread', 'bakery',
+];
+
+function isNonMainSectionName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return NON_MAIN_SECTION_KEYWORDS.some((kw) => lower.includes(kw));
+}
 
 /** Compute the guide card's numbers from a restaurant's sections. Groups by
  *  menuLabel so multi-menu restaurants (Lunch/Dinner) report per menu and are
@@ -105,8 +135,9 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   // have no per-dish price, so we fall back to veg dishes in menu order rather
   // than showing nothing.
   const seen = new Set<string>();
-  const pricedVeg: Array<{ name: string; price: number }> = [];
-  const unpricedVeg: string[] = [];
+  type Candidate = { name: string; price: number; displayPrice: string | null; sectionName: string };
+  const pricedVeg: Candidate[] = [];
+  const unpricedVeg: Candidate[] = [];
   for (const section of restaurant.sections) {
     for (const dish of liveDishes(section)) {
       if (!isVeg(dish)) continue;
@@ -114,14 +145,23 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const price = parsePrice(dish.price);
-      if (price === null) unpricedVeg.push(dish.name.trim());
-      else pricedVeg.push({ name: dish.name.trim(), price });
+      const candidate = {
+        name: dish.name.trim(),
+        price: price ?? 0,
+        displayPrice: formatPrice(dish.price),
+        sectionName: section.name,
+      };
+      if (price === null) unpricedVeg.push(candidate);
+      else pricedVeg.push(candidate);
     }
   }
-  const highlights = [
-    ...pricedVeg.sort((a, b) => b.price - a.price).map((d) => d.name),
-    ...unpricedVeg,
-  ].slice(0, MAX_HIGHLIGHTS);
+  const topHighlights = [...pricedVeg.sort((a, b) => b.price - a.price), ...unpricedVeg].slice(
+    0,
+    MAX_HIGHLIGHTS
+  );
+  const highlights: HighlightDish[] = topHighlights.map((h) => ({ name: h.name, price: h.displayPrice }));
+  const highlightsAreThin =
+    highlights.length < MAX_HIGHLIGHTS || topHighlights.every((h) => isNonMainSectionName(h.sectionName));
 
-  return { maxVegOptions, bestMenu, perMenu, totalDishes, highlights };
+  return { maxVegOptions, bestMenu, perMenu, totalDishes, highlights, highlightsAreThin };
 }

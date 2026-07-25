@@ -60,7 +60,7 @@ describe('guideInsights', () => {
     expect(ins.totalDishes).toBe(5);
   });
 
-  it('highlights up to 3 priciest veg dishes, de-duped across menus', () => {
+  it('highlights up to 3 priciest veg dishes, de-duped across menus, with prices', () => {
     const r = restaurant([
       section('Starters', [dish('Soup', 'vegan', '€6')]),
       section('Mains', [
@@ -69,10 +69,21 @@ describe('guideInsights', () => {
         dish('Aubergine V', 'vegan', '€19'), // same dish, different spelling → deduped
         dish('Wellington', 'vegan', '€22'),
         dish('Steak', 'neither', '€30'), // not veg → excluded
-        dish('No Price Special', 'vegan', null), // unpriced → excluded
+        dish('No Price Special', 'vegan', null), // unpriced → excluded from this list (still counts elsewhere)
       ]),
     ]);
-    expect(guideInsights(r).highlights).toEqual(['Truffle Risotto', 'Wellington', 'Aubergine (V)']);
+    const ins = guideInsights(r);
+    expect(ins.highlights).toEqual([
+      { name: 'Truffle Risotto', price: '€24' },
+      { name: 'Wellington', price: '€22' },
+      { name: 'Aubergine (V)', price: '€19' },
+    ]);
+    expect(ins.highlightsAreThin).toBe(false);
+  });
+
+  it('formats a bare numeric price with a currency symbol in highlights', () => {
+    const r = restaurant([section('Mains', [dish('Bare price main', 'vegan', '18')])]);
+    expect(guideInsights(r).highlights).toEqual([{ name: 'Bare price main', price: '€18' }]);
   });
 
   it('falls back to veg dishes in menu order when none are priced (tasting menus)', () => {
@@ -86,7 +97,11 @@ describe('guideInsights', () => {
       ]),
     ]);
     // No prices to rank by, so show the first 3 veg dishes as they appear.
-    expect(guideInsights(r).highlights).toEqual(['Heritage tomatoes', 'Wild mushroom', 'Rhubarb & custard']);
+    expect(guideInsights(r).highlights).toEqual([
+      { name: 'Heritage tomatoes', price: null },
+      { name: 'Wild mushroom', price: null },
+      { name: 'Rhubarb & custard', price: null },
+    ]);
   });
 
   it('tops up priced highlights with unpriced veg dishes when fewer than 3 are priced', () => {
@@ -98,7 +113,11 @@ describe('guideInsights', () => {
       ]),
     ]);
     // One priced dish leads; unpriced veg fills the remaining slots in order.
-    expect(guideInsights(r).highlights).toEqual(['Priced main', 'Side salad', 'Bread']);
+    expect(guideInsights(r).highlights).toEqual([
+      { name: 'Priced main', price: '€18' },
+      { name: 'Side salad', price: null },
+      { name: 'Bread', price: null },
+    ]);
   });
 
   it('excludes soft-deleted dishes', () => {
@@ -107,6 +126,38 @@ describe('guideInsights', () => {
     const r = restaurant([section('Menu', [d, dish('Live', 'vegetarian', '€10')])]);
     const ins = guideInsights(r);
     expect(ins.totalDishes).toBe(1);
-    expect(ins.highlights).toEqual(['Live']);
+    expect(ins.highlights).toEqual([{ name: 'Live', price: '€10' }]);
+  });
+
+  describe('highlightsAreThin', () => {
+    it('is true when fewer than 3 veg dishes exist at all', () => {
+      const r = restaurant([
+        section('Menu', [dish('Seeded sourdough, cultured butter', 'vegetarian', '€6')], null),
+        section('Saturday Lunch', [dish('Seeded sourdough', 'vegetarian', '€5')], 'Saturday Lunch'),
+      ]);
+      expect(guideInsights(r).highlightsAreThin).toBe(true);
+    });
+
+    it('is true when 3 veg dishes exist but all come from side/dessert/bread sections', () => {
+      const r = restaurant([
+        section('Desserts', [
+          dish('Sticky toffee pudding', 'vegetarian', '€9'),
+          dish('Sorbet', 'vegan', '€7'),
+        ]),
+        section('Bread', [dish('Sourdough & butter', 'vegetarian', '€5')]),
+      ]);
+      expect(guideInsights(r).highlightsAreThin).toBe(true);
+    });
+
+    it('is false when at least one of the top 3 highlights is a main', () => {
+      const r = restaurant([
+        section('Mains', [dish('Truffle Risotto', 'vegetarian', '€24')]),
+        section('Desserts', [
+          dish('Sticky toffee pudding', 'vegetarian', '€9'),
+          dish('Sorbet', 'vegan', '€7'),
+        ]),
+      ]);
+      expect(guideInsights(r).highlightsAreThin).toBe(false);
+    });
   });
 });
