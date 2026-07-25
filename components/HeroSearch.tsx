@@ -30,6 +30,13 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Set the moment the stream reaches ANY terminal outcome. The terminal
+  // branches navigate away with router.push while `state` is still 'parsing',
+  // so without this the unmount cleanup reports a completed analysis as
+  // abandoned — which is what happened on the first real run and would have
+  // made the metric read ~100% abandonment.
+  const reachedTerminalRef = useRef(false);
+
   // Consume an SSE stream from a fetch Response. Resolves 'done' on a terminal
   // outcome (redirect / candidates / error), or the restaurantId to continue
   // with when the server ran out of serverless time budget mid-analysis.
@@ -83,6 +90,7 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             if (!localStorage.getItem(FIRST_ANALYSIS_KEY)) {
               localStorage.setItem(FIRST_ANALYSIS_KEY, String(Date.now()));
             }
+            reachedTerminalRef.current = true;
             router.push(`/restaurant/${event.restaurantId}`);
             return 'done';
           } else if (event.type === 'no_menu') {
@@ -91,10 +99,12 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             // a photo) keyed off the restaurant's no_menu_reason.
             // The reason lives on the restaurant row, not the SSE event, so
             // it's attached to results_viewed on the results page instead.
+            reachedTerminalRef.current = true;
             capture(EVENTS.NO_MENU_RESULT, { restaurant_id: event.restaurantId });
             router.push(`/restaurant/${event.restaurantId}`);
             return 'done';
           } else if (event.type === 'error') {
+            reachedTerminalRef.current = true;
             setError(event.error ?? 'An error occurred');
             setState('error');
             captureError({ surface: 'search', message: event.error ?? 'An error occurred' });
@@ -145,7 +155,7 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
    */
   const parsingRef = useRef<{ startedAt: number; step: string; domain: string | null } | null>(null);
   parsingRef.current =
-    state === 'parsing' && startedAt
+    state === 'parsing' && startedAt && !reachedTerminalRef.current
       ? { startedAt, step: log[log.length - 1] ?? 'starting', domain: domainOf(url.trim()) }
       : null;
 
@@ -191,6 +201,7 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
         })(),
       });
 
+      reachedTerminalRef.current = false;
       setState('parsing');
       setError(null);
       setLog([]);

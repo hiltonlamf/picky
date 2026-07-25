@@ -301,6 +301,13 @@ describe('classifyError', () => {
     ['Rate limit exceeded', 'rate_limited'],
     ['Failed to fetch', 'network'],
     ['Something went wrong. Please try again.', 'unknown'],
+    // These three came back 'unknown' on the first real production run, which
+    // would have made the health dashboard's failure breakdown useless. Taken
+    // verbatim from what the pipeline actually emitted, not retyped.
+    ['We couldn’t read a food menu on this website — it may not publish one', 'no_menu_readable'],
+    ["We couldn't find a food menu on this website — some restaurants don't publish one online.", 'no_menu_readable'],
+    ["We opened the website but couldn't find a menu on it", 'no_menu_readable'],
+    ["This website looks like it's down or not live yet.", 'site_unreachable'],
   ];
 
   it.each(cases)('maps %j to %s', async (message, expected) => {

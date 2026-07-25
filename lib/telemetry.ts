@@ -116,7 +116,13 @@ const PATTERNS: Array<[RegExp, ErrorCode]> = [
   // and the error lands in 'unknown'. Caught by tests/analytics.test.ts, which
   // asserts against the real strings rather than retyped approximations.
   [/not found|does ?n['’]?o?t exist|was removed/i, 'not_found'],
-  [/could ?n['’]?o?t read a menu|no menu|unreadable/i, 'no_menu_readable'],
+  // Widened after a real run classified as 'unknown': the live copy says
+  // "couldn't READ A FOOD menu" and "couldn't FIND A food menu", neither of
+  // which matched "read a menu". A failure_reason of 'unknown' makes the whole
+  // health dashboard breakdown useless, so these patterns are asserted against
+  // the actual strings in tests/analytics.test.ts.
+  [/could ?n['’]?o?t (read|find) a [\w ]*menu|no menu|unreadable|not publish one/i, 'no_menu_readable'],
+  [/down or not live|looks like it'?s down/i, 'site_unreachable'],
   [/failed to fetch|network ?error|load failed|econnrefused|enotfound/i, 'network'],
   [/unreachable|refused|dns|certificate|ssl|tls/i, 'site_unreachable'],
   [/^(internal )?server error|^5\d\d\b/i, 'server_error'],
