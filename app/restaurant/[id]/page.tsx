@@ -13,6 +13,7 @@ import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import SubmitMenuForm from '@/components/SubmitMenuForm';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
+import { captureError } from '@/lib/analytics';
 import { SITE_TITLE } from '@/lib/site-copy';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
@@ -79,6 +80,13 @@ export default function RestaurantPage() {
       .catch((err) => {
         setError(err.message);
         setLoading(false);
+        // Was silent before: the visitor got a "Restaurant not found" screen
+        // and we had no record it ever happened.
+        captureError({
+          surface: 'results',
+          message: err instanceof Error ? err.message : String(err),
+          restaurantId: params.id,
+        });
       });
   }, [params.id, setRestaurantName]);
 
