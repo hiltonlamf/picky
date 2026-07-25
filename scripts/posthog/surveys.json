@@ -1,0 +1,99 @@
+[
+  {
+    "name": "Results — did you find what you needed?",
+    "description": "Asks at the moment of truth, right after a menu loads. The feedback button and the day-7 NPS both miss this moment, and passive feedback buttons get responses from well under 1% of users.",
+    "type": "popover",
+    "questions": [
+      {
+        "type": "rating",
+        "question": "Did you find what you needed?",
+        "display": "emoji",
+        "scale": 3,
+        "lowerBoundLabel": "No",
+        "upperBoundLabel": "Yes",
+        "optional": false
+      },
+      {
+        "type": "open",
+        "question": "What was missing?",
+        "description": "Optional — a dish, a whole menu, or something else.",
+        "optional": true
+      }
+    ],
+    "conditions": {
+      "url": "/restaurant/",
+      "urlMatchType": "icontains",
+      "seenSurveyWaitPeriodInDays": 30
+    },
+    "appearance": {
+      "surveyPopupDelaySeconds": 15,
+      "displayThankYouMessage": true,
+      "thankYouMessageHeader": "Thanks — that helps.",
+      "position": "right"
+    },
+    "_notes": "15s delay so it lands after they have actually read some dishes, not while the page is still settling."
+  },
+  {
+    "name": "City guide — was this useful?",
+    "description": "The guides are a separate job from the search box (browse vs. look up a specific place) and deserve their own signal.",
+    "type": "popover",
+    "questions": [
+      {
+        "type": "rating",
+        "question": "Was this guide useful?",
+        "display": "emoji",
+        "scale": 3,
+        "lowerBoundLabel": "No",
+        "upperBoundLabel": "Yes",
+        "optional": false
+      },
+      {
+        "type": "open",
+        "question": "What would make it more useful?",
+        "optional": true
+      }
+    ],
+    "conditions": {
+      "url": "/dublin",
+      "urlMatchType": "icontains",
+      "seenSurveyWaitPeriodInDays": 30
+    },
+    "appearance": {
+      "surveyPopupDelaySeconds": 20,
+      "displayThankYouMessage": true,
+      "thankYouMessageHeader": "Thanks — noted.",
+      "position": "right"
+    },
+    "_notes": "URL-targeted rather than event-targeted: guide pages have a stable, identifiable path."
+  },
+  {
+    "name": "Failure — what were you looking for?",
+    "description": "The highest-value survey of the three: it catches people at the exact moment the product let them down, and tells us what they wanted in their own words. Answers what no funnel chart can.",
+    "type": "popover",
+    "questions": [
+      {
+        "type": "open",
+        "question": "Sorry — what were you hoping to find?",
+        "description": "Tell us the restaurant or dish you were after and we will take a look by hand.",
+        "optional": false
+      }
+    ],
+    "conditions": {
+      "events": {
+        "values": [
+          { "name": "search_error_occurred" },
+          { "name": "no_menu_result" },
+          { "name": "error_shown" }
+        ]
+      },
+      "seenSurveyWaitPeriodInDays": 30
+    },
+    "appearance": {
+      "surveyPopupDelaySeconds": 3,
+      "displayThankYouMessage": true,
+      "thankYouMessageHeader": "Thanks — we will look into it.",
+      "position": "right"
+    },
+    "_notes": "Event-triggered, NOT URL-targeted, and that is deliberate: the search error state lives inside HeroSearch on '/', while a no-menu result renders at /restaurant/[id]. There is no URL that means 'something went wrong', so targeting by URL would either miss the error case or fire on healthy pages."
+  }
+]

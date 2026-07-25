@@ -358,7 +358,11 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
               if (error) setError(null);
             }}
             placeholder="Paste a restaurant website link"
-            className="paste-field pl-[46px] pr-11 text-base"
+            // ph-no-mask: replay masks all inputs by default, which is right —
+            // but this field is the whole point of watching a replay, since
+            // without it a failed search is an invisible cursor in an empty box.
+            // A public restaurant URL is not personal data.
+            className="paste-field pl-[46px] pr-11 text-base ph-no-mask"
             autoComplete="url"
             autoFocus
             aria-label="Restaurant website link"
