@@ -414,6 +414,14 @@ export async function logParseAttempt(attempt: {
   success: boolean;
   errorMessage?: string | null;
   durationMs?: number;
+  /** Ties both stage rows into one person's search, and joins to PostHog. */
+  anonId?: string | null;
+  /** The response they got — "worked" vs "worked but returned 3 dishes". */
+  dishCount?: number | null;
+  /** Stable outcome so this is countable: menu | no_menu | error | thin. */
+  outcome?: 'menu' | 'no_menu' | 'error' | 'thin' | null;
+  /** From classifyError() — grouping by raw message gives fifty one-offs. */
+  errorCode?: string | null;
 }): Promise<void> {
   try {
     let domain: string | null = null;
@@ -428,6 +436,10 @@ export async function logParseAttempt(attempt: {
       success: attempt.success,
       error_message: attempt.errorMessage ?? null,
       duration_ms: attempt.durationMs ?? null,
+      anon_id: attempt.anonId ?? null,
+      dish_count: attempt.dishCount ?? null,
+      outcome: attempt.outcome ?? null,
+      error_code: attempt.errorCode ?? null,
     });
   } catch (err) {
     console.error('[db] parse_attempts insert failed (non-fatal):', err instanceof Error ? err.message : err);
@@ -2704,4 +2716,51 @@ export async function addMenuFromUpload(input: {
   });
 
   return { addedDishCount, usage: usage ?? { model: '', tokensIn: 0, tokensOut: 0, costUsd: 0 } };
+}
+
+/** One searched URL and what the visitor got back. */
+export type SearchAttempt = {
+  createdAt: string;
+  url: string | null;
+  domain: string | null;
+  stage: string;
+  category: string | null;
+  success: boolean;
+  outcome: string | null;
+  dishCount: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  durationMs: number | null;
+  anonId: string | null;
+};
+
+/**
+ * Recent searches, newest first — the answer to "which restaurants are people
+ * looking up, and what did they get?"
+ *
+ * Read from parse_attempts rather than PostHog on purpose: this table is not
+ * consent-gated, so it covers 100% of searches instead of only the consenting
+ * 40–70%. A list of what people search for that silently omits half of them
+ * would mislead every product decision it touched.
+ */
+export async function getRecentSearches(limit = 200): Promise<SearchAttempt[]> {
+  const { data } = await db()
+    .from('parse_attempts')
+    .select('created_at, url, domain, stage, category, success, outcome, dish_count, error_code, error_message, duration_ms, anon_id')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  return ((data ?? []) as DbRow[]).map((r) => ({
+    createdAt: String(r.created_at),
+    url: (r.url as string | null) ?? null,
+    domain: (r.domain as string | null) ?? null,
+    stage: String(r.stage),
+    category: (r.category as string | null) ?? null,
+    success: Boolean(r.success),
+    outcome: (r.outcome as string | null) ?? null,
+    dishCount: (r.dish_count as number | null) ?? null,
+    errorCode: (r.error_code as string | null) ?? null,
+    errorMessage: (r.error_message as string | null) ?? null,
+    durationMs: (r.duration_ms as number | null) ?? null,
+    anonId: (r.anon_id as string | null) ?? null,
+  }));
 }

@@ -56,7 +56,14 @@ export async function POST(request: NextRequest) {
       const startedAt = Date.now();
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
-      const logAttempt = (success: boolean, errorMessage?: string) => {
+      // outcome/dishCount default from `success`, so existing two-argument
+      // callers keep working; the analyse-success path passes them explicitly.
+      const logAttempt = (
+        success: boolean,
+        errorMessage?: string,
+        dishCount?: number,
+        outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
+      ) => {
         if (!attemptUrl) return Promise.resolve();
         return logParseAttempt({
           url: attemptUrl,
@@ -65,6 +72,19 @@ export async function POST(request: NextRequest) {
           success,
           errorMessage: errorMessage ?? null,
           durationMs: Date.now() - startedAt,
+          anonId: request.cookies.get(ANON_ID_COOKIE)?.value ?? null,
+          dishCount: dishCount ?? null,
+          errorCode: success ? null : classifyError(errorMessage),
+          // A thin menu is its own outcome, not a success: 7+ dishes is the
+          // bar a real menu clears, and lumping 3 dishes in with 40 hides the
+          // failure users actually notice.
+          outcome:
+            outcome ??
+            (success
+              ? dishCount !== undefined && dishCount < 7
+                ? 'thin'
+                : 'menu'
+              : 'error'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
@@ -214,7 +234,7 @@ export async function POST(request: NextRequest) {
           // and future searches don't re-pay to re-read a menu-less site.
           // (spend already recorded by callClaude when the API call returned)
           await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
-          await logAttempt(false, NO_MENU_MSG);
+          await logAttempt(false, NO_MENU_MSG), undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -233,7 +253,7 @@ export async function POST(request: NextRequest) {
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
         const usage: AIUsage = state.usage ?? { model: 'unknown', tokensIn: 0, tokensOut: 0, costUsd: 0 };
         await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
-        await logAttempt(true);
+        await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {

@@ -74,7 +74,14 @@ export async function POST(request: NextRequest) {
       const startedAt = Date.now();
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
-      const logAttempt = (success: boolean, errorMessage?: string) => {
+      // outcome/dishCount default from `success`, so existing two-argument
+      // callers keep working; the analyse-success path passes them explicitly.
+      const logAttempt = (
+        success: boolean,
+        errorMessage?: string,
+        dishCount?: number,
+        outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
+      ) => {
         if (!attemptUrl) return Promise.resolve();
         return logParseAttempt({
           url: attemptUrl,
@@ -83,6 +90,19 @@ export async function POST(request: NextRequest) {
           success,
           errorMessage: errorMessage ?? null,
           durationMs: Date.now() - startedAt,
+          anonId: request.cookies.get(ANON_ID_COOKIE)?.value ?? null,
+          dishCount: dishCount ?? null,
+          errorCode: success ? null : classifyError(errorMessage),
+          // A thin menu is its own outcome, not a success: 7+ dishes is the
+          // bar a real menu clears, and lumping 3 dishes in with 40 hides the
+          // failure users actually notice.
+          outcome:
+            outcome ??
+            (success
+              ? dishCount !== undefined && dishCount < 7
+                ? 'thin'
+                : 'menu'
+              : 'error'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
@@ -181,7 +201,7 @@ export async function POST(request: NextRequest) {
           const msg =
             "This website looks like it's down or not live yet. If that's not right, share a direct link to the menu and we'll read it.";
           await markRestaurantNoMenu(restaurantId, 'unavailable', rawMsg);
-          await logAttempt(false, rawMsg);
+          await logAttempt(false, rawMsg), undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, rawMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -198,7 +218,7 @@ export async function POST(request: NextRequest) {
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg);
+          await logAttempt(false, msg), undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -215,7 +235,7 @@ export async function POST(request: NextRequest) {
           const msg =
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg);
+          await logAttempt(false, msg), undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -252,7 +272,7 @@ export async function POST(request: NextRequest) {
           });
           // Discovery succeeded — analysis continues in /analyze, which logs
           // its own terminal outcome (hence no analysis_completed here).
-          await logAttempt(true);
+          await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
           if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
           } else {
@@ -285,7 +305,7 @@ export async function POST(request: NextRequest) {
           // any dishes from them — that's "no readable menu", not a system error.
           if (err instanceof ExtractionError) {
             await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-            await logAttempt(false, msg);
+            await logAttempt(false, msg), undefined, 'no_menu');
             await emitAnalysisCompleted(false, 0, msg);
             send({ type: 'no_menu', restaurantId });
             return close();
@@ -300,7 +320,7 @@ export async function POST(request: NextRequest) {
         if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
 
         await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
-        await logAttempt(true);
+        await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {
