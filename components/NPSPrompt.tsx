@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { FIRST_ANALYSIS_KEY, NPS_DONE_KEY } from '@/lib/telemetry';
 import { capture } from '@/lib/posthog-client';
+import { captureError } from '@/lib/analytics';
 import { CloseIcon } from './icons';
 
 // Day 7+, not day 1: the score only means something once someone has had
@@ -45,8 +46,14 @@ export default function NPSPrompt() {
       localStorage.setItem(NPS_DONE_KEY, '1');
       setThanks(true);
       setTimeout(() => setVisible(false), 2000);
-    } catch {
-      // Losing one NPS answer beats showing the user an error for it.
+    } catch (err) {
+      // Still better to swallow this for the user than show them an error over a
+      // survey — but it's recorded now, so a systematically broken NPS endpoint
+      // shows up instead of looking like nobody ever responds.
+      captureError({
+        surface: 'nps',
+        message: err instanceof Error ? err.message : 'NPS submission failed',
+      });
       dismiss();
     }
   }

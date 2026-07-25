@@ -20,6 +20,13 @@ import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/
 type Filter = 'all' | 'vegan' | 'vegetarian';
 
 const PENDING_POLL_MS = 4000;
+// Cap the pending poll. Two problems with the previous unbounded loop: a tab
+// left open re-hit the API every 4s indefinitely (small per call, unbounded in
+// aggregate — the runaway-loop shape CLAUDE.md warns about), and a restaurant
+// genuinely stuck in `processing` left the visitor on a spinner forever with no
+// record that it had happened. 75 polls ~= 5 minutes, well past a normal
+// analysis.
+const MAX_PENDING_POLLS = 75;
 
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
   const dishes = sections.flatMap((s) => s.dishes);
@@ -77,6 +84,7 @@ export default function RestaurantPage() {
   // results_viewed must fire once per visit, not once per poll tick — the page
   // re-fetches every few seconds while the AI is still working.
   const reportedOutcome = useRef(false);
+  const pollCount = useRef(0);
   // Fired once when the visitor first actually engages with the menu, so
   // "saw a result" and "used a result" stay distinguishable.
   const reportedEngagement = useRef(false);
@@ -117,7 +125,27 @@ export default function RestaurantPage() {
         // While the AI is still working, keep checking without asking the
         // user to refresh manually — DB reads only, no extra AI cost.
         if (data.status === 'pending' || data.status === 'processing') {
-          pollTimer.current = setTimeout(load, PENDING_POLL_MS);
+          if (pollCount.current < MAX_PENDING_POLLS) {
+            pollCount.current += 1;
+            pollTimer.current = setTimeout(load, PENDING_POLL_MS);
+            return;
+          }
+          // Give up rather than spin forever, and say so — a silent permanent
+          // spinner is the worst version of this for the visitor, and it was
+          // also invisible to us.
+          if (!reportedOutcome.current) {
+            reportedOutcome.current = true;
+            captureError({
+              surface: 'results_stuck_pending',
+              code: 'timeout',
+              message: `Still ${data.status} after ${Math.round((MAX_PENDING_POLLS * PENDING_POLL_MS) / 1000)}s`,
+              restaurantId: params.id,
+              extra: { source: arrivalSource() },
+            });
+          }
+          setError(
+            "This is taking much longer than usual. The analysis may still finish — try reloading in a minute."
+          );
           return;
         }
 

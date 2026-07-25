@@ -1,5 +1,7 @@
 'use client';
 
+import { captureError } from '@/lib/analytics';
+
 import { useState } from 'react';
 import { REPORT_ISSUE_TYPES, PROPOSED_CLASSIFICATION_OPTIONS } from '@/lib/dietary-config';
 import type { DietaryClassification } from '@/types';
@@ -39,8 +41,14 @@ export default function ReportModal({ dishId, dishName, onClose }: Props) {
       });
       if (!res.ok) throw new Error('Failed');
       setState('done');
-    } catch {
+    } catch (err) {
       setState('error');
+      // Darkly ironic when silent: the mechanism for telling us a dish is
+      // misclassified was itself failing unmonitored.
+      captureError({
+        surface: 'report_dish',
+        message: err instanceof Error ? err.message : 'Report submission failed',
+      });
     }
   }
 
