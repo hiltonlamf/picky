@@ -21,6 +21,32 @@ const INTERNAL_KEY = 'picky-internal';
  */
 const PRE_CONSENT_EVENTS = new Set(['$pageview', '$pageleave']);
 
+/**
+ * posthog-js runs its own collectors that never pass through `capture()`, so
+ * gating our wrapper is not enough on its own.
+ *
+ * Found on the PR #21 preview: `$autocapture` and `$web_vitals` were both
+ * firing *before* consent — 45 autocapture events in one five-minute session,
+ * the first 17 seconds before the banner was answered. Autocapture records
+ * which elements someone clicked, including their text, which is behavioural
+ * tracking of a person who hasn't agreed to any. No unit test could have caught
+ * it: the events bypass our code entirely.
+ *
+ * These flags are therefore set at init and flipped together on consent.
+ * `set_config` re-runs `autocapture.startIfEnabled()` and friends, so turning
+ * them on afterwards genuinely starts them.
+ */
+function behaviouralCollectors(enabled: boolean) {
+  return {
+    autocapture: enabled,
+    capture_performance: enabled,
+    capture_heatmaps: enabled,
+    capture_dead_clicks: enabled,
+    disable_surveys: !enabled,
+    disable_session_recording: !enabled,
+  };
+}
+
 let initialized = false;
 let consentGranted = false;
 
@@ -108,7 +134,9 @@ export function initPostHog(): void {
     // Pre-consent we deliberately create no person profile; granting consent
     // calls identify() below, which creates one then.
     person_profiles: 'identified_only',
-    disable_session_recording: !granted,
+    // Autocapture, web vitals, heatmaps, replay and surveys — all off until
+    // consent. See behaviouralCollectors().
+    ...behaviouralCollectors(granted),
     ...(anonId && { bootstrap: { distinctID: anonId } }),
   });
 
@@ -134,7 +162,14 @@ export function grantConsent(): void {
   if (!initialized) return;
 
   consentGranted = true;
-  posthog.set_config({ persistence: 'localStorage+cookie' });
+  // One call: upgrade storage AND switch on every collector that was held back.
+  // set_config re-runs autocapture.startIfEnabled() / heatmaps /
+  // sessionRecording internally, so these actually start rather than just
+  // being recorded as config.
+  posthog.set_config({
+    persistence: 'localStorage+cookie',
+    ...behaviouralCollectors(true),
+  });
   const anonId = anonIdFromDocument();
   if (anonId) posthog.identify(anonId);
   posthog.startSessionRecording();

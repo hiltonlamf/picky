@@ -83,6 +83,49 @@ describe('consent gating', () => {
     expect(posthog.capture).toHaveBeenCalledWith('$pageview', undefined);
   });
 
+  it("disables posthog's own collectors before consent", async () => {
+    installDom({ consent: null });
+    const { initPostHog } = await loadClient();
+    initPostHog();
+    const cfg = posthog.init.mock.calls[0][1];
+
+    // Regression test for a real leak found on the PR #21 preview: gating our
+    // own capture() wrapper is not enough, because posthog-js collects
+    // autocapture and web vitals internally, bypassing it entirely. 45
+    // autocapture events fired in one session before the banner was answered —
+    // autocapture records clicked element text, which is behavioural tracking
+    // of someone who never agreed to any.
+    expect(cfg.autocapture).toBe(false);
+    expect(cfg.capture_performance).toBe(false);
+    expect(cfg.capture_heatmaps).toBe(false);
+    expect(cfg.capture_dead_clicks).toBe(false);
+    expect(cfg.disable_surveys).toBe(true);
+    expect(cfg.disable_session_recording).toBe(true);
+  });
+
+  it("switches posthog's collectors on when consent is granted", async () => {
+    installDom({ consent: null });
+    const { grantConsent } = await loadClient();
+    grantConsent();
+
+    const cfg = posthog.set_config.mock.calls[0][0];
+    expect(cfg.autocapture).toBe(true);
+    expect(cfg.capture_performance).toBe(true);
+    expect(cfg.disable_surveys).toBe(false);
+    expect(cfg.disable_session_recording).toBe(false);
+    expect(cfg.persistence).toBe('localStorage+cookie');
+  });
+
+  it('enables the collectors up front for someone who already consented', async () => {
+    installDom({ consent: '1' });
+    const { initPostHog } = await loadClient();
+    initPostHog();
+    const cfg = posthog.init.mock.calls[0][1];
+
+    expect(cfg.autocapture).toBe(true);
+    expect(cfg.disable_session_recording).toBe(false);
+  });
+
   it('drops behavioural events before consent', async () => {
     installDom({ consent: null });
     const { capture } = await loadClient();
@@ -113,7 +156,12 @@ describe('consent gating', () => {
     // Upgraded rather than re-initialised: a re-init would reset the
     // distinct_id and orphan the pageviews already recorded.
     expect(posthog.init).toHaveBeenCalledOnce();
-    expect(posthog.set_config).toHaveBeenCalledWith({ persistence: 'localStorage+cookie' });
+    // objectContaining: the same call also switches the collectors on (see the
+    // collector tests above), so this asserts the storage upgrade specifically
+    // rather than pinning the whole payload.
+    expect(posthog.set_config).toHaveBeenCalledWith(
+      expect.objectContaining({ persistence: 'localStorage+cookie' })
+    );
     expect(posthog.identify).toHaveBeenCalledWith(ANON);
     expect(posthog.startSessionRecording).toHaveBeenCalled();
     expect(posthog.capture).toHaveBeenCalledWith('cookie_consent_decision', { accepted: true });
