@@ -78,13 +78,18 @@ export async function POST(request: NextRequest) {
           // A thin menu is its own outcome, not a success: 7+ dishes is the
           // bar a real menu clears, and lumping 3 dishes in with 40 hides the
           // failure users actually notice.
+          // A discover-stage success has no dishes yet, so it gets NO outcome —
+          // the real outcome is recorded on the analyze row that follows. Only
+          // rows that actually know a dish count claim 'menu' or 'thin'.
           outcome:
             outcome ??
-            (success
-              ? dishCount !== undefined && dishCount < 7
-                ? 'thin'
-                : 'menu'
-              : 'error'),
+            (!success
+              ? 'error'
+              : dishCount === undefined || dishCount === null
+                ? null
+                : dishCount < 7
+                  ? 'thin'
+                  : 'menu'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
@@ -234,7 +239,7 @@ export async function POST(request: NextRequest) {
           // and future searches don't re-pay to re-read a menu-less site.
           // (spend already recorded by callClaude when the API call returned)
           await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
-          await logAttempt(false, NO_MENU_MSG), undefined, 'no_menu');
+          await logAttempt(false, NO_MENU_MSG, undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
           send({ type: 'no_menu', restaurantId });
           return close();

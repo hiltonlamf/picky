@@ -96,13 +96,18 @@ export async function POST(request: NextRequest) {
           // A thin menu is its own outcome, not a success: 7+ dishes is the
           // bar a real menu clears, and lumping 3 dishes in with 40 hides the
           // failure users actually notice.
+          // A discover-stage success has no dishes yet, so it gets NO outcome —
+          // the real outcome is recorded on the analyze row that follows. Only
+          // rows that actually know a dish count claim 'menu' or 'thin'.
           outcome:
             outcome ??
-            (success
-              ? dishCount !== undefined && dishCount < 7
-                ? 'thin'
-                : 'menu'
-              : 'error'),
+            (!success
+              ? 'error'
+              : dishCount === undefined || dishCount === null
+                ? null
+                : dishCount < 7
+                  ? 'thin'
+                  : 'menu'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
@@ -201,7 +206,7 @@ export async function POST(request: NextRequest) {
           const msg =
             "This website looks like it's down or not live yet. If that's not right, share a direct link to the menu and we'll read it.";
           await markRestaurantNoMenu(restaurantId, 'unavailable', rawMsg);
-          await logAttempt(false, rawMsg), undefined, 'no_menu');
+          await logAttempt(false, rawMsg, undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, rawMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -218,7 +223,7 @@ export async function POST(request: NextRequest) {
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg), undefined, 'no_menu');
+          await logAttempt(false, msg, undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -235,7 +240,7 @@ export async function POST(request: NextRequest) {
           const msg =
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg), undefined, 'no_menu');
+          await logAttempt(false, msg, undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
@@ -271,8 +276,9 @@ export async function POST(request: NextRequest) {
             }),
           });
           // Discovery succeeded — analysis continues in /analyze, which logs
-          // its own terminal outcome (hence no analysis_completed here).
-          await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
+          // its own terminal outcome (hence no analysis_completed here, and no
+          // outcome on this row: there are no dishes yet to judge).
+          await logAttempt(true);
           if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
           } else {
@@ -305,7 +311,7 @@ export async function POST(request: NextRequest) {
           // any dishes from them — that's "no readable menu", not a system error.
           if (err instanceof ExtractionError) {
             await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-            await logAttempt(false, msg), undefined, 'no_menu');
+            await logAttempt(false, msg, undefined, 'no_menu');
             await emitAnalysisCompleted(false, 0, msg);
             send({ type: 'no_menu', restaurantId });
             return close();
