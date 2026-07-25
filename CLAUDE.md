@@ -79,6 +79,37 @@ his **experienced technical co-founder**. That means:
      all of them (success and failure paths both write to it); reported
      totals should reconcile against the Anthropic Console balance —
      if they don't, find the uncounted path before trusting the number.
+   - **Cost tracking is code, and every PR must keep it accurate.** We
+     cannot make cost decisions from a number that drifts from reality.
+     Ask on every PR whether it changes what gets recorded:
+     - **Added an AI call?** It must go through `callClaude()`
+       (`lib/ai.ts`) or its spend is invisible.
+     - **Added, moved, split or wrapped a function that calls the API?**
+       Check the usage still reaches `ai_usage_log`. This is the exact
+       failure that caused the 2026-07-25 undercount.
+     - **Changed a model, or added a new one?** Add it to
+       `MODEL_PRICING`. An unlisted model silently prices at Sonnet
+       rates (it now warns, but the row is still wrong).
+     - **Enabled prompt caching, batching, or a new API feature?**
+       Cache writes cost 1.25x and reads 0.1x, and `usage.input_tokens`
+       is only the *uncached remainder* — the full prompt is
+       `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
+       `callClaude()` already accounts for this; don't bypass it.
+     - **Touched a failure or retry path?** Failures are the most
+       expensive path and were historically the least recorded.
+     Verify by running one real restaurant and checking `ai_usage_log`
+     gets a row per API call (a successful one is ~11 calls, ~$0.05),
+     then reconcile against the Console. **Learned 2026-07-25:** July
+     logged $5.46 against $45+ actual — an 8x undercount. The rates were
+     right and caching was unused; the cause was structural. Three call
+     sites never recorded usage at all, and the extraction helpers were
+     typed `Promise<{...} | null>`, so on failure they returned `null` —
+     a shape that *cannot carry usage* — discarding calls Anthropic had
+     already billed. The earlier fix had been applied at the outer route
+     layer while the inner functions still threw usage away before it
+     could reach it. Hence the single choke point: usage is recorded the
+     moment the API returns, before any parsing, so no early return,
+     throw, or future code path can lose it.
 
 2. **Security.** This app handles API keys (Anthropic, Supabase) and
    accepts arbitrary user-submitted URLs for scraping. Treat every change
@@ -214,7 +245,11 @@ users of this data, and misleading data is worse than missing data.
   own feedback/survey capture point?
 - **New `catch`, new error screen, new failure path?** It must call
   `captureError()`. A silent `catch` is a bug, not a style choice.
-- **New AI call?** It must go through `callClaude()` or its spend is invisible.
+- **New AI call — or a moved, split or wrapped function that makes one?** It must
+  go through `callClaude()` or its spend is invisible. Changed a model? Add it to
+  `MODEL_PRICING`. See the cost-tracking bullet under priority 1 for the full
+  list of changes that can silently break spend accounting — **cost tracking is
+  instrumentation too**, and it is the one kind we make financial decisions on.
 - **Renamed or removed an event/property?** Check `scripts/posthog/` — dashboards
   and surveys reference names, and a rename reads as zero, not as an error.
 - **Changed the pipeline?** Does the outcome taxonomy still describe reality?
