@@ -76,8 +76,12 @@ const PATTERNS: Array<[RegExp, ErrorCode]> = [
   [/connection dropped|no response body|stream closed/i, 'connection_dropped'],
   [/taking much longer|timed? ?out|took longer than expected/i, 'timeout'],
   [/invalid url|invalid request|enter a valid|must be a valid/i, 'invalid_url'],
-  [/not found|doesn'?t exist|was removed/i, 'not_found'],
-  [/couldn'?t read a menu|no menu|unreadable/i, 'no_menu_readable'],
+  // Apostrophes are matched as a class: the app's user-facing copy uses curly
+  // ’ (U+2019), so a pattern written with a straight ' silently never matches
+  // and the error lands in 'unknown'. Caught by tests/analytics.test.ts, which
+  // asserts against the real strings rather than retyped approximations.
+  [/not found|does ?n['’]?o?t exist|was removed/i, 'not_found'],
+  [/could ?n['’]?o?t read a menu|no menu|unreadable/i, 'no_menu_readable'],
   [/failed to fetch|network ?error|load failed|econnrefused|enotfound/i, 'network'],
   [/unreachable|refused|dns|certificate|ssl|tls/i, 'site_unreachable'],
   [/^(internal )?server error|^5\d\d\b/i, 'server_error'],

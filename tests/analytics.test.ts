@@ -1,0 +1,242 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/**
+ * These cover the consent state machine and the error classifier — the two
+ * pieces where a silent regression would be invisible in production.
+ *
+ * A wrong consent branch either loses every pageview (top-of-funnel reads
+ * zero) or captures behaviour from someone who declined (a privacy failure
+ * nothing would surface). Neither shows up in a typecheck, and PostHog's own
+ * config type is loose enough that a mistyped option compiles fine, so this is
+ * the only automated guard.
+ *
+ * Browser globals are stubbed by hand rather than pulling in jsdom: the surface
+ * needed is three objects, and a dev dependency per test file adds up.
+ */
+
+const posthog = vi.hoisted(() => ({
+  init: vi.fn(),
+  capture: vi.fn(),
+  identify: vi.fn(),
+  register: vi.fn(),
+  set_config: vi.fn(),
+  startSessionRecording: vi.fn(),
+}));
+
+const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
+
+vi.mock('posthog-js', () => ({ default: posthog }));
+vi.mock('@sentry/nextjs', () => sentry);
+
+const ANON = '11111111-2222-3333-4444-555555555555';
+
+/** Minimal window/localStorage/document so the client module thinks it's in a
+ *  browser. Returns the backing store so tests can assert what was persisted. */
+function installDom(opts: { consent?: string | null; pathname?: string; search?: string } = {}) {
+  const store = new Map<string, string>();
+  if (opts.consent != null) store.set('picky-cookie-consent', opts.consent);
+
+  (globalThis as Record<string, unknown>).window = {
+    location: { pathname: opts.pathname ?? '/', search: opts.search ?? '' },
+  };
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  (globalThis as Record<string, unknown>).document = { cookie: `picky_anon_id=${ANON}` };
+  return store;
+}
+
+/** Fresh module instance — the client keeps `initialized` at module scope. */
+async function loadClient() {
+  vi.resetModules();
+  return import('@/lib/posthog-client');
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test';
+});
+
+describe('consent gating', () => {
+  it('boots in memory-only mode before consent, and captures pageviews', async () => {
+    installDom({ consent: null });
+    const { capture, initPostHog } = await loadClient();
+    initPostHog();
+
+    expect(posthog.init).toHaveBeenCalledOnce();
+    const cfg = posthog.init.mock.calls[0][1];
+    // Nothing may be written to the device before someone agrees.
+    expect(cfg.persistence).toBe('memory');
+    expect(cfg.disable_session_recording).toBe(true);
+    expect(cfg.person_profiles).toBe('identified_only');
+    // But we still need to know a visit happened.
+    expect(cfg.capture_pageview).toBe('history_change');
+    // Same identity as the middleware cookie, so events join across
+    // client, server and DB.
+    expect(cfg.bootstrap).toEqual({ distinctID: ANON });
+    // No person profile until consent.
+    expect(posthog.identify).not.toHaveBeenCalled();
+
+    capture('$pageview');
+    expect(posthog.capture).toHaveBeenCalledWith('$pageview', undefined);
+  });
+
+  it('drops behavioural events before consent', async () => {
+    installDom({ consent: null });
+    const { capture } = await loadClient();
+
+    capture('search_submitted', { domain: 'example.com' });
+    capture('results_viewed', { dish_count: 12 });
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it('captures everything once consent is granted', async () => {
+    installDom({ consent: '1' });
+    const { capture, initPostHog } = await loadClient();
+    initPostHog();
+
+    expect(posthog.init.mock.calls[0][1].persistence).toBe('localStorage+cookie');
+    expect(posthog.init.mock.calls[0][1].disable_session_recording).toBe(false);
+    expect(posthog.identify).toHaveBeenCalledWith(ANON);
+
+    capture('search_submitted', { domain: 'example.com' });
+    expect(posthog.capture).toHaveBeenCalledWith('search_submitted', { domain: 'example.com' });
+  });
+
+  it('upgrades in place on accept, keeping the same distinct_id', async () => {
+    installDom({ consent: null });
+    const { grantConsent } = await loadClient();
+    grantConsent();
+
+    // Upgraded rather than re-initialised: a re-init would reset the
+    // distinct_id and orphan the pageviews already recorded.
+    expect(posthog.init).toHaveBeenCalledOnce();
+    expect(posthog.set_config).toHaveBeenCalledWith({ persistence: 'localStorage+cookie' });
+    expect(posthog.identify).toHaveBeenCalledWith(ANON);
+    expect(posthog.startSessionRecording).toHaveBeenCalled();
+    expect(posthog.capture).toHaveBeenCalledWith('cookie_consent_decision', { accepted: true });
+  });
+
+  it('remembers a refusal so the banner stops asking', async () => {
+    const store = installDom({ consent: null });
+    const { denyConsent, consentState } = await loadClient();
+    denyConsent();
+
+    // The old code only ever wrote '1', so a dismissal was
+    // indistinguishable from a first visit.
+    expect(store.get('picky-cookie-consent')).toBe('0');
+    expect(consentState()).toBe('denied');
+    expect(posthog.capture).toHaveBeenCalledWith('cookie_consent_decision', { accepted: false });
+  });
+
+  it('stays silent for someone who declined', async () => {
+    installDom({ consent: '0' });
+    const { capture, initPostHog } = await loadClient();
+    initPostHog();
+
+    expect(posthog.init.mock.calls[0][1].persistence).toBe('memory');
+    capture('search_submitted');
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('traffic exclusions', () => {
+  it('never initialises on admin pages', async () => {
+    installDom({ consent: '1', pathname: '/admin/eval' });
+    const { capture, initPostHog } = await loadClient();
+    initPostHog();
+
+    // Admin is the founder's workplace; counting it inflates every metric.
+    expect(posthog.init).not.toHaveBeenCalled();
+    capture('anything');
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+
+  it('tags the browser as internal when ?internal=1 is used', async () => {
+    installDom({ consent: '1', search: '?internal=1' });
+    const { initPostHog } = await loadClient();
+    initPostHog();
+
+    expect(posthog.register).toHaveBeenCalledWith({ is_internal: true });
+  });
+
+  it('does nothing at all without a PostHog key', async () => {
+    delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    installDom({ consent: '1' });
+    const { capture, initPostHog } = await loadClient();
+    initPostHog();
+    capture('search_submitted');
+
+    expect(posthog.init).not.toHaveBeenCalled();
+    expect(posthog.capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('classifyError', () => {
+  // Every string here is a real message the app can show — taken from
+  // HeroSearch, the parse routes and the results page, not invented.
+  const cases: Array<[string, string]> = [
+    ['The analysis took longer than expected and the connection dropped. Please try again — a retry usually succeeds.', 'connection_dropped'],
+    ['The analysis is taking much longer than expected. Please try again later.', 'timeout'],
+    ['No response body', 'connection_dropped'],
+    ['Invalid request body', 'invalid_url'],
+    ['Invalid URL', 'invalid_url'],
+    ['Restaurant not found', 'not_found'],
+    ["This restaurant doesn't exist or was removed.", 'not_found'],
+    ['We couldn’t read a menu from that. Please try another link or file.', 'no_menu_readable'],
+    ['Rate limit exceeded', 'rate_limited'],
+    ['Failed to fetch', 'network'],
+    ['Something went wrong. Please try again.', 'unknown'],
+  ];
+
+  it.each(cases)('maps %j to %s', async (message, expected) => {
+    const { classifyError } = await import('@/lib/analytics');
+    expect(classifyError(message)).toBe(expected);
+  });
+
+  it('falls back to unknown for empty input', async () => {
+    const { classifyError } = await import('@/lib/analytics');
+    expect(classifyError(null)).toBe('unknown');
+    expect(classifyError(undefined)).toBe('unknown');
+    expect(classifyError('')).toBe('unknown');
+  });
+});
+
+describe('captureError', () => {
+  it('counts every error in PostHog with a stable code', async () => {
+    installDom({ consent: '1' });
+    const { captureError } = await loadClient().then(() => import('@/lib/analytics'));
+
+    captureError({ surface: 'results', message: 'Restaurant not found', restaurantId: 'r1' });
+
+    expect(posthog.capture).toHaveBeenCalledWith('error_shown', {
+      surface: 'results',
+      error_code: 'not_found',
+      message: 'Restaurant not found',
+      restaurant_id: 'r1',
+    });
+  });
+
+  it('does not spend Sentry quota on expected failures', async () => {
+    installDom({ consent: '1' });
+    const { captureError } = await loadClient().then(() => import('@/lib/analytics'));
+
+    // A bad URL or a rate limit is the system working as designed.
+    captureError({ surface: 'search', message: 'Invalid URL' });
+    captureError({ surface: 'search', message: 'Rate limit exceeded' });
+    expect(sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('sends genuinely unexpected failures to Sentry for the stack trace', async () => {
+    installDom({ consent: '1' });
+    const { captureError } = await loadClient().then(() => import('@/lib/analytics'));
+
+    captureError({ surface: 'results', message: 'Something went wrong. Please try again.' });
+    expect(sentry.captureException).toHaveBeenCalledOnce();
+    expect(sentry.captureException.mock.calls[0][1]).toMatchObject({
+      tags: { surface: 'results', error_code: 'unknown' },
+    });
+  });
+});
