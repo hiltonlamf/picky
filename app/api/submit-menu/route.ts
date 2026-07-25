@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     const restaurant = await getRestaurantMeta(parsed.data.restaurantId);
-    updateSpendContext({ restaurantId: parsed.data.restaurantId, restaurantName: restaurant?.title ?? null });
+    updateSpendContext({ restaurantId: parsed.data.restaurantId, restaurantName: restaurant?.name ?? null });
     if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
 
     // Only help where we failed — never let the public overwrite/append to a
