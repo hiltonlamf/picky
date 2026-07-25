@@ -12,7 +12,6 @@ import {
   saveMenuCandidates,
   markRestaurantError,
   markRestaurantNoMenu,
-  logUsage,
   logParseAttempt,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
@@ -268,7 +267,7 @@ export async function POST(request: NextRequest) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed retry ladders still spent tokens — record them.
           if (err instanceof ExtractionError && err.usage) {
-            await logUsage(restaurantId, discovery.finalUrl, err.usage, ctx.title);
+            // (spend already recorded by callClaude when the API call returned)
           }
           // An ExtractionError means we found candidate menus but couldn't read
           // any dishes from them — that's "no readable menu", not a system error.

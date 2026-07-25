@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
-import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logUsage, logParseAttempt } from '@/lib/db';
+import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
           Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed attempts still spent tokens — record them before erroring.
-          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
+          // (spend already recorded by callClaude when the API call returned)
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);
           await emitAnalysisCompleted(false);
@@ -200,7 +200,7 @@ export async function POST(request: NextRequest) {
           // a "no readable menu" outcome (not a system error): store it as
           // no_menu so the results page shows the friendly, actionable screen
           // and future searches don't re-pay to re-read a menu-less site.
-          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
+          // (spend already recorded by callClaude when the API call returned)
           await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
           await logAttempt(false, NO_MENU_MSG);
           await emitAnalysisCompleted(false);

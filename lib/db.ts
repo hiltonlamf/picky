@@ -465,7 +465,7 @@ export async function saveClassifiedMenu(
     .eq('id', restaurantId);
 
   // Append-only spend log — survives restaurant wipes (no FK by design).
-  if (usage) await logUsage(restaurantId, url, usage, menu.restaurantName || null);
+  // (spend already recorded by callClaude when the API call returned)
 
   // --- human_verified preservation (the saveClassifiedMenu "landmine" fix) ---
   // Snapshot section names BEFORE anything is deleted, so we can key each
@@ -2515,7 +2515,7 @@ export async function addMenuFromUrl(input: {
   let usage = extractUsage;
 
   if (!best || best.menu.sections.length === 0) {
-    if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+    // (spend already recorded by callClaude when the API call returned)
     throw new Error(
       "Couldn't read a menu from that URL — check the link points directly at the menu (a page, PDF, or image)."
     );
@@ -2525,7 +2525,7 @@ export async function addMenuFromUrl(input: {
   // admin-added dishes go live for real users, so they get the same guardrail.
   const verified = await verifyVegClassifications(best.menu, input.restaurantName ?? scrape.title);
   usage = sumUsage(usage, verified.usage);
-  await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+  // (spend already recorded by callClaude when the API call returned)
 
   const { data: existingSections } = await db()
     .from('menu_sections')
@@ -2644,13 +2644,13 @@ export async function addMenuFromUpload(input: {
   }
 
   if (!extraction || extraction.menu.sections.length === 0) {
-    if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+    // (spend already recorded by callClaude when the API call returned)
     throw new Error("Couldn't read a menu from that file — check it's a clear photo or scan of the menu text.");
   }
 
   const verified = await verifyVegClassifications(extraction.menu, restaurantName);
   usage = sumUsage(usage, verified.usage);
-  if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+  // (spend already recorded by callClaude when the API call returned)
 
   const { data: existingSections } = await db()
     .from('menu_sections')
