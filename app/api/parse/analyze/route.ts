@@ -2,9 +2,10 @@ import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
-import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logUsage, logParseAttempt } from '@/lib/db';
+import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
+import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
@@ -35,6 +36,10 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Attribution is filled in once the request body is parsed — see
+      // lib/ai-spend.ts. Spend is recorded either way; this decides whether the
+      // rows name the restaurant that caused them.
+      await withSpendContext({}, async () => {
       const send = (event: ParseEvent) => {
         try {
           controller.enqueue(encode(event));
@@ -51,7 +56,14 @@ export async function POST(request: NextRequest) {
       const startedAt = Date.now();
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
-      const logAttempt = (success: boolean, errorMessage?: string) => {
+      // outcome/dishCount default from `success`, so existing two-argument
+      // callers keep working; the analyse-success path passes them explicitly.
+      const logAttempt = (
+        success: boolean,
+        errorMessage?: string,
+        dishCount?: number,
+        outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
+      ) => {
         if (!attemptUrl) return Promise.resolve();
         return logParseAttempt({
           url: attemptUrl,
@@ -60,15 +72,38 @@ export async function POST(request: NextRequest) {
           success,
           errorMessage: errorMessage ?? null,
           durationMs: Date.now() - startedAt,
+          anonId: request.cookies.get(ANON_ID_COOKIE)?.value ?? null,
+          dishCount: dishCount ?? null,
+          errorCode: success ? null : classifyError(errorMessage),
+          // A thin menu is its own outcome, not a success: 7+ dishes is the
+          // bar a real menu clears, and lumping 3 dishes in with 40 hides the
+          // failure users actually notice.
+          // A discover-stage success has no dishes yet, so it gets NO outcome —
+          // the real outcome is recorded on the analyze row that follows. Only
+          // rows that actually know a dish count claim 'menu' or 'thin'.
+          outcome:
+            outcome ??
+            (!success
+              ? 'error'
+              : dishCount === undefined || dishCount === null
+                ? null
+                : dishCount < 7
+                  ? 'thin'
+                  : 'menu'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
-      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(distinctId, 'analysis_completed', {
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number, errorMessage?: string) =>
+        captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,
           dish_count: dishCount ?? 0,
+          domain: attemptUrl ? domainOf(attemptUrl) : null,
+          // success:false alone gave no clue why. The stable code is what the
+          // dashboard groups and alerts on; the raw message is for debugging.
+          failure_reason: success ? null : classifyError(errorMessage),
+          error_message: success ? null : errorMessage ?? null,
         });
 
       try {
@@ -85,6 +120,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
         const { restaurantId, candidateIds } = parsed.data;
+        updateSpendContext({ restaurantId });
 
         const payload = await getMenuCandidates(restaurantId).catch(() => null);
         if (!payload || !payload.candidates?.length) {
@@ -119,6 +155,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
         attemptUrl = payload.finalUrl;
+        updateSpendContext({ url: payload.finalUrl });
         attemptCategory = state.category ?? menuCategory(payload.candidates);
 
         send({ type: 'progress', step: 'Analysing dishes with AI...', stepNumber: 1, totalSteps: 2 });
@@ -186,10 +223,10 @@ export async function POST(request: NextRequest) {
           Sentry.captureException(err);
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed attempts still spent tokens — record them before erroring.
-          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
+          // (spend already recorded by callClaude when the API call returned)
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -200,10 +237,10 @@ export async function POST(request: NextRequest) {
           // a "no readable menu" outcome (not a system error): store it as
           // no_menu so the results page shows the friendly, actionable screen
           // and future searches don't re-pay to re-read a menu-less site.
-          if (state.usage) await logUsage(restaurantId, payload.finalUrl, state.usage, payload.title);
+          // (spend already recorded by callClaude when the API call returned)
           await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
-          await logAttempt(false, NO_MENU_MSG);
-          await emitAnalysisCompleted(false);
+          await logAttempt(false, NO_MENU_MSG, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -221,17 +258,18 @@ export async function POST(request: NextRequest) {
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
         const usage: AIUsage = state.usage ?? { model: 'unknown', tokensIn: 0, tokensOut: 0, costUsd: 0 };
         await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
-        await logAttempt(true);
+        await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {
         Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         await logAttempt(false, msg);
-        await emitAnalysisCompleted(false);
+        await emitAnalysisCompleted(false, 0, msg);
         send({ type: 'error', error: msg });
       }
       close();
+      });
     },
   });
 

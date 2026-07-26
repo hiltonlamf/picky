@@ -9,7 +9,6 @@ import {
   saveClassifiedMenu,
   markRestaurantError,
   markRestaurantNoMenu,
-  logUsage,
 } from '@/lib/db';
 
 // Admin-triggered re-run of the full pipeline for one restaurant already in
@@ -81,7 +80,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
     Sentry.captureException(err);
     const msg = err instanceof Error ? err.message : 'AI classification failed';
     if (err instanceof ExtractionError && err.usage) {
-      await logUsage(restaurant.id, discovery.finalUrl, err.usage, ctx.title);
+      // (spend already recorded by callClaude when the API call returned)
     }
     if (err instanceof ExtractionError) {
       // Distinguish "we read the site and it genuinely has no menu" from "we

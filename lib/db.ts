@@ -414,6 +414,14 @@ export async function logParseAttempt(attempt: {
   success: boolean;
   errorMessage?: string | null;
   durationMs?: number;
+  /** Ties both stage rows into one person's search, and joins to PostHog. */
+  anonId?: string | null;
+  /** The response they got — "worked" vs "worked but returned 3 dishes". */
+  dishCount?: number | null;
+  /** Stable outcome so this is countable: menu | no_menu | error | thin. */
+  outcome?: 'menu' | 'no_menu' | 'error' | 'thin' | null;
+  /** From classifyError() — grouping by raw message gives fifty one-offs. */
+  errorCode?: string | null;
 }): Promise<void> {
   try {
     let domain: string | null = null;
@@ -428,6 +436,10 @@ export async function logParseAttempt(attempt: {
       success: attempt.success,
       error_message: attempt.errorMessage ?? null,
       duration_ms: attempt.durationMs ?? null,
+      anon_id: attempt.anonId ?? null,
+      dish_count: attempt.dishCount ?? null,
+      outcome: attempt.outcome ?? null,
+      error_code: attempt.errorCode ?? null,
     });
   } catch (err) {
     console.error('[db] parse_attempts insert failed (non-fatal):', err instanceof Error ? err.message : err);
@@ -465,7 +477,7 @@ export async function saveClassifiedMenu(
     .eq('id', restaurantId);
 
   // Append-only spend log — survives restaurant wipes (no FK by design).
-  if (usage) await logUsage(restaurantId, url, usage, menu.restaurantName || null);
+  // (spend already recorded by callClaude when the API call returned)
 
   // --- human_verified preservation (the saveClassifiedMenu "landmine" fix) ---
   // Snapshot section names BEFORE anything is deleted, so we can key each
@@ -2515,7 +2527,7 @@ export async function addMenuFromUrl(input: {
   let usage = extractUsage;
 
   if (!best || best.menu.sections.length === 0) {
-    if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+    // (spend already recorded by callClaude when the API call returned)
     throw new Error(
       "Couldn't read a menu from that URL — check the link points directly at the menu (a page, PDF, or image)."
     );
@@ -2525,7 +2537,7 @@ export async function addMenuFromUrl(input: {
   // admin-added dishes go live for real users, so they get the same guardrail.
   const verified = await verifyVegClassifications(best.menu, input.restaurantName ?? scrape.title);
   usage = sumUsage(usage, verified.usage);
-  await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+  // (spend already recorded by callClaude when the API call returned)
 
   const { data: existingSections } = await db()
     .from('menu_sections')
@@ -2644,13 +2656,13 @@ export async function addMenuFromUpload(input: {
   }
 
   if (!extraction || extraction.menu.sections.length === 0) {
-    if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+    // (spend already recorded by callClaude when the API call returned)
     throw new Error("Couldn't read a menu from that file — check it's a clear photo or scan of the menu text.");
   }
 
   const verified = await verifyVegClassifications(extraction.menu, restaurantName);
   usage = sumUsage(usage, verified.usage);
-  if (usage) await logUsage(input.restaurantId, input.restaurantUrl, usage, input.restaurantName ?? null);
+  // (spend already recorded by callClaude when the API call returned)
 
   const { data: existingSections } = await db()
     .from('menu_sections')
@@ -2704,4 +2716,51 @@ export async function addMenuFromUpload(input: {
   });
 
   return { addedDishCount, usage: usage ?? { model: '', tokensIn: 0, tokensOut: 0, costUsd: 0 } };
+}
+
+/** One searched URL and what the visitor got back. */
+export type SearchAttempt = {
+  createdAt: string;
+  url: string | null;
+  domain: string | null;
+  stage: string;
+  category: string | null;
+  success: boolean;
+  outcome: string | null;
+  dishCount: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  durationMs: number | null;
+  anonId: string | null;
+};
+
+/**
+ * Recent searches, newest first — the answer to "which restaurants are people
+ * looking up, and what did they get?"
+ *
+ * Read from parse_attempts rather than PostHog on purpose: this table is not
+ * consent-gated, so it covers 100% of searches instead of only the consenting
+ * 40–70%. A list of what people search for that silently omits half of them
+ * would mislead every product decision it touched.
+ */
+export async function getRecentSearches(limit = 200): Promise<SearchAttempt[]> {
+  const { data } = await db()
+    .from('parse_attempts')
+    .select('created_at, url, domain, stage, category, success, outcome, dish_count, error_code, error_message, duration_ms, anon_id')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  return ((data ?? []) as DbRow[]).map((r) => ({
+    createdAt: String(r.created_at),
+    url: (r.url as string | null) ?? null,
+    domain: (r.domain as string | null) ?? null,
+    stage: String(r.stage),
+    category: (r.category as string | null) ?? null,
+    success: Boolean(r.success),
+    outcome: (r.outcome as string | null) ?? null,
+    dishCount: (r.dish_count as number | null) ?? null,
+    errorCode: (r.error_code as string | null) ?? null,
+    errorMessage: (r.error_message as string | null) ?? null,
+    durationMs: (r.duration_ms as number | null) ?? null,
+    anonId: (r.anon_id as string | null) ?? null,
+  }));
 }

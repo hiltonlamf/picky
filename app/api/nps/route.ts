@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
     await saveNpsResponse(anonId, score, notes);
     // Mirrors the nps_responses insert so PostHog and the DB agree.
-    await captureServer(anonId ?? hashIp(getClientIp(request)), 'nps_submitted', { score });
+    await captureServer(request, anonId ?? hashIp(getClientIp(request)), 'nps_submitted', { score });
     return NextResponse.json({ success: true });
   } catch (err) {
     Sentry.captureException(err);

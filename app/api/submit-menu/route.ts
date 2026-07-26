@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { addMenuFromUrl, addMenuFromUpload, getRestaurantMeta, restaurantHasLiveDishes, submitFeedback } from '@/lib/db';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { captureServer } from '@/lib/posthog-server';
+import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
 
 // The PUBLIC counterpart to the admin "Add a missing menu" flow: shown on a
@@ -42,6 +43,10 @@ const schema = z.discriminatedUnion('mode', [
 export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
   const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
+  // This route re-analyses a user-supplied menu link, so it makes real AI
+  // calls. Without this wrapper its spend was recorded but unattributed —
+  // 8 such rows showed up on the first real run.
+  return withSpendContext({}, async () => {
   try {
     const body = await request.json().catch(() => null);
     const parsed = schema.safeParse(body);
@@ -50,6 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     const restaurant = await getRestaurantMeta(parsed.data.restaurantId);
+    updateSpendContext({ restaurantId: parsed.data.restaurantId, restaurantName: restaurant?.name ?? null });
     if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
 
     // Only help where we failed — never let the public overwrite/append to a
@@ -69,7 +75,7 @@ export async function POST(request: NextRequest) {
     // whether or not it succeeds).
     const { allowed } = await checkRateLimit(ip);
     if (!allowed) {
-      await captureServer(distinctId, 'rate_limit_hit', { stage: 'submit_menu' });
+      await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'submit_menu' });
       return NextResponse.json(
         { error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} submissions per hour. Please try again later.` },
         { status: 429 }
@@ -109,7 +115,7 @@ export async function POST(request: NextRequest) {
             label: 'Menu',
           });
 
-    await captureServer(distinctId, 'user_menu_submission_succeeded', {
+    await captureServer(request, distinctId, 'user_menu_submission_succeeded', {
       restaurant_id: restaurant.id,
       mode: parsed.data.mode,
       dish_count: result.addedDishCount,
@@ -122,4 +128,5 @@ export async function POST(request: NextRequest) {
     const msg = err instanceof Error ? err.message : 'Server error';
     return NextResponse.json({ error: msg }, { status: 422 });
   }
+  });
 }

@@ -1,15 +1,19 @@
 'use client';
 
 import { useEffect } from 'react';
-import { initPostHogIfConsented } from '@/lib/posthog-client';
+import { initPostHog } from '@/lib/posthog-client';
 
 /**
- * Boots PostHog for returning visitors who accepted cookies in a previous
- * session. First-time acceptance is handled by CookieConsent itself.
+ * Boots PostHog on every page load.
+ *
+ * Unlike the previous version, this runs for *everyone*, not only visitors who
+ * already accepted cookies — before consent it starts in a memory-only mode
+ * that stores nothing on the device and records nothing but pageviews, so we
+ * can count arrivals without following anyone around. See lib/posthog-client.
  */
 export default function PostHogProvider() {
   useEffect(() => {
-    initPostHogIfConsented();
+    initPostHog();
   }, []);
   return null;
 }

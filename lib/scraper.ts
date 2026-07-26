@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
-import Anthropic from '@anthropic-ai/sdk';
 import { readPage } from './reader';
+import { callClaude } from './ai';
 
 export interface ScrapeResult {
   url: string;
@@ -692,9 +692,10 @@ async function searchDuckDuckGo(query: string, exclusions: string[] = []): Promi
 // reliable than scraping third-party services from a datacenter IP.
 async function resolveViaClaudeLLM(name: string, city: string | null): Promise<string | null> {
   try {
-    const client = new Anthropic();
     const where = city ? ` in ${city}` : '';
-    const msg = await client.messages.create({
+    // Routed through callClaude so this call is recorded in ai_usage_log — it
+    // previously used its own client and its spend was invisible.
+    const msg = await callClaude({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 100,
       messages: [{

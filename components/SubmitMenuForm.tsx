@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { capture } from '@/lib/posthog-client';
+import { captureError } from '@/lib/analytics';
 import { LinkIcon, CameraIcon, CheckIcon } from './icons';
 
 interface Props {
@@ -74,8 +75,12 @@ export default function SubmitMenuForm({ restaurantId }: Props) {
       // The restaurant is now live — reload to show the menu.
       setTimeout(() => window.location.reload(), 900);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      const msg = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      setError(msg);
       setState('error');
+      // Was silent: someone salvaging a failed analysis by pasting a direct link
+      // is the most motivated user we have, and their failure went unrecorded.
+      captureError({ surface: 'submit_menu', message: msg, restaurantId });
     }
   }
 

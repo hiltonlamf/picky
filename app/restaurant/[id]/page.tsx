@@ -13,12 +13,20 @@ import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import SubmitMenuForm from '@/components/SubmitMenuForm';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
+import { captureError, EVENTS } from '@/lib/analytics';
 import { SITE_TITLE } from '@/lib/site-copy';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
 
 const PENDING_POLL_MS = 4000;
+// Cap the pending poll. Two problems with the previous unbounded loop: a tab
+// left open re-hit the API every 4s indefinitely (small per call, unbounded in
+// aggregate — the runaway-loop shape CLAUDE.md warns about), and a restaurant
+// genuinely stuck in `processing` left the visitor on a spinner forever with no
+// record that it had happened. 75 polls ~= 5 minutes, well past a normal
+// analysis.
+const MAX_PENDING_POLLS = 75;
 
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
   const dishes = sections.flatMap((s) => s.dishes);
@@ -28,6 +36,28 @@ function countDishes(sections: MenuSectionType[], filter: DietaryClassification 
     if (filter === 'vegetarian') return d.classification === 'vegan' || d.classification === 'vegetarian';
     return false;
   }).length;
+}
+
+/**
+ * Where this visit came from, so a result can be attributed to the search box,
+ * a city guide, or a shared link. Derived from the share marker first (explicit
+ * and reliable), then the referrer path.
+ */
+function arrivalSource(): 'share' | 'guide' | 'search' | 'direct' {
+  if (typeof window === 'undefined') return 'direct';
+  if (new URLSearchParams(window.location.search).get('ref') === 'share') return 'share';
+  const ref = document.referrer;
+  if (!ref) return 'direct';
+  try {
+    const url = new URL(ref);
+    if (url.origin !== window.location.origin) return 'direct';
+    // A guide lives at /<city>; the search box lives at the root.
+    if (url.pathname === '/') return 'search';
+    if (/^\/[a-z0-9-]+\/?$/i.test(url.pathname)) return 'guide';
+    return 'direct';
+  } catch {
+    return 'direct';
+  }
 }
 
 /** Distinct source-menu labels (Lunch/Dinner/...) in display order; empty for single-menu restaurants. */
@@ -51,6 +81,28 @@ export default function RestaurantPage() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { setRestaurantName } = useHeader();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // results_viewed must fire once per visit, not once per poll tick — the page
+  // re-fetches every few seconds while the AI is still working.
+  const reportedOutcome = useRef(false);
+  const pollCount = useRef(0);
+  // Fired once when the visitor first actually engages with the menu, so
+  // "saw a result" and "used a result" stay distinguishable.
+  const reportedEngagement = useRef(false);
+
+  /**
+   * Fired once per visit on the first real interaction with the menu. Separates
+   * "saw a result" from "used a result" — a high results_viewed with a low
+   * engagement rate means the menus are loading but aren't useful, which a
+   * pageview count alone would hide.
+   */
+  const reportEngagement = useCallback(
+    (trigger: string) => {
+      if (reportedEngagement.current) return;
+      reportedEngagement.current = true;
+      capture(EVENTS.RESULTS_ENGAGED, { restaurant_id: params.id, trigger });
+    },
+    [params.id]
+  );
 
   const load = useCallback(() => {
     // no-store so a returning visitor never sees a browser-cached snapshot after
@@ -73,12 +125,65 @@ export default function RestaurantPage() {
         // While the AI is still working, keep checking without asking the
         // user to refresh manually — DB reads only, no extra AI cost.
         if (data.status === 'pending' || data.status === 'processing') {
-          pollTimer.current = setTimeout(load, PENDING_POLL_MS);
+          if (pollCount.current < MAX_PENDING_POLLS) {
+            pollCount.current += 1;
+            pollTimer.current = setTimeout(load, PENDING_POLL_MS);
+            return;
+          }
+          // Give up rather than spin forever, and say so — a silent permanent
+          // spinner is the worst version of this for the visitor, and it was
+          // also invisible to us.
+          if (!reportedOutcome.current) {
+            reportedOutcome.current = true;
+            captureError({
+              surface: 'results_stuck_pending',
+              code: 'timeout',
+              message: `Still ${data.status} after ${Math.round((MAX_PENDING_POLLS * PENDING_POLL_MS) / 1000)}s`,
+              restaurantId: params.id,
+              extra: { source: arrivalSource() },
+            });
+          }
+          setError(
+            "This is taking much longer than usual. The analysis may still finish — try reloading in a minute."
+          );
+          return;
+        }
+
+        // The single most important event in the funnel: it's what turns
+        // "someone searched" into "someone actually got a menu", and it closes
+        // the search, guide and share funnels alike. Fired only on a terminal
+        // status, once per visit — firing on each poll tick would inflate the
+        // step and break every conversion rate built on it.
+        if (!reportedOutcome.current) {
+          reportedOutcome.current = true;
+          const dishCount = countDishes(data.sections, 'all');
+          capture(EVENTS.RESULTS_VIEWED, {
+            restaurant_id: params.id,
+            outcome: data.status === 'done' ? 'menu' : data.status,
+            dish_count: dishCount,
+            vegan_count: countDishes(data.sections, 'vegan'),
+            veg_count: countDishes(data.sections, 'vegetarian'),
+            menu_count: distinctMenuLabels(data).length,
+            source: arrivalSource(),
+            // Only set on a no_menu outcome; it's what separates "site is
+            // down" from "site has no menu online", which need different fixes.
+            no_menu_reason: data.noMenuReason ?? null,
+            // The thin-menu tripwire, on live user traffic rather than only in
+            // admin review: a real menu with 3 dishes is a bug, not a result.
+            is_thin: data.status === 'done' && dishCount > 0 && dishCount < 7,
+          });
         }
       })
       .catch((err) => {
         setError(err.message);
         setLoading(false);
+        // Was silent before: the visitor got a "Restaurant not found" screen
+        // and we had no record it ever happened.
+        captureError({
+          surface: 'results',
+          message: err instanceof Error ? err.message : String(err),
+          restaurantId: params.id,
+        });
       });
   }, [params.id, setRestaurantName]);
 
@@ -248,7 +353,7 @@ export default function RestaurantPage() {
           </h1>
           <div className="shrink-0 pt-0.5 flex items-center gap-2">
             <button
-              onClick={() => { setFeedbackOpen(true); capture('feedback_modal_opened', { restaurant_id: restaurant.id }); }}
+              onClick={() => { reportEngagement('feedback'); setFeedbackOpen(true); capture('feedback_modal_opened', { restaurant_id: restaurant.id }); }}
               className="glass-light inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-forest/90 hover:text-forest transition-colors"
             >
               <ChatIcon className="w-4 h-4" />
@@ -331,7 +436,7 @@ export default function RestaurantPage() {
           <select
             id="menu-select"
             value={menuFilter}
-            onChange={(e) => { setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
+            onChange={(e) => { reportEngagement('menu_filter'); setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
             className="glass-light w-full sm:w-auto px-4 py-2.5 rounded-full text-sm font-medium text-forest focus:outline-none focus:ring-4 focus:ring-azalea-500/25"
           >
             {menuLabels.map((label) => (
@@ -350,7 +455,7 @@ export default function RestaurantPage() {
         {filters.map((f) => (
           <button
             key={f.value}
-            onClick={() => { setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: params.id }); }}
+            onClick={() => { reportEngagement('diet_filter'); setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: params.id }); }}
             className={`flex-shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold transition-colors duration-150 ${
               filter === f.value
                 ? 'bg-forest text-paper border-2 border-forest'

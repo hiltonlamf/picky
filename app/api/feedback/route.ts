@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       referenceUrl: referenceUrl || null,
     });
     // Mirrors the restaurant_feedback insert so PostHog and the DB agree.
-    await captureServer(anonId ?? ipHash, 'feedback_submitted', {
+    await captureServer(request, anonId ?? ipHash, 'feedback_submitted', {
       feedback_type: feedbackType,
       restaurant_id: restaurantId ?? null,
       city: city ?? null,

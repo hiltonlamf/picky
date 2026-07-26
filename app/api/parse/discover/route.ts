@@ -12,11 +12,11 @@ import {
   saveMenuCandidates,
   markRestaurantError,
   markRestaurantNoMenu,
-  logUsage,
   logParseAttempt,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
-import { menuCategory, ANON_ID_COOKIE } from '@/lib/telemetry';
+import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
+import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import type { ParseEvent } from '@/types';
@@ -52,6 +52,10 @@ export async function POST(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Opened empty and filled in below: discovery runs before the restaurant
+      // row exists, so attribution can't be known here yet. Spend is recorded
+      // either way — this only decides whether the rows say which restaurant.
+      await withSpendContext({}, async () => {
       const send = (event: ParseEvent) => {
         try {
           controller.enqueue(encode(event));
@@ -70,7 +74,14 @@ export async function POST(request: NextRequest) {
       const startedAt = Date.now();
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
-      const logAttempt = (success: boolean, errorMessage?: string) => {
+      // outcome/dishCount default from `success`, so existing two-argument
+      // callers keep working; the analyse-success path passes them explicitly.
+      const logAttempt = (
+        success: boolean,
+        errorMessage?: string,
+        dishCount?: number,
+        outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
+      ) => {
         if (!attemptUrl) return Promise.resolve();
         return logParseAttempt({
           url: attemptUrl,
@@ -79,15 +90,38 @@ export async function POST(request: NextRequest) {
           success,
           errorMessage: errorMessage ?? null,
           durationMs: Date.now() - startedAt,
+          anonId: request.cookies.get(ANON_ID_COOKIE)?.value ?? null,
+          dishCount: dishCount ?? null,
+          errorCode: success ? null : classifyError(errorMessage),
+          // A thin menu is its own outcome, not a success: 7+ dishes is the
+          // bar a real menu clears, and lumping 3 dishes in with 40 hides the
+          // failure users actually notice.
+          // A discover-stage success has no dishes yet, so it gets NO outcome —
+          // the real outcome is recorded on the analyze row that follows. Only
+          // rows that actually know a dish count claim 'menu' or 'thin'.
+          outcome:
+            outcome ??
+            (!success
+              ? 'error'
+              : dishCount === undefined || dishCount === null
+                ? null
+                : dishCount < 7
+                  ? 'thin'
+                  : 'menu'),
         });
       };
       const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
-      const emitAnalysisCompleted = (success: boolean, dishCount?: number) =>
-        captureServer(distinctId, 'analysis_completed', {
+      const emitAnalysisCompleted = (success: boolean, dishCount?: number, errorMessage?: string) =>
+        captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
           duration_ms: Date.now() - startedAt,
           dish_count: dishCount ?? 0,
+          domain: attemptUrl ? domainOf(attemptUrl) : null,
+          // success:false alone gave no clue why. The stable code is what the
+          // dashboard groups and alerts on; the raw message is for debugging.
+          failure_reason: success ? null : classifyError(errorMessage),
+          error_message: success ? null : errorMessage ?? null,
         });
 
       try {
@@ -107,6 +141,7 @@ export async function POST(request: NextRequest) {
         }
         const { url } = parsed.data;
         attemptUrl = url;
+        updateSpendContext({ url });
 
         // Cache check FIRST. A restaurant that's already in our database and
         // fresh is served with ZERO LLM calls, so it must NOT count against the
@@ -143,7 +178,7 @@ export async function POST(request: NextRequest) {
         // consume another, so the whole flow costs the user a single slot.
         const { allowed } = await checkRateLimit(ip);
         if (!allowed) {
-          await captureServer(distinctId, 'rate_limit_hit', { stage: 'discover' });
+          await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'discover' });
           send({ type: 'error', error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} new-restaurant searches per hour. Please try again later.` });
           return close();
         }
@@ -151,6 +186,7 @@ export async function POST(request: NextRequest) {
         let restaurantId = existing?.id ?? '';
         if (!restaurantId) {
           restaurantId = await createRestaurantRecord(url);
+          updateSpendContext({ restaurantId });
         } else {
           await resetRestaurantForReparse(restaurantId);
         }
@@ -170,8 +206,8 @@ export async function POST(request: NextRequest) {
           const msg =
             "This website looks like it's down or not live yet. If that's not right, share a direct link to the menu and we'll read it.";
           await markRestaurantNoMenu(restaurantId, 'unavailable', rawMsg);
-          await logAttempt(false, rawMsg);
-          await emitAnalysisCompleted(false);
+          await logAttempt(false, rawMsg, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, rawMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -187,8 +223,8 @@ export async function POST(request: NextRequest) {
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await logAttempt(false, msg, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -204,8 +240,8 @@ export async function POST(request: NextRequest) {
           const msg =
             "We couldn't find a food menu on this website — some restaurants don't publish one online. If they do, paste a direct link to their menu page and we'll try again.";
           await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-          await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await logAttempt(false, msg, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
@@ -240,7 +276,8 @@ export async function POST(request: NextRequest) {
             }),
           });
           // Discovery succeeded — analysis continues in /analyze, which logs
-          // its own terminal outcome (hence no analysis_completed here).
+          // its own terminal outcome (hence no analysis_completed here, and no
+          // outcome on this row: there are no dishes yet to judge).
           await logAttempt(true);
           if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
@@ -268,20 +305,20 @@ export async function POST(request: NextRequest) {
           const msg = err instanceof Error ? err.message : 'AI classification failed';
           // Failed retry ladders still spent tokens — record them.
           if (err instanceof ExtractionError && err.usage) {
-            await logUsage(restaurantId, discovery.finalUrl, err.usage, ctx.title);
+            // (spend already recorded by callClaude when the API call returned)
           }
           // An ExtractionError means we found candidate menus but couldn't read
           // any dishes from them — that's "no readable menu", not a system error.
           if (err instanceof ExtractionError) {
             await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
-            await logAttempt(false, msg);
-            await emitAnalysisCompleted(false);
+            await logAttempt(false, msg, undefined, 'no_menu');
+            await emitAnalysisCompleted(false, 0, msg);
             send({ type: 'no_menu', restaurantId });
             return close();
           }
           await markRestaurantError(restaurantId, msg);
           await logAttempt(false, msg);
-          await emitAnalysisCompleted(false);
+          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'error', error: msg });
           return close();
         }
@@ -289,17 +326,18 @@ export async function POST(request: NextRequest) {
         if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
 
         await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
-        await logAttempt(true);
+        await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });
       } catch (err) {
         Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         await logAttempt(false, msg);
-        await emitAnalysisCompleted(false);
+        await emitAnalysisCompleted(false, 0, msg);
         send({ type: 'error', error: msg });
       }
       close();
+      });
     },
   });
 

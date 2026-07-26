@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
+import { recordSpend } from './ai-spend';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -45,8 +46,55 @@ export function isBillingError(err: unknown): boolean {
 }
 
 function calcCost(model: string, tokensIn: number, tokensOut: number): number {
-  const pricing = MODEL_PRICING[model] ?? { input: 3.00, output: 15.00 };
-  return (tokensIn * pricing.input + tokensOut * pricing.output) / 1_000_000;
+  const pricing = MODEL_PRICING[model];
+  if (!pricing) {
+    // An unpriced model ID used to fall back to Sonnet rates in silence, which
+    // is how a mispriced row would slip through unnoticed. Still fall back, but
+    // say so.
+    console.warn(`[ai] no pricing for model "${model}" — costing at Sonnet rates; add it to MODEL_PRICING`);
+  }
+  const p = pricing ?? { input: 3.00, output: 15.00 };
+  return (tokensIn * p.input + tokensOut * p.output) / 1_000_000;
+}
+
+/**
+ * The single path every Anthropic call goes through.
+ *
+ * Records spend *immediately* after the response arrives and before any parsing,
+ * validation, or early return — see lib/ai-spend.ts for why (July's logged spend
+ * was ~8× under the Console because failure paths dropped their usage on the
+ * floor). Adding a new AI call means calling this, so a new call can't silently
+ * go unbilled.
+ *
+ * Returns the raw message; callers parse it as before.
+ */
+export async function callClaude(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
+  const message = await anthropic().messages.create(params);
+
+  // Cache tokens are priced differently from fresh input: writes at 1.25× and
+  // reads at 0.1×. The pipeline doesn't use prompt caching today, so these are
+  // zero — accounting for them anyway means switching caching on later can't
+  // quietly reintroduce an undercount.
+  //
+  // The installed SDK (0.27.x) doesn't declare these two fields even though the
+  // API returns them, so widen the type rather than drop the handling.
+  const u = message.usage as Anthropic.Usage & {
+    cache_creation_input_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+  };
+  const cacheWrite = u.cache_creation_input_tokens ?? 0;
+  const cacheRead = u.cache_read_input_tokens ?? 0;
+  // usage.input_tokens is the *uncached remainder*, not the whole prompt.
+  const tokensIn = u.input_tokens + cacheWrite + cacheRead;
+  const tokensOut = u.output_tokens;
+
+  const model = String(params.model);
+  const costUsd =
+    calcCost(model, u.input_tokens, tokensOut) +
+    calcCost(model, Math.round(cacheWrite * 1.25 + cacheRead * 0.1), 0);
+
+  await recordSpend({ model, tokensIn, tokensOut, costUsd });
+  return message;
 }
 
 // Lazy client: constructing the SDK at module load throws when no API key is
@@ -145,7 +193,7 @@ export async function classifyMenuWithAI(
   // double-check downstream regardless of which model extracted.
   const model = modelOverride ?? EXTRACTION_MODEL;
 
-  const message = await anthropic().messages.create({
+  const message = await callClaude({
     model,
     max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
     system: SYSTEM_PROMPT,
@@ -261,7 +309,7 @@ export async function classifyMenuFromImageBuffers(
   const model = modelOverride ?? EXTRACTION_MODEL;
   const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 
-  const message = await anthropic().messages.create({
+  const message = await callClaude({
     model,
     max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
     system: SYSTEM_PROMPT,
@@ -371,7 +419,7 @@ export async function labelMenuCandidates(
   const fallback = (): LabeledCandidate[] =>
     candidates.map((c) => ({ ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null }));
 
-  const message = await anthropic().messages.create({
+  const message = await callClaude({
     model: DISCOVERY_MODEL,
     max_tokens: 1024,
     messages: [{ role: 'user', content: buildLabelPrompt(candidates, restaurantName) }],
@@ -412,7 +460,7 @@ export async function analysePageForMenu(
   pageText: string,
   pageUrl: string
 ): Promise<{ isMenu: boolean; suggestedLinks: string[] }> {
-  const message = await anthropic().messages.create({
+  const message = await callClaude({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 512,
     messages: [
@@ -533,7 +581,7 @@ export async function classifyMenuFromPdfBuffer(
       },
     ];
 
-    const message = await anthropic().messages.create({
+    const message = await callClaude({
       model,
       max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
       system: SYSTEM_PROMPT,
@@ -633,7 +681,7 @@ export async function verifyVegClassifications(
   });
 
   try {
-    const message = await anthropic().messages.create({
+    const message = await callClaude({
       model: VERIFICATION_MODEL,
       max_tokens: 4096,
       messages: [{ role: 'user', content: buildVerifyPrompt(dishes, restaurantName) }],

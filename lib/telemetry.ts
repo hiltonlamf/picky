@@ -9,6 +9,41 @@ import type { MenuCandidate } from '@/types';
  */
 export const ANON_ID_COOKIE = 'picky_anon_id';
 
+/**
+ * Mirrors the browser's analytics consent so *server* code can see it.
+ *
+ * The client-side consent gate can't reach API routes: server events are sent
+ * by posthog-node inside the route handler, with no access to localStorage. So
+ * `analysis_completed` and `dish_reported` were reaching PostHog for visitors
+ * who had never accepted anything (confirmed on the PR #21 preview).
+ *
+ * Written by grantConsent()/denyConsent(), read by captureServer(). Not
+ * httpOnly, because the client is what sets it.
+ *
+ * Note the deliberate limit of what this gates: **only third-party analytics.**
+ * Our own operational records — parse_attempts, ai_usage_log, feedback — carry
+ * on regardless. Those are how the service is run and how its costs are
+ * accounted for, not behavioural tracking, and losing them would leave us
+ * unable to tell whether the product works or what it costs.
+ */
+export const ANALYTICS_CONSENT_COOKIE = 'picky_analytics_consent';
+
+/** Just the bit of NextRequest we need, so this stays easy to call and test. */
+type CookieReader = { cookies: { get(name: string): { value: string } | undefined } };
+
+/**
+ * Whether this visitor agreed to analytics, from the cookie the browser sets.
+ *
+ * Lives here rather than beside captureServer deliberately: it's pure cookie
+ * logic with no dependency on posthog-node, and keeping it separate means
+ * testing it doesn't drag the whole SDK into the test run.
+ *
+ * Fails closed — no cookie means no consent.
+ */
+export function hasServerAnalyticsConsent(request: CookieReader): boolean {
+  return request.cookies.get(ANALYTICS_CONSENT_COOKIE)?.value === '1';
+}
+
 /** localStorage key: timestamp (ms) of this browser's first successful
  *  analysis — the anchor for the day-7+ NPS prompt. */
 export const FIRST_ANALYSIS_KEY = 'picky-first-analysis-at';
@@ -50,3 +85,55 @@ export function domainOf(url: string): string | null {
     return null;
   }
 }
+
+/**
+ * Stable error codes.
+ *
+ * Raw error messages are useless for grouping — one wording change and PostHog
+ * shows two unrelated-looking problems, and a chart broken down by message is a
+ * list of fifty one-offs instead of five real issues. The message is still kept
+ * as a property for debugging; the code is what we count.
+ */
+export type ErrorCode =
+  | 'timeout'
+  | 'connection_dropped'
+  | 'invalid_url'
+  | 'rate_limited'
+  | 'site_unreachable'
+  | 'no_menu_readable'
+  | 'not_found'
+  | 'network'
+  | 'server_error'
+  | 'unknown';
+
+const PATTERNS: Array<[RegExp, ErrorCode]> = [
+  [/rate limit|too many requests|slow down/i, 'rate_limited'],
+  [/connection dropped|no response body|stream closed/i, 'connection_dropped'],
+  [/taking much longer|timed? ?out|took longer than expected/i, 'timeout'],
+  [/invalid url|invalid request|enter a valid|must be a valid/i, 'invalid_url'],
+  // Apostrophes are matched as a class: the app's user-facing copy uses curly
+  // ’ (U+2019), so a pattern written with a straight ' silently never matches
+  // and the error lands in 'unknown'. Caught by tests/analytics.test.ts, which
+  // asserts against the real strings rather than retyped approximations.
+  [/not found|does ?n['’]?o?t exist|was removed/i, 'not_found'],
+  // Widened after a real run classified as 'unknown': the live copy says
+  // "couldn't READ A FOOD menu" and "couldn't FIND A food menu", neither of
+  // which matched "read a menu". A failure_reason of 'unknown' makes the whole
+  // health dashboard breakdown useless, so these patterns are asserted against
+  // the actual strings in tests/analytics.test.ts.
+  [/could ?n['’]?o?t (read|find) a [\w ]*menu|no menu|unreadable|not publish one/i, 'no_menu_readable'],
+  [/down or not live|looks like it'?s down/i, 'site_unreachable'],
+  [/failed to fetch|network ?error|load failed|econnrefused|enotfound/i, 'network'],
+  [/unreachable|refused|dns|certificate|ssl|tls/i, 'site_unreachable'],
+  [/^(internal )?server error|^5\d\d\b/i, 'server_error'],
+];
+
+/** Map a raw error message to a stable code. Order matters — first match wins. */
+export function classifyError(message: string | null | undefined): ErrorCode {
+  if (!message) return 'unknown';
+  for (const [pattern, code] of PATTERNS) {
+    if (pattern.test(message)) return code;
+  }
+  return 'unknown';
+}
+
