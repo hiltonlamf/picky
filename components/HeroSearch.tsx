@@ -155,12 +155,21 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
    */
   const parsingRef = useRef<{ startedAt: number; step: string; domain: string | null } | null>(null);
   parsingRef.current =
-    state === 'parsing' && startedAt && !reachedTerminalRef.current
+    state === 'parsing' && startedAt
       ? { startedAt, step: log[log.length - 1] ?? 'starting', domain: domainOf(url.trim()) }
       : null;
 
   useEffect(() => {
     const report = () => {
+      // Checked HERE, not while computing parsingRef, and that distinction is the
+      // whole bug. parsingRef is assigned during render; setting a ref does not
+      // trigger a re-render, so when a terminal SSE event sets
+      // reachedTerminalRef the render that would have cleared parsingRef never
+      // happens. The stale non-null value then survived to unmount and reported
+      // a completed analysis as abandoned — which is exactly what shipped and
+      // showed up on real traffic twice, on searches that returned 28 and 27
+      // dishes. Reading the flag at report time is immune to render timing.
+      if (reachedTerminalRef.current) return;
       const p = parsingRef.current;
       if (!p) return;
       parsingRef.current = null; // once per abandonment

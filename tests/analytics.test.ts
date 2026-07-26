@@ -241,6 +241,61 @@ describe('traffic exclusions', () => {
   });
 });
 
+describe('analysis_abandoned must not fire on success', () => {
+  /**
+   * This is the shape of a bug that reached production twice, so it gets a test
+   * even though the real logic lives in a React component.
+   *
+   * HeroSearch computes `parsingRef` during render and gates abandonment on a
+   * separate `reachedTerminalRef`. The first fix checked the terminal flag while
+   * computing parsingRef — which never runs again, because setting a ref does not
+   * trigger a re-render. The stale value survived to unmount and reported
+   * completed analyses as abandoned; on real traffic that meant searches
+   * returning 28 and 27 dishes were both logged as abandonments, which would have
+   * pinned the main drop-off metric near 100% forever.
+   *
+   * The invariant: the terminal flag must be read AT REPORT TIME, so it is immune
+   * to whether a render happened in between.
+   */
+  function makeReporter() {
+    const parsingRef = { current: null as null | { startedAt: number } };
+    const reachedTerminalRef = { current: false };
+    const fired: number[] = [];
+    // Mirrors the report() closure in HeroSearch.
+    const report = () => {
+      if (reachedTerminalRef.current) return;
+      const p = parsingRef.current;
+      if (!p) return;
+      parsingRef.current = null;
+      fired.push(Date.now() - p.startedAt);
+    };
+    return { parsingRef, reachedTerminalRef, report, fired };
+  }
+
+  it('does not report when the stream reached a terminal outcome and no re-render followed', () => {
+    const r = makeReporter();
+    r.parsingRef.current = { startedAt: Date.now() - 5_000 }; // set during a 'parsing' render
+    r.reachedTerminalRef.current = true;                      // terminal SSE event — no re-render
+    r.report();                                               // unmount on router.push
+    expect(r.fired).toHaveLength(0);
+  });
+
+  it('still reports a genuine abandonment', () => {
+    const r = makeReporter();
+    r.parsingRef.current = { startedAt: Date.now() - 5_000 };
+    r.report(); // tab closed mid-analysis; never reached a terminal outcome
+    expect(r.fired).toHaveLength(1);
+  });
+
+  it('reports at most once', () => {
+    const r = makeReporter();
+    r.parsingRef.current = { startedAt: Date.now() - 5_000 };
+    r.report();
+    r.report(); // pagehide then unmount both fire
+    expect(r.fired).toHaveLength(1);
+  });
+});
+
 describe('server-side consent gate', () => {
   // The browser's localStorage gate is invisible inside an API route, so
   // server events went out regardless of consent. Confirmed on the PR #21
