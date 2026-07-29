@@ -376,3 +376,48 @@ CREATE TRIGGER dishes_updated_at
 -- ============================================================
 -- Run as a Supabase cron job or edge function:
 -- DELETE FROM rate_limit_events WHERE created_at < NOW() - INTERVAL '2 hours';
+
+-- ============================================================
+-- Row-Level Security lockdown  (REQUIRED — do not skip)
+-- ============================================================
+-- Supabase's stock setup grants the `anon` role (the key that ships in any
+-- public site) full SELECT/INSERT/UPDATE/DELETE on every table in `public`.
+-- RLS is the only thing standing in front of that. On 2026-07-26 Supabase
+-- flagged four tables here with RLS switched off — anyone with the project URL
+-- could have read or deleted user feedback and the evaluation ground truth.
+--
+-- Picky's browser code NEVER talks to Supabase directly: every read and write
+-- goes through Next.js server code using SUPABASE_SERVICE_ROLE_KEY, which has
+-- BYPASSRLS. So the correct configuration is RLS on with NO policies — a
+-- policy would open access, not restrict it. Supabase's linter shows
+-- "RLS enabled, no policy" as an INFO notice for these tables; that is
+-- intentional.
+--
+-- Mirrors supabase/migrations/20260729120000_lock_down_rls.sql and
+-- 20260729130000_harden_public_functions.sql.
+
+-- Enable RLS on every table in `public`, including any added later.
+DO $$
+DECLARE t record;
+BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
+  END LOOP;
+END $$;
+
+-- Second layer: remove the underlying grants, so that even if RLS is later
+-- switched off on a table by accident, anon/authenticated still have no reach.
+REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon, authenticated, PUBLIC;
+
+-- New objects are born locked rather than open.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON TABLES    FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE ALL ON FUNCTIONS FROM anon, authenticated, PUBLIC;
+
+-- service_role keeps its grants and BYPASSRLS — that is what the app,
+-- the admin pages and everything in scripts/ authenticate as.
