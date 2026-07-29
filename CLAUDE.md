@@ -121,6 +121,10 @@ his **experienced technical co-founder**. That means:
      (no client-controlled URL) is the model to follow — don't reintroduce
      a path where the client passes a raw URL for the server to fetch.
    - Rate-limit and validate anything public-facing.
+   - **Any new table, view or DB function is public until you lock it.**
+     Supabase grants the `anon` role full access by default. See the
+     "Database access control" section below — it is a checklist, not a
+     reminder, and skipping it is how four tables sat world-writable.
    - If you spot a real vulnerability while working on something else,
      say so plainly and explain the actual risk (e.g. "someone could use
      this to drain our API budget" or "this could leak your Supabase
@@ -577,6 +581,86 @@ export or admin view is still open work.
   CSV spend backup first (`scripts/backup-spend.ts` → `db/spend-backups/`)
   and refuses to delete anything if that backup fails. Never wipe by
   deleting `restaurants` rows directly.
+
+## Database access control (RLS) — locked down 2026-07-29
+
+**Supabase ships every table in `public` wide open to the `anon` role** — the
+key that is designed to be embedded in public websites. Stock grants give it
+SELECT/INSERT/UPDATE/DELETE/TRUNCATE, and Row-Level Security is the *only* thing
+standing in front of that. On 2026-07-26 Supabase emailed a **critical**
+`rls_disabled_in_public` alert: four tables had RLS switched off —
+`restaurant_feedback` (free-text user notes, `ip_hash`, `anon_id`) and the three
+`eval_*` tables (the human-reviewed ground truth `/admin/eval` measures against).
+Anyone with the project URL could have read or deleted all of it.
+
+### The model: server-only, and therefore ZERO policies
+
+The browser **never** talks to Supabase directly. Every read and write goes
+through Next.js server code using `SUPABASE_SERVICE_ROLE_KEY` (`lib/db.ts`,
+`lib/rate-limit.ts`, `lib/init-dublin.ts`, `app/api/admin/login/route.ts`), and
+the service role has BYPASSRLS. So the correct configuration is **RLS enabled
+with no policies at all**: RLS on + zero policies = deny everything to
+`anon`/`authenticated`, while the app, admin pages and `scripts/` are untouched.
+
+**A policy would *open* access, not restrict it.** Supabase's advisor lists all
+14 tables under `rls_enabled_no_policy` at INFO level — that is intentional and
+must stay that way. Do not "tidy it up" by adding policies. The only thing that
+would justify one is the browser genuinely starting to query Supabase directly,
+and that is a decision to raise with the founder, not a refactor.
+
+Two layers, in `supabase/migrations/20260729120000_lock_down_rls.sql` and
+`20260729130000_harden_public_functions.sql`, mirrored at the end of
+`db/schema.sql` so a fresh bootstrap is born locked:
+1. RLS on all 14 tables. The stale `city_guides` "Allow public read" policy was
+   dropped — `USING true` ignored the `status` column, so unpublished **draft**
+   guides were readable by anyone.
+2. `REVOKE ALL` on tables/sequences/functions from `anon`, `authenticated` and
+   `PUBLIC`, plus `ALTER DEFAULT PRIVILEGES` so new objects inherit nothing.
+   Belt *and* braces on purpose: one accidental "disable RLS" click in the
+   dashboard is exactly what caused this, and the revoked grants mean that
+   click no longer re-exposes the table.
+
+### The PR checklist
+
+- **Added a table?** RLS must be enabled and it must have no policies. The
+  `rls_auto_enable()` event trigger catches new tables automatically — keep it;
+  it cannot be called over RPC (it returns `event_trigger`), so ignore the
+  advisor's SECURITY DEFINER warning about it.
+- **Added a DB function?** Postgres grants `EXECUTE` to `PUBLIC` by default.
+  Revoke it. See the trap below.
+- **Added a view?** Views are not covered by the table RLS above and can leak
+  around it — check it explicitly.
+- **Migration touching grants or policies?** Re-run the advisor afterwards
+  (command below), don't assume.
+
+### The two traps that made this worse than it looked
+
+1. **Revoking from `anon` and `authenticated` is not enough — you must revoke
+   from `PUBLIC`.** Postgres grants function `EXECUTE` to `PUBLIC` by default
+   and `anon` inherits it, so a revoke naming only the two roles leaves the
+   hole wide open. This is how `prune_parse_attempts(retain_days)` stayed
+   callable as `POST /rest/v1/rpc/prune_parse_attempts` with `retain_days=0` —
+   an unauthenticated request that would have deleted the entire
+   `parse_attempts` history.
+2. **A "permission denied" curl proves nothing if your key is empty.** The
+   anon key in `.env.local` is literally blank (it is unused — nothing in the
+   app reads it), so a test using it returns `No API key found` and *looks*
+   like a pass. That is a false negative. Pull a real key from the Management
+   API (`/v1/projects/{ref}/api-keys?reveal=true`), test with that, and delete
+   it from the scratchpad afterwards. See also the empty-env-var shadow below.
+
+### Verify with the advisor, not by eye
+
+```bash
+curl -sS "https://api.supabase.com/v1/projects/ipagpizavkrqoroedkty/advisors/security" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"
+```
+
+Expect **0 ERROR/CRITICAL** and only the 14 INFO `rls_enabled_no_policy`
+notices. Then confirm both directions, because either alone is misleading:
+a real anon key must get `permission denied` on every table, **and** the
+service-role path must still read them all. A lockdown that also breaks the app
+is not a fix.
 
 ## Infra gotchas (Supabase & Vercel) — learned the hard way
 
