@@ -77,7 +77,9 @@ export function headlineCounts(sections: MenuSection[]): {
       }
     }
   }
-  for (const key of counted) aside.delete(key);
+  // forEach, not for…of: this project compiles below es2015, where iterating a
+  // Set directly needs --downlevelIteration.
+  counted.forEach((key) => aside.delete(key));
   return { counted: counted.size, aside: aside.size, countedVegan: vegan.size };
 }
 
@@ -187,7 +189,7 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
       }
     }
     // A dish counted as a real option shouldn't also swell the aside tally.
-    for (const key of countedSeen) asideSeen.delete(key);
+    countedSeen.forEach((key) => asideSeen.delete(key));
     return { label, vegOptions: countedSeen.size, asideOptions: asideSeen.size };
   });
 
