@@ -44,7 +44,9 @@ function normalize(text: string): string {
   return (text ?? '')
     .replace(/\([^)]*\)/g, ' ')
     .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
+    // The combining-diacritics block, rather than \p{Diacritic}: the unicode
+    // property escape needs an es6 target, and this project compiles lower.
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
