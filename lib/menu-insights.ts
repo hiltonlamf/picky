@@ -83,21 +83,38 @@ function medianPrice(sections: MenuSection[]): number | null {
 }
 
 /**
- * Resolves the ambiguous bar-snack cases on price, computing the price level at
- * most once and ONLY if something ambiguous actually turned up — the common
- * case (no bar-snack section) never pays for it.
+ * Settles the ambiguous cases on price, computing the price level at most once
+ * and ONLY if something ambiguous actually turned up — the common restaurant
+ * (no bar-snack section, no dish named "… sauce") never pays for it.
  *
- * A dish with no price stays counted: we can't judge what we can't see.
+ * Returns true when the dish is CHEAP relative to the menu, i.e. not a real
+ * dish. Undecidable (no price, or too few prices to compare against) returns
+ * null, and the caller keeps the name-based default.
  */
-function makeNibbleTest(sections: MenuSection[]): (dish: Dish) => boolean {
+function makePriceTest(sections: MenuSection[]): (dish: Dish) => boolean | null {
   let level: number | null | undefined; // undefined = not computed yet
   return (dish) => {
     const price = parsePrice(dish.price);
-    if (price === null) return false;
+    if (price === null) return null;
     if (level === undefined) level = medianPrice(sections);
-    if (level === null) return false;
+    if (level === null) return null;
     return price < level * NIBBLE_PRICE_RATIO;
   };
+}
+
+/** Final verdict for one dish, applying the price tiebreak where the name alone
+ *  was not enough. */
+function isCountedWithPrice(
+  sectionName: string,
+  dish: Dish,
+  priceTest: (dish: Dish) => boolean | null
+): boolean {
+  const verdict = classifyDishRole(sectionName, dish);
+  if (!verdict.ambiguous) return verdict.role === 'counted';
+  const cheap = priceTest(dish);
+  // No price to go on — fall back to what the name suggested.
+  if (cheap === null) return verdict.role === 'counted';
+  return !cheap;
 }
 
 /** Live (non-deleted) dishes of a section. */
@@ -127,14 +144,12 @@ export function headlineCounts(
   const counted = new Set<string>();
   const aside = new Set<string>();
   const vegan = new Set<string>();
-  const isNibble = makeNibbleTest(priceContext);
+  const priceTest = makePriceTest(priceContext);
   for (const section of sections) {
     for (const dish of liveDishes(section)) {
       if (!isVeg(dish)) continue;
       const key = normalizeDishName(dish.name) || `#${dish.id}`;
-      const verdict = classifyDishRole(section.name, dish);
-      const keep = verdict.role === 'counted' && !(verdict.ambiguous && isNibble(dish));
-      if (keep) {
+      if (isCountedWithPrice(section.name, dish, priceTest)) {
         counted.add(key);
         if (dish.classification === 'vegan') vegan.add(key);
       } else {

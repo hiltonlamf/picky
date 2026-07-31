@@ -146,6 +146,26 @@ describe('guideInsights', () => {
       const ins = guideInsights(withMains([section('Snacks', [dish('Mystery plate', 'vegan', null)])]));
       expect(ins.maxVegOptions).toBe(3);
     });
+
+    // Cuts the other way too. A Thai kitchen names main courses "… Sauce":
+    // Baan Thai sells "Tamarind Sauce" at €26.50 against a €20.95 median.
+    it('rescues an expensive dish named "… sauce" from the condiment rule', () => {
+      const ins = guideInsights(
+        withMains([
+          section('Signature', [
+            dish('Tamarind Sauce', 'vegetarian', '€26.50'), // a main course
+            dish('Mint Sauce', 'vegetarian', '€2.75'), // an actual condiment
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(3); // risotto, gnocchi, tamarind
+      expect(ins.asideCount).toBe(1); // the mint sauce
+    });
+
+    it('leaves an unpriced "… sauce" as a condiment', () => {
+      const ins = guideInsights(withMains([section('Signature', [dish('Chilli Sauce', 'vegan', null)])]));
+      expect(ins.maxVegOptions).toBe(2);
+    });
   });
 
   it('counts "unknown" dishes as veggie — when in doubt, count it', () => {

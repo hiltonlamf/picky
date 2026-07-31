@@ -34,14 +34,19 @@ export interface DishRoleVerdict {
   /** Which rule matched, for the audit report. Null when the dish is counted. */
   rule: string | null;
   /**
-   * Counted, but the name alone cannot settle whether this is a real dish or a
-   * bar nibble — the caller may apply the price tiebreak (see
-   * isNibblePriced in lib/menu-insights).
+   * The name alone cannot settle this one; PRICE decides (see makePriceTest in
+   * lib/menu-insights). Cheap relative to the menu → not a real dish; at or
+   * above that line → a real dish. `role` is the answer when there is no price
+   * to go on.
    *
-   * Kept deliberately RARE. Price is a dangerous signal here: at Pickle the veg
-   * curries run €8.50–€14.50 against €38 mains, so a broad price rule would
-   * delete exactly the dishes this whole feature exists to protect. Only a
-   * bar-snack section earns the flag, never "Sides" or "Accompaniments".
+   * It cuts both ways: a bar-snack-section dish is counted unless it's cheap,
+   * while a "… sauce" is a condiment unless it's dear (Baan Thai's €26.50
+   * "Tamarind Sauce" is a main course).
+   *
+   * Kept deliberately RARE. Price is dangerous here: at Pickle the veg curries
+   * run €8.50–€14.50 against €38 mains, so a broad price rule would delete
+   * exactly the dishes this feature exists to protect. Only a bar-snack section
+   * earns the flag, never "Sides" or "Accompaniments".
    */
   ambiguous?: boolean;
 }
@@ -224,11 +229,13 @@ export function classifyDishRole(
 
   // A dish whose whole name ENDS in "sauce", in four words or fewer. This one
   // reads the full name rather than the head, because a sauce is often named
-  // for its ingredients ("Tomato & coriander sauce" — head "tomato"). The word
-  // limit is what protects Etto's "Padron pepper and romesco sauce" (€12, a
-  // real tapa) from the same rule.
+  // for its ingredients ("Tomato & coriander sauce" — head "tomato").
+  //
+  // Marked ambiguous because a Thai kitchen names MAIN COURSES this way: Baan
+  // Thai sells "Tamarind Sauce" and "Choo Chee Sauce" at €26.50. Price settles
+  // it — a €2.75 pot of sauce is a condiment, a €26.50 one is dinner.
   if (/\bsauces?$/.test(name) && wordCount(name) <= 4) {
-    return { role: 'condiment', rule: 'named "… sauce"' };
+    return { role: 'condiment', rule: 'named "… sauce"', ambiguous: true };
   }
 
   if (BARE_STAPLE_RE.test(head)) return { role: 'staple', rule: `bare "${head}"` };
