@@ -42,6 +42,17 @@ describe('parsePrice', () => {
     expect(parsePrice('')).toBeNull();
     expect(parsePrice('Market Price')).toBeNull();
   });
+
+  // Stripping non-digits turned a €12.99 pizza into €912.99, which put it top
+  // of the "priciest first" highlight ranking at several restaurants.
+  it('survives sizes, ranges and decimal commas', () => {
+    expect(parsePrice('9" €12.99 / 12" €14.99')).toBe(12.99); // not 912.991214
+    expect(parsePrice('€18 (dinner) / €16 (lunch)')).toBe(18);
+    expect(parsePrice('€8–€11')).toBe(8);
+    expect(parsePrice('Half dozen €21 | Dozen €42')).toBe(21);
+    expect(parsePrice('3,75')).toBe(3.75); // Dutch decimal comma, not 375
+    expect(parsePrice('38/70')).toBe(38);
+  });
 });
 
 describe('guideInsights', () => {
@@ -88,6 +99,53 @@ describe('guideInsights', () => {
     expect(ins.maxVegOptions).toBe(3); // not 5
     expect(ins.bestMenu.vegan).toBe(3); // the split de-dupes the same way
     expect(ins.totalDishes).toBe(5); // nothing is removed from the menu itself
+  });
+
+  describe('the price tiebreak for bar snacks', () => {
+    // Only fires in an explicit bar-snack section, and only under half the
+    // restaurant's median price.
+    const withMains = (extra: MenuSection[]) =>
+      restaurant([
+        section('Mains', [
+          dish('Risotto', 'vegetarian', '€20'),
+          dish('Steak', 'neither', '€28'),
+          dish('Cod', 'neither', '€24'),
+          dish('Gnocchi', 'vegetarian', '€19'),
+        ]),
+        ...extra,
+      ]);
+
+    it('demotes a cheap nibble but keeps a substantial one', () => {
+      const ins = guideInsights(
+        withMains([
+          section('Nibbles', [
+            dish('Tartine bread and olive oil', 'vegetarian', '€4'), // ~19% of median
+            dish('Padron pepper and romesco', 'vegan', '€12'), // ~57%, a real plate
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(3); // risotto, gnocchi, padron — not the tartine
+      expect(ins.asideCount).toBe(1);
+    });
+
+    it('never touches a "Sides" section, where the veg mains live', () => {
+      // Pickle's curries run €8.50–€14.50 against €38 mains. A price rule that
+      // reached them would delete the whole point of this feature.
+      const ins = guideInsights(
+        withMains([
+          section('Condiments/Sides', [
+            dish('Palak Paneer', 'vegetarian', '€8.50'),
+            dish('Bhindi Masala', 'vegetarian', '€8'),
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(4);
+    });
+
+    it('keeps an unpriced nibble — we cannot judge what we cannot see', () => {
+      const ins = guideInsights(withMains([section('Snacks', [dish('Mystery plate', 'vegan', null)])]));
+      expect(ins.maxVegOptions).toBe(3);
+    });
   });
 
   it('counts "unknown" dishes as veggie — when in doubt, count it', () => {

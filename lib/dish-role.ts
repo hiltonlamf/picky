@@ -33,9 +33,28 @@ export interface DishRoleVerdict {
   role: DishRole;
   /** Which rule matched, for the audit report. Null when the dish is counted. */
   rule: string | null;
+  /**
+   * Counted, but the name alone cannot settle whether this is a real dish or a
+   * bar nibble — the caller may apply the price tiebreak (see
+   * isNibblePriced in lib/menu-insights).
+   *
+   * Kept deliberately RARE. Price is a dangerous signal here: at Pickle the veg
+   * curries run €8.50–€14.50 against €38 mains, so a broad price rule would
+   * delete exactly the dishes this whole feature exists to protect. Only a
+   * bar-snack section earns the flag, never "Sides" or "Accompaniments".
+   */
+  ambiguous?: boolean;
 }
 
 const COUNTED: DishRoleVerdict = { role: 'counted', rule: null };
+
+// Sections that are explicitly a bar-nibble context — where a cheap item really
+// is a nibble and not the vegetarian offering. Anchored to the whole section
+// name so "Snacks & Extras" or "Bar Bites" qualify but "Sides" never does.
+// "Tapas"/"Raciones"/"Sharing" are excluded on purpose: at those restaurants
+// the small plates ARE the meal.
+const NIBBLE_SECTION_RE =
+  /^(nibbles?|snacks?|bites?|bar\s+(snacks?|bites?)|para\s+picar|pinxtos?|pintxos?|aperitivos?)(\s*[&+/]\s*\w+)?$/i;
 
 /** Lowercase, drop parentheticals, fold accents, collapse whitespace. Folding
  *  accents means the keyword lists below are written unaccented once and still
@@ -156,8 +175,15 @@ const STAPLE_KEYWORDS = [
 /** Bare "rice"/"bread" as the entire dish name. */
 const BARE_STAPLE_RE = /^(rice|bread|pita|naan|chips|fries|olives)$/;
 
-/** Prefixes that mark an add-on rather than a dish in its own right. */
-const ADDON_PREFIX_RE = /^(extra|side of|add|additional)\b/;
+/**
+ * Marks an add-on rather than a dish in its own right — the café pattern of
+ * "add avocado", "+ fried egg", "side of strawberries". A topping is never a
+ * dish however tempting it is; these belong in the sides tally.
+ *
+ * Kept to leading position so it can't fire on a real dish that merely
+ * contains the word (a "Cheddar and onion toastie" is not an add-on).
+ */
+const ADDON_PREFIX_RE = /^(\+|extra|side of|add|add[-\s]?on|additional|topping)\b/;
 
 /**
  * What role a dish plays on the menu. Only `'counted'` feeds the headline
@@ -209,6 +235,10 @@ export function classifyDishRole(
 
   const staple = includesAny(head, STAPLE_KEYWORDS);
   if (staple) return { role: 'staple', rule: `named "${staple}"` };
+
+  // Nothing in the name settles it, and we're in a bar-snack section. Counted
+  // for now; the caller may demote it on price.
+  if (NIBBLE_SECTION_RE.test(section)) return { role: 'counted', rule: null, ambiguous: true };
 
   return COUNTED;
 }

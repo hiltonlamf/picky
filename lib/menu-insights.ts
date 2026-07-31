@@ -20,9 +20,18 @@ import { classifyDishRole } from '@/lib/dish-role';
  *  there's no usable number (e.g. "Market Price", empty). */
 export function parsePrice(price: string | null | undefined): number | null {
   if (!price) return null;
-  const cleaned = price.replace(/[^0-9.]/g, '');
-  if (!cleaned) return null;
-  const n = parseFloat(cleaned);
+  // Menus write prices in ways that stripping non-digits mangles badly:
+  //   '9" €12.99 / 12" €14.99'  -> 912.991214   (a €913 Margherita)
+  //   '€8–€11'                  -> 811
+  //   '3,75'                    -> 375          (Dutch decimal comma)
+  // So: prefer the first number attached to a currency symbol — that skips the
+  // 9"/12" pizza sizes — and fall back to the first number otherwise. A comma
+  // before one or two digits is a decimal separator, not a thousands one.
+  const withCurrency = price.match(/[€£$]\s*(\d+(?:[.,]\d{1,2})?)/);
+  const bare = price.match(/\d+(?:[.,]\d{1,2})?/);
+  const token = withCurrency?.[1] ?? bare?.[0];
+  if (!token) return null;
+  const n = parseFloat(token.replace(',', '.'));
   return Number.isFinite(n) ? n : null;
 }
 
@@ -44,6 +53,53 @@ export function isCountedVeg(sectionName: string | null | undefined, dish: Dish)
   return isVeg(dish) && classifyDishRole(sectionName, dish).role === 'counted';
 }
 
+// A dish in a bar-snack section priced below this share of the restaurant's
+// typical dish is a nibble, not an option. Where mains are ~€20, a €5 plate of
+// olives-and-almonds is not what a vegetarian came for.
+const NIBBLE_PRICE_RATIO = 0.5;
+/** Below this many priced dishes there's no reliable price level to compare to. */
+const MIN_PRICES_FOR_TIEBREAK = 4;
+
+/**
+ * The restaurant's typical dish price — the MEDIAN of everything priced.
+ *
+ * Deliberately not "the average of the top 3", which was the first idea: the
+ * top of a menu is caviar, seafood towers and sharing lobster, so at Fade
+ * Street Social that reads €132 and would have thrown out a €14 tomato salad.
+ * A median ignores those outliers.
+ */
+function medianPrice(sections: MenuSection[]): number | null {
+  const prices: number[] = [];
+  for (const s of sections) {
+    for (const d of liveDishes(s)) {
+      const p = parsePrice(d.price);
+      if (p !== null && p > 0) prices.push(p);
+    }
+  }
+  if (prices.length < MIN_PRICES_FOR_TIEBREAK) return null;
+  prices.sort((a, b) => a - b);
+  const mid = Math.floor(prices.length / 2);
+  return prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+}
+
+/**
+ * Resolves the ambiguous bar-snack cases on price, computing the price level at
+ * most once and ONLY if something ambiguous actually turned up — the common
+ * case (no bar-snack section) never pays for it.
+ *
+ * A dish with no price stays counted: we can't judge what we can't see.
+ */
+function makeNibbleTest(sections: MenuSection[]): (dish: Dish) => boolean {
+  let level: number | null | undefined; // undefined = not computed yet
+  return (dish) => {
+    const price = parsePrice(dish.price);
+    if (price === null) return false;
+    if (level === undefined) level = medianPrice(sections);
+    if (level === null) return false;
+    return price < level * NIBBLE_PRICE_RATIO;
+  };
+}
+
 /** Live (non-deleted) dishes of a section. */
 function liveDishes(section: MenuSection): Dish[] {
   return section.dishes.filter((d) => !d.deletedAt);
@@ -57,7 +113,13 @@ function liveDishes(section: MenuSection): Dish[] {
  * The restaurant page uses this directly so its stat capsule and the guide
  * card can never disagree; guideInsights applies the same logic per menu.
  */
-export function headlineCounts(sections: MenuSection[]): {
+export function headlineCounts(
+  sections: MenuSection[],
+  /** Sections to take the price level from — pass the whole restaurant when
+   *  counting one menu, so a cheap lunch menu isn't judged against itself.
+   *  Defaults to the sections being counted. */
+  priceContext: MenuSection[] = sections
+): {
   counted: number;
   aside: number;
   countedVegan: number;
@@ -65,11 +127,14 @@ export function headlineCounts(sections: MenuSection[]): {
   const counted = new Set<string>();
   const aside = new Set<string>();
   const vegan = new Set<string>();
+  const isNibble = makeNibbleTest(priceContext);
   for (const section of sections) {
     for (const dish of liveDishes(section)) {
       if (!isVeg(dish)) continue;
       const key = normalizeDishName(dish.name) || `#${dish.id}`;
-      if (isCountedVeg(section.name, dish)) {
+      const verdict = classifyDishRole(section.name, dish);
+      const keep = verdict.role === 'counted' && !(verdict.ambiguous && isNibble(dish));
+      if (keep) {
         counted.add(key);
         if (dish.classification === 'vegan') vegan.add(key);
       } else {
@@ -177,21 +242,20 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   // appeared twice and the card claimed 11 options where a diner has 6. The
   // highlights list has always de-duped this way (normalizeDishName); the
   // count simply never did.
-  const perMenu: PerMenuVeg[] = order.map((label) => {
-    const countedSeen = new Set<string>();
-    const asideSeen = new Set<string>();
-    for (const section of byLabel.get(label)!) {
-      for (const dish of liveDishes(section)) {
-        if (!isVeg(dish)) continue;
-        // Fall back to the raw name so an unnameable dish still counts once.
-        const key = normalizeDishName(dish.name) || `#${dish.id}`;
-        (isCountedVeg(section.name, dish) ? countedSeen : asideSeen).add(key);
-      }
-    }
-    // A dish counted as a real option shouldn't also swell the aside tally.
-    countedSeen.forEach((key) => asideSeen.delete(key));
-    return { label, vegOptions: countedSeen.size, asideOptions: asideSeen.size };
-  });
+  //
+  // Each menu goes through headlineCounts, the same helper the restaurant page
+  // calls — so the card and the page cannot drift apart, including on the
+  // price tiebreak. The price level is taken from the WHOLE restaurant, not
+  // one menu, so a cheap lunch menu isn't judged against itself.
+  const counts = new Map<string | null, ReturnType<typeof headlineCounts>>();
+  for (const label of order) {
+    counts.set(label, headlineCounts(byLabel.get(label)!, restaurant.sections));
+  }
+  const perMenu: PerMenuVeg[] = order.map((label) => ({
+    label,
+    vegOptions: counts.get(label)!.counted,
+    asideOptions: counts.get(label)!.aside,
+  }));
 
   // Best single menu = the one with the most COUNTED veg options.
   let bestLabel: string | null = order[0] ?? null;
@@ -204,24 +268,13 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
       bestLabel = m.label;
     }
   }
-  // The vegan/veg split must come from the same counted set as the headline,
-  // or the card could read "5 vegan" beside "3 veggie".
-  // De-duped the same way, or "5 vegan" could sit beside a headline of 3.
-  const bestSeen = new Set<string>();
-  const bestCounted: Dish[] = [];
-  for (const s of byLabel.get(bestLabel) ?? []) {
-    for (const d of liveDishes(s)) {
-      if (!isCountedVeg(s.name, d)) continue;
-      const key = normalizeDishName(d.name) || `#${d.id}`;
-      if (bestSeen.has(key)) continue;
-      bestSeen.add(key);
-      bestCounted.push(d);
-    }
-  }
+  // The vegan split comes from the same counted set as the headline, or the
+  // card could read "5 vegan" beside "3 veggie".
+  const best = counts.get(bestLabel);
   const bestMenu = {
     label: bestLabel,
-    vegan: bestCounted.filter((d) => d.classification === 'vegan').length,
-    vegetarian: bestCounted.filter((d) => d.classification === 'vegetarian').length,
+    vegan: best?.countedVegan ?? 0,
+    vegetarian: (best?.counted ?? 0) - (best?.countedVegan ?? 0),
   };
 
   const totalDishes = restaurant.sections.flatMap(liveDishes).length;
