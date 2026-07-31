@@ -185,10 +185,12 @@ export function classifyDishRole(
   const condiment = includesAny(head, CONDIMENT_KEYWORDS);
   if (condiment) return { role: 'condiment', rule: `named "${condiment}"` };
 
-  // A dish CALLED a sauce, in four words or fewer. The word limit protects
-  // Etto's "Padron pepper and romesco sauce" (€12, a real tapa) while still
-  // catching "Mint sauce" and "Tomato & coriander sauce" (€2.75 each).
-  if (/\bsauces?$/.test(head) && wordCount(head) <= 4) {
+  // A dish whose whole name ENDS in "sauce", in four words or fewer. This one
+  // reads the full name rather than the head, because a sauce is often named
+  // for its ingredients ("Tomato & coriander sauce" — head "tomato"). The word
+  // limit is what protects Etto's "Padron pepper and romesco sauce" (€12, a
+  // real tapa) from the same rule.
+  if (/\bsauces?$/.test(name) && wordCount(name) <= 4) {
     return { role: 'condiment', rule: 'named "… sauce"' };
   }
 
