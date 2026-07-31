@@ -15,6 +15,8 @@ import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { captureError, EVENTS } from '@/lib/analytics';
 import { SITE_TITLE } from '@/lib/site-copy';
+import CountingMethod from '@/components/CountingMethod';
+import { isVeg, isCountedVeg } from '@/lib/menu-insights';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -28,14 +30,39 @@ const PENDING_POLL_MS = 4000;
 // analysis.
 const MAX_PENDING_POLLS = 75;
 
+/** Dishes in the LIST, for the filter-tab badges. These must stay list-accurate
+ *  — a tab that renders 24 dishes cannot badge 16 — so they deliberately do NOT
+ *  apply the sides/sweets rule. `unknown` counts as veggie because the Veggie
+ *  tab shows those dishes (as a "maybe, please confirm"). */
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
-  const dishes = sections.flatMap((s) => s.dishes);
+  const dishes = sections.flatMap((s) => s.dishes).filter((d) => !d.deletedAt);
   if (filter === 'all') return dishes.length;
   return dishes.filter((d) => {
     if (filter === 'vegan') return d.classification === 'vegan';
-    if (filter === 'vegetarian') return d.classification === 'vegan' || d.classification === 'vegetarian';
+    if (filter === 'vegetarian') return isVeg(d);
     return false;
   }).length;
+}
+
+/** The headline figures, which DO apply the sides/sweets rule — same helper the
+ *  city guide card uses, so the two surfaces can never disagree about what
+ *  "N veggie" means. */
+function headlineCounts(sections: MenuSectionType[]) {
+  let counted = 0;
+  let aside = 0;
+  let countedVegan = 0;
+  for (const section of sections) {
+    for (const dish of section.dishes) {
+      if (dish.deletedAt || !isVeg(dish)) continue;
+      if (isCountedVeg(section.name, dish)) {
+        counted++;
+        if (dish.classification === 'vegan') countedVegan++;
+      } else {
+        aside++;
+      }
+    }
+  }
+  return { counted, aside, countedVegan };
 }
 
 /**
@@ -162,7 +189,12 @@ export default function RestaurantPage() {
             outcome: data.status === 'done' ? 'menu' : data.status,
             dish_count: dishCount,
             vegan_count: countDishes(data.sections, 'vegan'),
+            // Kept on the OLD definition (every veg dish, sides included) so
+            // charts built on it stay comparable across this change rather than
+            // silently re-baselining. The new headline figures ride alongside.
             veg_count: countDishes(data.sections, 'vegetarian'),
+            veg_counted: headlineCounts(data.sections).counted,
+            veg_aside: headlineCounts(data.sections).aside,
             menu_count: distinctMenuLabels(data).length,
             source: arrivalSource(),
             // Only set on a no_menu outcome; it's what separates "site is
@@ -313,6 +345,8 @@ export default function RestaurantPage() {
   const veganCount = countDishes(visibleSections, 'vegan');
   const vegCount = countDishes(visibleSections, 'vegetarian');
   const totalDishes = visibleSections.flatMap((s) => s.dishes).length;
+  // The headline stat excludes sides/sweets; the filter tabs above do not.
+  const headline = headlineCounts(visibleSections);
 
   const filters: { value: Filter; label: string; count: number }[] = [
     { value: 'all', label: '🍽️ Everything', count: totalDishes },
@@ -409,22 +443,33 @@ export default function RestaurantPage() {
 
       {/* Stats — glass capsules over the mesh, but the numbers themselves stay
           solid green: dietary information must never lose contrast to an effect. */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-2">
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
-          <div className="font-display text-3xl text-picky-700">{veganCount}</div>
+          <div className="font-display text-3xl text-picky-700">{headline.countedVegan}</div>
           <div className="text-xs text-forest/75 mt-0.5">Vegan</div>
         </div>
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍳</div>
-          <div className="font-display text-3xl text-picky-600">{vegCount}</div>
+          <div className="font-display text-3xl text-picky-600">{headline.counted}</div>
           <div className="text-xs text-forest/75 mt-0.5">Veggie</div>
+          {headline.aside > 0 && (
+            <div className="text-[0.68rem] leading-tight text-forest/55 mt-1">
+              +{headline.aside} side{headline.aside === 1 ? '' : 's'} &amp; sweet
+              {headline.aside === 1 ? '' : 's'}
+            </div>
+          )}
         </div>
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
           <div className="font-display text-3xl text-forest/80">{totalDishes}</div>
           <div className="text-xs text-forest/75 mt-0.5">Dishes read</div>
         </div>
+      </div>
+
+      {/* The number leaves things out on purpose, so it has to say so. */}
+      <div className="relative z-[2] mb-6">
+        <CountingMethod surface="restaurant" />
       </div>
 
       {/* Menu selector — only when multiple menus were analysed */}

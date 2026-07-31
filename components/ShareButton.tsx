@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { capture } from '@/lib/posthog-client';
-import type { Restaurant } from '@/types';
+import type { Restaurant, Dish } from '@/types';
+import { isVeg, isCountedVeg } from '@/lib/menu-insights';
 import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
 type ShareChannel = 'native' | 'whatsapp' | 'copy';
@@ -20,9 +21,19 @@ function withAttribution(pageUrl: string, src: ShareChannel): string {
 }
 
 function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
-  const allDishes = restaurant.sections.flatMap((s) => s.dishes);
-  const veganDishes = allDishes.filter((d) => d.classification === 'vegan');
-  const vegDishes = allDishes.filter((d) => d.classification === 'vegetarian');
+  // Same counted/aside split as the page and the guide card — a shared message
+  // promising 40 veggie options that the page then reports as 16 is worse than
+  // no share at all. Sides and sweets are listed last, clearly labelled.
+  const counted: Dish[] = [];
+  const aside: Dish[] = [];
+  for (const section of restaurant.sections) {
+    for (const dish of section.dishes) {
+      if (dish.deletedAt || !isVeg(dish)) continue;
+      (isCountedVeg(section.name, dish) ? counted : aside).push(dish);
+    }
+  }
+  const veganDishes = counted.filter((d) => d.classification === 'vegan');
+  const vegDishes = counted.filter((d) => d.classification !== 'vegan');
 
   const name = restaurant.name ?? 'this restaurant';
 
@@ -40,6 +51,12 @@ function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
   if (vegDishes.length > 0) {
     lines.push(`*Veggie (${vegDishes.length}):*`);
     vegDishes.forEach((d) => lines.push(`• ${d.name}`));
+    lines.push(``);
+  }
+
+  if (aside.length > 0) {
+    lines.push(`*Sides & sweets (${aside.length}):*`);
+    aside.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
 

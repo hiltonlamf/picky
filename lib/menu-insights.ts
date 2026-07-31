@@ -1,5 +1,6 @@
 import type { Restaurant, MenuSection, Dish } from '@/types';
 import { formatPrice } from '@/lib/format-price';
+import { classifyDishRole } from '@/lib/dish-role';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -8,6 +9,12 @@ import { formatPrice } from '@/lib/format-price';
 // rank and headline by the BEST SINGLE MENU's veg count, show the per-menu
 // breakdown, and highlight a few example dishes (the priciest veg dishes — the
 // most expensive item is usually the most substantial, i.e. a "main").
+//
+// The headline count is COUNTED dishes only — desserts, sauces, plain breads
+// and rice are tallied separately as "sides & sweets" (see lib/dish-role.ts).
+// They are never hidden, they just stop inflating the number a diner uses to
+// judge a restaurant. This module is the single place both the guide card and
+// the restaurant page get their figures, so the two can never disagree.
 
 /** Parse a price string ("€7.50", "€29", "12", "8.00") to a number, or null if
  *  there's no usable number (e.g. "Market Price", empty). */
@@ -19,8 +26,22 @@ export function parsePrice(price: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function isVeg(dish: Dish): boolean {
-  return dish.classification === 'vegan' || dish.classification === 'vegetarian';
+/** What counts as "veggie" for a diner scanning a menu. `unknown` is included
+ *  on purpose — when the AI can't tell (a "soup of the day" with no ingredients
+ *  listed), the dish is shown as a maybe-please-confirm rather than dropped, and
+ *  the count must match the list. Founder's rule: when in doubt, count it. */
+export function isVeg(dish: Pick<Dish, 'classification'>): boolean {
+  return (
+    dish.classification === 'vegan' ||
+    dish.classification === 'vegetarian' ||
+    dish.classification === 'unknown'
+  );
+}
+
+/** A veg dish that belongs in the headline figure — i.e. not a dessert, sauce,
+ *  condiment or plain bread/rice. */
+export function isCountedVeg(sectionName: string | null | undefined, dish: Dish): boolean {
+  return isVeg(dish) && classifyDishRole(sectionName, dish).role === 'counted';
 }
 
 /** Live (non-deleted) dishes of a section. */
@@ -41,8 +62,12 @@ function normalizeDishName(name: string): string {
 export interface PerMenuVeg {
   /** Source-menu label (Lunch/Dinner/...); null for a single-menu restaurant. */
   label: string | null;
-  /** All veg (vegan + vegetarian) dishes in this menu, sides included. */
+  /** Veg dishes a diner would actually order as a dish. Excludes desserts,
+   *  sauces, condiments and plain breads/rice. */
   vegOptions: number;
+  /** Veg dishes present on this menu but NOT counted above — shown as
+   *  "plus N sides & sweets" rather than dropped. */
+  asideOptions: number;
 }
 
 export interface HighlightDish {
@@ -52,9 +77,12 @@ export interface HighlightDish {
 }
 
 export interface GuideInsights {
-  /** Best single menu's veg count — the guide headline + ranking key. */
+  /** Best single menu's COUNTED veg total — the guide headline + ranking key. */
   maxVegOptions: number;
-  /** The best single menu's vegan / vegetarian split (shown once on the card). */
+  /** That same menu's sides/sweets tally, shown in small print beside it. */
+  asideCount: number;
+  /** The best single menu's vegan / vegetarian split (shown once on the card).
+   *  Counted dishes only, so it can never exceed maxVegOptions. */
   bestMenu: { label: string | null; vegan: number; vegetarian: number };
   /** Veg options per source menu, in display order. */
   perMenu: PerMenuVeg[];
@@ -106,25 +134,41 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
     byLabel.get(key)!.push(s);
   }
 
+  // Counting walks sections (not a flat dish list) because a dish's role
+  // depends on the section it sits in — "Desserts" is decided at that level.
   const perMenu: PerMenuVeg[] = order.map((label) => {
-    const dishes = byLabel.get(label)!.flatMap(liveDishes);
-    return { label, vegOptions: dishes.filter(isVeg).length };
+    let vegOptions = 0;
+    let asideOptions = 0;
+    for (const section of byLabel.get(label)!) {
+      for (const dish of liveDishes(section)) {
+        if (!isVeg(dish)) continue;
+        if (isCountedVeg(section.name, dish)) vegOptions++;
+        else asideOptions++;
+      }
+    }
+    return { label, vegOptions, asideOptions };
   });
 
-  // Best single menu = the one with the most veg options; its vegan/veg split.
+  // Best single menu = the one with the most COUNTED veg options.
   let bestLabel: string | null = order[0] ?? null;
   let maxVegOptions = 0;
+  let asideCount = perMenu[0]?.asideOptions ?? 0;
   for (const m of perMenu) {
     if (m.vegOptions > maxVegOptions) {
       maxVegOptions = m.vegOptions;
+      asideCount = m.asideOptions;
       bestLabel = m.label;
     }
   }
-  const bestDishes = (byLabel.get(bestLabel) ?? []).flatMap(liveDishes);
+  // The vegan/veg split must come from the same counted set as the headline,
+  // or the card could read "5 vegan" beside "3 veggie".
+  const bestCounted = (byLabel.get(bestLabel) ?? []).flatMap((s) =>
+    liveDishes(s).filter((d) => isCountedVeg(s.name, d))
+  );
   const bestMenu = {
     label: bestLabel,
-    vegan: bestDishes.filter((d) => d.classification === 'vegan').length,
-    vegetarian: bestDishes.filter((d) => d.classification === 'vegetarian').length,
+    vegan: bestCounted.filter((d) => d.classification === 'vegan').length,
+    vegetarian: bestCounted.filter((d) => d.classification === 'vegetarian').length,
   };
 
   const totalDishes = restaurant.sections.flatMap(liveDishes).length;
@@ -140,7 +184,8 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   const unpricedVeg: Candidate[] = [];
   for (const section of restaurant.sections) {
     for (const dish of liveDishes(section)) {
-      if (!isVeg(dish)) continue;
+      // Counted dishes only — a card must never headline a naan or a sorbet.
+      if (!isCountedVeg(section.name, dish)) continue;
       const key = normalizeDishName(dish.name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -163,5 +208,5 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   const highlightsAreThin =
     highlights.length < MAX_HIGHLIGHTS || topHighlights.every((h) => isNonMainSectionName(h.sectionName));
 
-  return { maxVegOptions, bestMenu, perMenu, totalDishes, highlights, highlightsAreThin };
+  return { maxVegOptions, asideCount, bestMenu, perMenu, totalDishes, highlights, highlightsAreThin };
 }

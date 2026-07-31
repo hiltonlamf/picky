@@ -35,6 +35,23 @@ export function guideIntro(city: string): string {
 export const GUIDE_HUMAN_LINE =
   'AI reads the menus. We sample and review the results by hand, and keep fixing what the error log shows us.';
 
+// ------------------------------------------------------- counting methodology
+
+/* Shown collapsed on both the city guide and the restaurant page, so the number
+ * can explain itself. Edit freely — but keep any line containing an apostrophe
+ * in "double quotes", or the build breaks. */
+
+/** The always-visible label on the collapsed disclosure. */
+export const COUNTING_METHOD_SUMMARY = 'How we count veggie dishes';
+
+/** The expanded explanation. One string per paragraph. */
+export const COUNTING_METHOD_BODY: string[] = [
+  "We count the dishes you would actually order as a dish. Desserts, sauces and dips, plain breads and plain rice are still listed — you just won't find them in the number, because four kinds of naan and a pot of mayo don't make a restaurant good for vegetarians.",
+  "Nothing is hidden. Every dish the AI found is on the menu below, with its own label, whether we count it or not.",
+  "When we can't tell, we count it. We would rather show you a maybe than quietly drop something you might have wanted.",
+  'Sharing plates are still dishes. At a tapas, mezze or dim sum place, small plates are the meal — so they count.',
+];
+
 export function guideMetaDescription(city: string, where: string): string {
   return (
     `Which of ${where}'s most popular restaurants are actually good for vegetarians. ` +

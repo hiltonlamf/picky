@@ -7,6 +7,7 @@ import RestaurantCard from '@/components/RestaurantCard';
 import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
+import CountingMethod from '@/components/CountingMethod';
 import GuideViewTracker from '@/components/GuideViewTracker';
 import { ADMIN_COOKIE_NAME, expectedAdminCookieValue } from '@/lib/admin-auth';
 import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
@@ -128,6 +129,7 @@ export default async function CityGuidePage({ params }: { params: { city: string
           {guideIntro(guide.displayName)}
         </p>
         <p className="text-forest/65 max-w-[62ch] text-sm mt-3">{GUIDE_HUMAN_LINE}</p>
+        <CountingMethod surface="guide" className="mt-3" />
         <div className="mt-6">
           <GuideFeedbackButton city={slug} />
         </div>
