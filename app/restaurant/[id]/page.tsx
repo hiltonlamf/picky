@@ -16,7 +16,7 @@ import { capture } from '@/lib/posthog-client';
 import { captureError, EVENTS } from '@/lib/analytics';
 import { SITE_TITLE } from '@/lib/site-copy';
 import CountingMethod from '@/components/CountingMethod';
-import { isVeg, isCountedVeg } from '@/lib/menu-insights';
+import { isVeg, headlineCounts } from '@/lib/menu-insights';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -44,26 +44,9 @@ function countDishes(sections: MenuSectionType[], filter: DietaryClassification 
   }).length;
 }
 
-/** The headline figures, which DO apply the sides/sweets rule — same helper the
- *  city guide card uses, so the two surfaces can never disagree about what
- *  "N veggie" means. */
-function headlineCounts(sections: MenuSectionType[]) {
-  let counted = 0;
-  let aside = 0;
-  let countedVegan = 0;
-  for (const section of sections) {
-    for (const dish of section.dishes) {
-      if (dish.deletedAt || !isVeg(dish)) continue;
-      if (isCountedVeg(section.name, dish)) {
-        counted++;
-        if (dish.classification === 'vegan') countedVegan++;
-      } else {
-        aside++;
-      }
-    }
-  }
-  return { counted, aside, countedVegan };
-}
+// The headline figures come from lib/menu-insights (headlineCounts), which the
+// guide card uses too — so the two surfaces can never disagree about what
+// "N veggie" means.
 
 /**
  * Where this visit came from, so a result can be attributed to the search box,
@@ -455,8 +438,8 @@ export default function RestaurantPage() {
           <div className="text-xs text-forest/75 mt-0.5">Veggie</div>
           {headline.aside > 0 && (
             <div className="text-[0.68rem] leading-tight text-forest/55 mt-1">
-              +{headline.aside} side{headline.aside === 1 ? '' : 's'} &amp; sweet
-              {headline.aside === 1 ? '' : 's'}
+              +{headline.aside} side{headline.aside === 1 ? '' : 's'}, sauce
+              {headline.aside === 1 ? '' : 's'} &amp; sweet{headline.aside === 1 ? '' : 's'}
             </div>
           )}
         </div>

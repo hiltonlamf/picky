@@ -146,9 +146,30 @@ describe('classifyDishRole', () => {
     it('drops plain rice, breads and bar snacks', () => {
       expect(role('Sahayak Parikar', 'White rice')).toBe('staple');
       expect(role('Sides', 'House Rice')).toBe('staple');
-      expect(role('Snacks', 'Smoked Almonds')).toBe('staple');
       expect(role('Sides', 'Skinny Rosemary Fries')).toBe('staple');
       expect(role('Rice & Breads', 'Breadbasket')).toBe('staple');
+    });
+
+    it('matches the noun, not one menu’s particular adjective', () => {
+      // The list used to say "smoked almonds" — the wording Dublin menus use —
+      // so Uno Mas's "Salted almonds" was counted as a veggie option.
+      expect(role('Bites', 'Smoked Almonds')).toBe('staple');
+      expect(role('Para picar', 'Salted almonds')).toBe('staple');
+      expect(role('Snacks', 'Marcona almonds')).toBe('staple');
+      // …but the noun inside a composed dish is still a dish.
+      expect(role('Sides', 'Roast Carrots, Pesto, Almond & Cumin')).toBe('counted');
+    });
+
+    it('drops a build-your-own component list', () => {
+      // Fabel Friet is a chip shop; "Create Your Own" is toppings priced at
+      // €0.10–€1.95, not a menu of twelve vegetarian dishes.
+      expect(role('Create Your Own', 'Chopped onions')).toBe('condiment');
+      expect(role('Create Your Own', 'Cheddar')).toBe('condiment');
+      expect(role('Create Your Own', 'Curry')).toBe('condiment');
+      expect(role('Toppings', 'Parmesan')).toBe('condiment');
+      // A bare "Extras" is NOT a component list — Fade Street Social files a
+      // €21.50 Truffle Cheese Flatbread there.
+      expect(role('Extras', 'Truffle Cheese Flatbread')).toBe('counted');
     });
 
     it('keeps substantial vegetable sides', () => {

@@ -112,12 +112,18 @@ const DESSERT_DISH_KEYWORDS = [
 
 // ------------------------------------------------------- condiments & sauces
 
-// A section that is ONLY sauces/dips. Anchored and exact on purpose: "Dips" and
-// "House Sauces" qualify, but "Condiments/Sides" (which holds Pickle's Palak
-// Paneer and Bhindi Masala) and "Dips & Pita" (Shouk's actual meal, €7.50)
-// must not. This rule exists because "Brandy Peppercorn" and "Roast Garlic &
-// Herb" contain no keyword at all — only their section gives them away.
-const CONDIMENT_SECTION_RE = /^(house\s+|extra\s+)?(sauces?|dips?|condiments?)$/i;
+// A section that is ONLY sauces, dips or build-your-own components. Anchored
+// and exact on purpose: "Dips" and "House Sauces" qualify, but "Condiments/
+// Sides" (which holds Pickle's Palak Paneer and Bhindi Masala) and "Dips &
+// Pita" (Shouk's actual meal, €7.50) must not. Nor does a bare "Extras" —
+// Fade Street Social files a €21.50 Truffle Cheese Flatbread there.
+//
+// This rule exists because plenty of components carry no keyword at all:
+// "Brandy Peppercorn", "Roast Garlic & Herb", and Fabel Friet's €0.10 "Chopped
+// onions" and €1.95 "Cheddar". Only the section name gives those away — a
+// "Create Your Own" list is toppings, not a menu of dishes.
+const CONDIMENT_SECTION_RE =
+  /^(house\s+|extra\s+)?(sauces?|dips?|condiments?)$|^(create|build|make)\s+your\s+own$|^toppings?$|^add[-\s]?ons?$/i;
 
 const CONDIMENT_KEYWORDS = [
   'mayo', 'mayonnaise', 'aioli', 'ketchup', 'bearnaise', 'chimichurri',
@@ -138,8 +144,13 @@ const STAPLE_KEYWORDS = [
   // pita ONLY as an add-on: "Hummus & Pita" (€7.50) and "Cauliflower Pita"
   // (€10) are meals at a Middle Eastern restaurant, not bread.
   'extra pita', 'fried pita bites', 'pita bites',
-  // bar staples
-  'olives', 'smoked almonds', 'chips', 'fries',
+  // Bar staples, matched on the NOUN rather than an adjective phrase. The list
+  // used to say "smoked almonds", which is what Dublin menus happen to write —
+  // so Uno Mas's "Salted almonds" sailed through. A keyword list of observed
+  // phrases only ever catches the wording it has already seen; the noun
+  // generalises, and the simple-name guard is what stops it over-firing on
+  // "Roast Carrots, Pesto, Almond & Cumin".
+  'olives', 'almond', 'chips', 'fries',
 ];
 
 /** Bare "rice"/"bread" as the entire dish name. */

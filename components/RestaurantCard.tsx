@@ -84,8 +84,8 @@ export default function RestaurantCard({ restaurant }: Props) {
 
         {asideCount > 0 && (
           <p className="text-xs text-forest/60 -mt-1">
-            plus {asideCount} side{asideCount === 1 ? '' : 's'} &amp; sweet
-            {asideCount === 1 ? '' : 's'} we don&rsquo;t count
+            plus {asideCount} side{asideCount === 1 ? '' : 's'}, sauce
+            {asideCount === 1 ? '' : 's'} &amp; sweet{asideCount === 1 ? '' : 's'} we don&rsquo;t count
           </p>
         )}
 

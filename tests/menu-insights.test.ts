@@ -73,6 +73,23 @@ describe('guideInsights', () => {
     expect(ins.totalDishes).toBe(3); // nothing is hidden
   });
 
+  it('counts the same dish once when a tasting menu repeats the a la carte', () => {
+    // Cornerstore's "Tasting Menu – Vegetarian" is its own plates bundled, and
+    // both carry no menuLabel — so six dishes were counted as eleven.
+    const r = restaurant([
+      section('Snacks', [dish('Crispy tofu', 'vegan', '€8'), dish('Lotus root pickle', 'vegan', '€7')]),
+      section('Tasting Menu – Vegetarian', [
+        dish('Crispy tofu', 'vegan', '€8'),
+        dish('Lotus root pickle', 'vegan', '€7'),
+        dish('Smoked tofu, green peas', 'vegan', '€12'),
+      ]),
+    ]);
+    const ins = guideInsights(r);
+    expect(ins.maxVegOptions).toBe(3); // not 5
+    expect(ins.bestMenu.vegan).toBe(3); // the split de-dupes the same way
+    expect(ins.totalDishes).toBe(5); // nothing is removed from the menu itself
+  });
+
   it('counts "unknown" dishes as veggie — when in doubt, count it', () => {
     const r = restaurant([
       section('Mains', [dish('Soup of the day', 'unknown', '€8'), dish('Risotto', 'vegetarian', '€20')]),

@@ -49,6 +49,38 @@ function liveDishes(section: MenuSection): Dish[] {
   return section.dishes.filter((d) => !d.deletedAt);
 }
 
+/**
+ * Headline figures for a set of sections: veg dishes worth counting, the
+ * sides/sweets shown beside them, and how many of the counted ones are vegan.
+ * The same dish name counts once (see the de-dupe note in guideInsights).
+ *
+ * The restaurant page uses this directly so its stat capsule and the guide
+ * card can never disagree; guideInsights applies the same logic per menu.
+ */
+export function headlineCounts(sections: MenuSection[]): {
+  counted: number;
+  aside: number;
+  countedVegan: number;
+} {
+  const counted = new Set<string>();
+  const aside = new Set<string>();
+  const vegan = new Set<string>();
+  for (const section of sections) {
+    for (const dish of liveDishes(section)) {
+      if (!isVeg(dish)) continue;
+      const key = normalizeDishName(dish.name) || `#${dish.id}`;
+      if (isCountedVeg(section.name, dish)) {
+        counted.add(key);
+        if (dish.classification === 'vegan') vegan.add(key);
+      } else {
+        aside.add(key);
+      }
+    }
+  }
+  for (const key of counted) aside.delete(key);
+  return { counted: counted.size, aside: aside.size, countedVegan: vegan.size };
+}
+
 /** Collapse a dish name to a comparison key: drop parentheticals and standalone
  *  veg markers (V / VG / vegan…) so the same dish across menus dedupes to one. */
 function normalizeDishName(name: string): string {
@@ -136,17 +168,27 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
 
   // Counting walks sections (not a flat dish list) because a dish's role
   // depends on the section it sits in — "Desserts" is decided at that level.
+  //
+  // Within a menu the same dish is counted ONCE. Restaurants routinely list a
+  // dish twice: Cornerstore's "Tasting Menu – Vegetarian" is its à la carte
+  // plates bundled, so crispy tofu, lotus root pickle and four others each
+  // appeared twice and the card claimed 11 options where a diner has 6. The
+  // highlights list has always de-duped this way (normalizeDishName); the
+  // count simply never did.
   const perMenu: PerMenuVeg[] = order.map((label) => {
-    let vegOptions = 0;
-    let asideOptions = 0;
+    const countedSeen = new Set<string>();
+    const asideSeen = new Set<string>();
     for (const section of byLabel.get(label)!) {
       for (const dish of liveDishes(section)) {
         if (!isVeg(dish)) continue;
-        if (isCountedVeg(section.name, dish)) vegOptions++;
-        else asideOptions++;
+        // Fall back to the raw name so an unnameable dish still counts once.
+        const key = normalizeDishName(dish.name) || `#${dish.id}`;
+        (isCountedVeg(section.name, dish) ? countedSeen : asideSeen).add(key);
       }
     }
-    return { label, vegOptions, asideOptions };
+    // A dish counted as a real option shouldn't also swell the aside tally.
+    for (const key of countedSeen) asideSeen.delete(key);
+    return { label, vegOptions: countedSeen.size, asideOptions: asideSeen.size };
   });
 
   // Best single menu = the one with the most COUNTED veg options.
@@ -162,9 +204,18 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   }
   // The vegan/veg split must come from the same counted set as the headline,
   // or the card could read "5 vegan" beside "3 veggie".
-  const bestCounted = (byLabel.get(bestLabel) ?? []).flatMap((s) =>
-    liveDishes(s).filter((d) => isCountedVeg(s.name, d))
-  );
+  // De-duped the same way, or "5 vegan" could sit beside a headline of 3.
+  const bestSeen = new Set<string>();
+  const bestCounted: Dish[] = [];
+  for (const s of byLabel.get(bestLabel) ?? []) {
+    for (const d of liveDishes(s)) {
+      if (!isCountedVeg(s.name, d)) continue;
+      const key = normalizeDishName(d.name) || `#${d.id}`;
+      if (bestSeen.has(key)) continue;
+      bestSeen.add(key);
+      bestCounted.push(d);
+    }
+  }
   const bestMenu = {
     label: bestLabel,
     vegan: bestCounted.filter((d) => d.classification === 'vegan').length,
