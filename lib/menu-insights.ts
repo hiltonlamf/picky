@@ -146,37 +146,131 @@ function liveDishes(section: MenuSection): Dish[] {
  * The restaurant page uses this directly so its stat capsule and the guide
  * card can never disagree; guideInsights applies the same logic per menu.
  */
-export function headlineCounts(
+export interface CategoryTally {
+  /** Dishes worth counting as an option. */
+  counted: number;
+  /** Sides, sauces and sweets — shown, never counted. */
+  aside: number;
+}
+
+export interface MenuTallies {
+  /** Distinct dishes on this menu, whatever their diet. */
+  all: number;
+  veg: CategoryTally;
+  vegan: CategoryTally;
+}
+
+/**
+ * Every figure the restaurant page and the guide card show, from one walk of
+ * the menu, so no surface can compute its own variant.
+ *
+ * De-duplication is the part that is easy to get wrong and did get wrong: Fade
+ * Street Social lists "New Season Heritage Tomatoes" under both TO START and
+ * VEGETARIAN / VEGAN on the same menu. The card reported 9 and a page tally
+ * that skipped the de-dupe reported 10 — one dish, two rows, and the diner has
+ * nine things to choose from. The number means DISTINCT DISHES, everywhere.
+ */
+export function menuTallies(
   sections: MenuSection[],
   /** Sections to take the price level from — pass the whole restaurant when
    *  counting one menu, so a cheap lunch menu isn't judged against itself.
    *  Defaults to the sections being counted. */
   priceContext: MenuSection[] = sections
-): {
-  counted: number;
-  aside: number;
-  countedVegan: number;
-} {
+): MenuTallies {
+  const all = new Set<string>();
   const counted = new Set<string>();
   const aside = new Set<string>();
-  const vegan = new Set<string>();
+  const veganCounted = new Set<string>();
+  const veganAside = new Set<string>();
   const priceTest = makePriceTest(priceContext);
   for (const section of sections) {
     for (const dish of liveDishes(section)) {
+      const key = dishKey(dish);
+      all.add(key);
       if (!isVeg(dish)) continue;
-      const key = normalizeDishName(dish.name) || `#${dish.id}`;
+      const vegan = dish.classification === 'vegan';
       if (isCountedWithPrice(section.name, dish, priceTest)) {
         counted.add(key);
-        if (dish.classification === 'vegan') vegan.add(key);
+        if (vegan) veganCounted.add(key);
       } else {
         aside.add(key);
+        if (vegan) veganAside.add(key);
       }
     }
   }
+  // A dish counted anywhere on the menu is counted, even if another section
+  // lists it somewhere that reads like a side.
   // forEach, not for…of: this project compiles below es2015, where iterating a
   // Set directly needs --downlevelIteration.
   counted.forEach((key) => aside.delete(key));
-  return { counted: counted.size, aside: aside.size, countedVegan: vegan.size };
+  veganCounted.forEach((key) => veganAside.delete(key));
+
+  return {
+    all: all.size,
+    veg: { counted: counted.size, aside: aside.size },
+    vegan: { counted: veganCounted.size, aside: veganAside.size },
+  };
+}
+
+/** Stable identity for a dish across sections — the name, or its id when the
+ *  name normalises to nothing. */
+function dishKey(dish: Dish): string {
+  return normalizeDishName(dish.name) || `#${dish.id}`;
+}
+
+/** The guide card's three figures, derived from the same walk. */
+export function headlineCounts(
+  sections: MenuSection[],
+  priceContext: MenuSection[] = sections
+): { counted: number; aside: number; countedVegan: number } {
+  const t = menuTallies(sections, priceContext);
+  return { counted: t.veg.counted, aside: t.veg.aside, countedVegan: t.vegan.counted };
+}
+
+/** Whether a dish is one of the COUNTED ones, for marking it in the list. */
+export function isAsideDish(
+  sectionName: string | null | undefined,
+  dish: Dish,
+  priceContext: MenuSection[]
+): boolean {
+  return isVeg(dish) && !makeCountedTest(priceContext)(sectionName, dish);
+}
+
+/**
+ * The veg dishes of a menu, split the way every surface presents them and
+ * de-duplicated the way every surface counts them.
+ *
+ * The share message builds its own lists and used to count rows, so a menu that
+ * lists one dish under two sections promised one more dish than the page shows.
+ * Same walk, same keys, same answer.
+ */
+export function splitVegDishes(
+  sections: MenuSection[],
+  priceContext: MenuSection[] = sections
+): { counted: Dish[]; aside: Dish[] } {
+  const priceTest = makePriceTest(priceContext);
+  const seen: Record<string, true> = {};
+  const counted: Dish[] = [];
+  const asideByKey: Record<string, Dish> = {};
+  const asideOrder: string[] = [];
+
+  for (const section of sections) {
+    for (const dish of liveDishes(section)) {
+      if (!isVeg(dish)) continue;
+      const key = dishKey(dish);
+      if (seen[key]) continue;
+      if (isCountedWithPrice(section.name, dish, priceTest)) {
+        seen[key] = true;
+        delete asideByKey[key]; // counted anywhere wins, as in menuTallies
+        counted.push(dish);
+      } else if (!asideByKey[key]) {
+        asideByKey[key] = dish;
+        asideOrder.push(key);
+      }
+    }
+  }
+  const aside = asideOrder.map((k) => asideByKey[k]).filter(Boolean);
+  return { counted, aside };
 }
 
 /** Collapse a dish name to a comparison key: drop parentheticals and standalone

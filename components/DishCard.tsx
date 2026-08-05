@@ -12,45 +12,19 @@ import { AlertIcon, QuestionIcon, FlagIcon } from './icons';
 interface Props {
   dish: Dish;
   activeFilter?: string | null;
+  /** A side, sauce or sweet — shown, but not part of the headline count. */
+  aside?: boolean;
 }
 
-function confidenceTier(confidence: number): 'High' | 'Medium' | 'Low' {
-  if (confidence >= 0.8) return 'High';
-  if (confidence >= CONFIDENCE_THRESHOLD_WARNING) return 'Medium';
-  return 'Low';
-}
-
-// Shows the confidence tier as visible text, not just a hover title — a dot
-// meter that only differs by fill color communicates nothing on a touch
-// device (no hover) or to anyone who can't distinguish the fill shades.
-function ConfidenceDots({ confidence }: { confidence: number }) {
-  const filled = Math.round(confidence * 5);
-  const tier = confidenceTier(confidence);
-  return (
-    <div
-      className="flex items-center gap-1.5"
-      role="img"
-      aria-label={`${tier} confidence, ${Math.round(confidence * 100)} percent`}
-    >
-      <div className="flex gap-0.5 items-center" aria-hidden="true">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div
-            key={i}
-            className={`w-1.5 h-1.5 rounded-full ${i < filled ? 'bg-picky-500' : 'bg-mint-200'}`}
-          />
-        ))}
-      </div>
-      <span className="text-[10px] font-mono uppercase tracking-wide text-evergreen/80" aria-hidden="true">
-        {tier}
-      </span>
-    </div>
-  );
-}
-
-export default function DishCard({ dish, activeFilter }: Props) {
+export default function DishCard({ dish, activeFilter, aside }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
 
   const isLowConfidence = dish.confidence < CONFIDENCE_THRESHOLD_WARNING;
+  // Why we hedged, shown ONLY when we actually hedged. A confidence meter on
+  // every dish told the diner nothing they could act on ("HIGH" next to a dish
+  // they were going to eat anyway); what they need is the reason, on the dish
+  // where the answer is genuinely unclear.
+  const uncertain = isLowConfidence || dish.classification === 'unknown';
   // Menus often list a bare "4"; without a symbol it doesn't read as a price.
   const price = formatPrice(dish.price);
 
@@ -106,9 +80,19 @@ export default function DishCard({ dish, activeFilter }: Props) {
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <DietaryBadge classification={dish.classification} size="sm" />
-              <ConfidenceDots confidence={dish.confidence} />
-              {dish.confidenceReason && (
-                <span className="text-[11px] text-evergreen/80 italic hidden sm:inline">
+              {/* Says which dishes the "N veggie" number is counting. Without
+                  it the tab reads "4" above nine rows with nothing to explain
+                  the difference. */}
+              {aside && (
+                <span
+                  className="text-[10px] font-mono uppercase tracking-wide text-forest/60 bg-mint-100/70 px-1.5 py-0.5 rounded-full"
+                  title="Sides, sauces and sweets are shown but left out of the veggie count"
+                >
+                  not counted
+                </span>
+              )}
+              {uncertain && dish.confidenceReason && (
+                <span className="text-[11px] text-evergreen/80 italic">
                   {dish.confidenceReason}
                 </span>
               )}

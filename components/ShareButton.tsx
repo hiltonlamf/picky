@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { capture } from '@/lib/posthog-client';
-import type { Restaurant, Dish } from '@/types';
-import { isVeg, makeCountedTest } from '@/lib/menu-insights';
+import type { Restaurant } from '@/types';
+import { splitVegDishes } from '@/lib/menu-insights';
 import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
 type ShareChannel = 'native' | 'whatsapp' | 'copy';
@@ -33,25 +33,27 @@ function buildShareMessage(
   //  - `sections` is the menu the reader is LOOKING at, not every menu the
   //    restaurant has. Sharing lunch+dinner+brunch from a page showing dinner
   //    made the message disagree with the page it links to.
-  //  - makeCountedTest, not isCountedVeg: the price tiebreak needs the whole
-  //    restaurant for its price level, and without it a €20.50 flatbread got
-  //    filed under "sides & sweets" here while the page counted it as a dish.
-  const isCounted = makeCountedTest(restaurant.sections);
-  const counted: Dish[] = [];
-  const aside: Dish[] = [];
-  for (const section of sections) {
-    for (const dish of section.dishes) {
-      if (dish.deletedAt || !isVeg(dish)) continue;
-      (isCounted(section.name, dish) ? counted : aside).push(dish);
-    }
-  }
+  //  - the price tiebreak needs the whole restaurant for its price level;
+  //    without it a €20.50 flatbread got filed under "sides & sweets" here
+  //    while the page counted it as a dish.
+  //  - splitVegDishes, so a dish listed under two sections of the same menu is
+  //    shared ONCE. Counting rows here promised one more dish than the page
+  //    showed (Fade Street's "New Season Heritage Tomatoes" is a starter AND a
+  //    vegetarian main).
+  const { counted, aside } = splitVegDishes(sections, restaurant.sections);
   const veganDishes = counted.filter((d) => d.classification === 'vegan');
   const vegDishes = counted.filter((d) => d.classification !== 'vegan');
 
   const name = restaurant.name ?? 'this restaurant';
 
+  // Opens with the page's own headline, so the reader of the message and the
+  // reader of the page see the same number before any list is read.
+  const summary =
+    `${counted.length} veggie dish${counted.length === 1 ? '' : 'es'}` +
+    (veganDishes.length > 0 ? ` (${veganDishes.length} vegan)` : '');
+
   const lines: string[] = [
-    `Good news about *${name}* — here's what's on the menu for veggies 🌱`,
+    `Good news about *${name}* — ${summary} 🌱`,
     ``,
   ];
 
@@ -68,7 +70,7 @@ function buildShareMessage(
   }
 
   if (aside.length > 0) {
-    lines.push(`*Sides & sweets (${aside.length}):*`);
+    lines.push(`*Sides & sweets — not counted (${aside.length}):*`);
     aside.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
