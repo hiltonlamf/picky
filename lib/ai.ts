@@ -698,7 +698,28 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
  * content-type are logged so the next failure names itself instead of becoming
  * another silent "no menu".
  */
+/**
+ * Never throws.
+ *
+ * That is the whole point: when this threw on a network-level refusal (TLS
+ * reset, connection refused — no HTTP response at all), the exception escaped
+ * past classifyMenuFromPdf's reader fallback to the outer catch, and the
+ * fallback never ran. tofuvegan.com failed exactly this way: a host that drops
+ * our connection meant the one route that could still have read the menu was
+ * skipped. Lina Stores only got rescued because its PDF returned a value
+ * (too-large) instead of throwing.
+ */
 async function fetchDocument(url: string, depth = 0): Promise<ArrayBuffer | null> {
+  try {
+    return await fetchDocumentInner(url, depth);
+  } catch (err) {
+    // Log it: a silent network refusal is indistinguishable from "no menu".
+    console.error(`[pdf] fetch threw for ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer | null> {
   let referer = '';
   try {
     referer = new URL(url).origin + '/';
@@ -739,6 +760,16 @@ async function fetchDocument(url: string, depth = 0): Promise<ArrayBuffer | null
         console.error(`[pdf] following Drive confirm form → ${followUp}`);
         return fetchDocument(followUp, depth + 1);
       }
+      // No form to follow — say what the page actually SAYS. "Sign in",
+      // "quota exceeded" and "not found" need completely different responses,
+      // and 1,789 bytes of unexplained HTML told us nothing for two rounds.
+      const visible = html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      console.error(`[pdf] host returned a page instead of a file: "${visible.slice(0, 300)}"`);
     }
     return null;
   }
@@ -775,8 +806,9 @@ export async function classifyMenuFromPdf(
     // not the file — rewrite them to a direct download first. Drive may still
     // answer the first request with a virus-scan interstitial, so try each
     // candidate URL in turn (see documentUrlCandidates).
+    const candidates = documentUrlCandidates(pdfUrl);
     let buffer: ArrayBuffer | null = null;
-    for (const candidate of documentUrlCandidates(pdfUrl)) {
+    for (const candidate of candidates) {
       buffer = await fetchDocument(candidate);
       if (buffer) break;
     }
@@ -789,10 +821,16 @@ export async function classifyMenuFromPdf(
       // browser but refuses our request, and the reader fetches from different
       // infrastructure and returns extracted text. Reading it as text is just
       // as good — a menu is words either way.
-      const viaReader = await readPage(pdfUrl).catch(() => null);
-      if (viaReader && viaReader.markdown.length >= 200) {
-        console.error(`[pdf] direct fetch refused; extracted via ${viaReader.provider}: ${pdfUrl}`);
-        return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
+      //
+      // Try EVERY candidate, not just the URL we were handed: for Google Drive
+      // the share link renders a JS viewer shell with no dish text in it, while
+      // the direct-download URL gives the reader the actual document.
+      for (const candidate of Array.from(new Set([pdfUrl, ...candidates]))) {
+        const viaReader = await readPage(candidate).catch(() => null);
+        if (viaReader && viaReader.markdown.length >= 200) {
+          console.error(`[pdf] direct fetch refused; extracted via ${viaReader.provider}: ${candidate}`);
+          return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
+        }
       }
       return null;
     }

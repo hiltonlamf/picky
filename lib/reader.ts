@@ -398,7 +398,65 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
   }
 }
 
+/**
+ * Short-lived page cache — the single biggest source of wasted reader spend.
+ *
+ * One restaurant is read several times over: discovery fetches /menus to see
+ * what is on it, then extraction fetches /menus again seconds later to read the
+ * dishes off it. Deep discovery and branch crawling repeat pages the same way.
+ * Across the six QA sites roughly a third of all reads were a page we had
+ * already fetched moments earlier — paid for twice, and waited for twice.
+ *
+ * A short TTL rather than a per-request object: threading a context through
+ * scraper → discovery → extract would touch every signature for the same
+ * effect. 5 minutes comfortably covers one analysis (seconds to ~2 min) while
+ * being far too short to serve anyone a stale menu; a re-search tomorrow, or an
+ * admin reparse, reads the site fresh.
+ */
+const PAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PAGE_CACHE_MAX = 200;
+const pageCache = new Map<string, { at: number; result: ReaderResult | null }>();
+
+/** Test seam: number of live entries. */
+export function pageCacheSize(): number {
+  return pageCache.size;
+}
+export function clearPageCache(): void {
+  pageCache.clear();
+}
+
+function cacheGet(url: string): { result: ReaderResult | null } | undefined {
+  const hit = pageCache.get(url);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > PAGE_CACHE_TTL_MS) {
+    pageCache.delete(url);
+    return undefined;
+  }
+  return hit;
+}
+
+function cacheSet(url: string, result: ReaderResult | null): void {
+  // Oldest-first eviction: insertion order is Map's iteration order, and every
+  // write is a fresh insert, so the first key is the oldest.
+  if (pageCache.size >= PAGE_CACHE_MAX) {
+    const oldest = pageCache.keys().next().value;
+    if (oldest !== undefined) pageCache.delete(oldest);
+  }
+  pageCache.set(url, { at: Date.now(), result });
+}
+
 export async function readPage(url: string): Promise<ReaderResult | null> {
+  const cached = cacheGet(url);
+  if (cached) return cached.result;
+  const result = await readPageUncached(url);
+  // Negative results are cached too: a page that just refused to render will
+  // refuse again thirty seconds later, and retrying it per candidate is exactly
+  // the duplicated work this exists to stop.
+  cacheSet(url, result);
+  return result;
+}
+
+async function readPageUncached(url: string): Promise<ReaderResult | null> {
   const provider = selectProvider();
   if (provider === 'off') return null;
   if (provider === 'jina') return readWithJina(url);

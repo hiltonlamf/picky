@@ -17,7 +17,7 @@ import {
 } from '@/lib/scraper';
 import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
 import { looksLikePdf, AICallError, driveConfirmUrl } from '@/lib/ai';
-import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit } from '@/lib/reader';
+import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit, clearPageCache, pageCacheSize } from '@/lib/reader';
 import { sumUsage } from '@/lib/menu-extract';
 import { isNonFoodMenu } from '@/lib/menu-discovery';
 
@@ -191,6 +191,10 @@ describe('reader quality gate (when to pay for Firecrawl)', () => {
 describe('a dead or unfunded Jina key is not retried on every page', () => {
   beforeEach(() => {
     resetJinaCircuit();
+    // These cases reuse URLs across tests, and readPage now caches by URL —
+    // without this, a later test reads the earlier test's cached null and
+    // never exercises the provider at all.
+    clearPageCache();
     vi.unstubAllGlobals();
   });
 
@@ -365,5 +369,52 @@ describe('private-dining packs are not the restaurant menu (linastores.co.uk)', 
     expect(isNonFoodMenu('Dinner Menu')).toBe(false);
     expect(isNonFoodMenu('A La Carte')).toBe(false);
     expect(isNonFoodMenu('Lunch')).toBe(false);
+  });
+});
+
+describe('page cache — the same page is never fetched twice in one analysis', () => {
+  beforeEach(() => {
+    clearPageCache();
+    resetJinaCircuit();
+    vi.unstubAllGlobals();
+  });
+
+  it('serves a repeat read from cache instead of paying again', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { content: 'x'.repeat(2000), url: 'https://a.example/menus', links: [], images: [] } }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Discovery reads /menus, then extraction reads it again seconds later.
+    const first = await readPage('https://a.example/menus');
+    const second = await readPage('https://a.example/menus');
+
+    expect(first?.markdown).toBe(second?.markdown);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // paid once, used twice
+    expect(pageCacheSize()).toBe(1);
+  });
+
+  it('still fetches a DIFFERENT page', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { content: 'y'.repeat(2000), url: 'https://a.example/x', links: [], images: [] } }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await readPage('https://a.example/one');
+    await readPage('https://a.example/two');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches a failure too — a page that refused once will refuse again', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}), text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await readPage('https://dead.example/')).toBeNull();
+    expect(await readPage('https://dead.example/')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
