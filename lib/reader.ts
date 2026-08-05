@@ -45,7 +45,8 @@ function reportReaderOutage(url: string): void {
     `JS-rendered restaurant sites will be read as raw HTML and will look like they have no menu. ` +
     `Jina key: ${process.env.JINA_API_KEY ? 'set' : 'MISSING'}` +
     `${jinaDisabledReason ? ` (disabled: ${jinaDisabledReason})` : ''}, ` +
-    `Firecrawl key: ${process.env.FIRECRAWL_API_KEY ? 'set' : 'MISSING'}.`;
+    `Firecrawl key: ${process.env.FIRECRAWL_API_KEY ? 'set' : 'MISSING'}` +
+    `${firecrawlDisabledReason ? ` (disabled: ${firecrawlDisabledReason})` : ''}.`;
   console.error('[reader]', detail);
   Sentry.captureException(new Error(`Reader outage: ${detail}`), {
     tags: { area: 'reader' },
@@ -133,24 +134,66 @@ function dedupe(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
 
+/**
+ * Why Firecrawl stopped answering, if it did. Same reasoning as `jinaStatus`:
+ * a provider that swallows its own HTTP status turns a quota problem into
+ * "this restaurant has no menu", which is the failure mode this whole change
+ * exists to kill.
+ */
+let firecrawlDisabledReason: string | null = null;
+
+export function firecrawlStatus(): string | null {
+  return firecrawlDisabledReason;
+}
+export function resetFirecrawlCircuit(): void {
+  firecrawlDisabledReason = null;
+}
+
+/** Credit/auth failures are permanent for this process; 429 is not. */
+const FIRECRAWL_FATAL_STATUSES = new Set([401, 402, 403]);
+
 async function readWithFirecrawl(url: string): Promise<ReaderResult | null> {
   const key = process.env.FIRECRAWL_API_KEY;
   if (!key) return null;
+  if (firecrawlDisabledReason) return null;
   try {
-    const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url,
-        formats: ['markdown', 'rawHtml', 'links', 'screenshot'],
-        onlyMainContent: false,
-      }),
-      signal: AbortSignal.timeout(25000),
-    });
-    if (!res.ok) return null;
+    const call = () =>
+      fetch('https://api.firecrawl.dev/v1/scrape', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          url,
+          formats: ['markdown', 'rawHtml', 'links', 'screenshot'],
+          onlyMainContent: false,
+        }),
+        signal: AbortSignal.timeout(25000),
+      });
+
+    let res = await call();
+    // Firecrawl's plans cap requests per minute, and a batch run (six sites,
+    // several pages each) trips that easily. Observed 2026-08-05: three sites
+    // scraped fine, then every later one failed in ~100ms — a rate limit, not
+    // a scrape failure, silently reported as "no menu". One bounded retry.
+    if (res.status === 429) {
+      const wait = Number(res.headers.get('retry-after')) * 1000 || 8000;
+      await new Promise((r) => setTimeout(r, Math.min(wait, 20000)));
+      res = await call();
+    }
+    if (FIRECRAWL_FATAL_STATUSES.has(res.status)) {
+      const body = await res.text().catch(() => '');
+      firecrawlDisabledReason =
+        `HTTP ${res.status} — ${res.status === 402 ? 'out of credits' : 'key rejected'}` +
+        `${body ? ` (${body.slice(0, 160).replace(/\s+/g, ' ')})` : ''}`;
+      console.error(`[reader] Firecrawl disabled for this process: ${firecrawlDisabledReason}`);
+      return null;
+    }
+    if (!res.ok) {
+      console.error(`[reader] Firecrawl HTTP ${res.status} for ${url}`);
+      return null;
+    }
 
     const json = (await res.json()) as {
       success?: boolean;

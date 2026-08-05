@@ -29,7 +29,7 @@ process.env.ANTHROPIC_API_KEY = '';
 
 import { scrapeRestaurant } from '../lib/scraper';
 import { discoverMenus, textLooksLikeMenu } from '../lib/menu-discovery';
-import { isReaderEnabled, readPage } from '../lib/reader';
+import { isReaderEnabled, readPage, jinaStatus, firecrawlStatus } from '../lib/reader';
 
 interface Case {
   name: string;
@@ -123,7 +123,17 @@ async function probeReader(url: string): Promise<string> {
   const started = Date.now();
   const res = await readPage(url).catch(() => null);
   const ms = Date.now() - started;
-  if (!res) return `NO CONTENT after ${ms}ms — provider failed or rate-limited (this alone can cause "no menu")`;
+  if (!res) {
+    // Name the reason rather than leaving a bare "NO CONTENT": a sub-second
+    // failure is an API rejecting us (quota/auth), not a page that wouldn't render.
+    const why = [
+      jinaStatus() ? `jina ${jinaStatus()}` : null,
+      firecrawlStatus() ? `firecrawl ${firecrawlStatus()}` : null,
+    ]
+      .filter(Boolean)
+      .join('; ');
+    return `NO CONTENT after ${ms}ms${why ? ` — ${why}` : ' — both providers returned nothing'} (this alone can cause "no menu")`;
+  }
   return `${res.provider} | ${res.markdown.length} chars | ${res.links.length} links | ${res.pdfLinks.length} pdfs | screenshot: ${res.screenshotUrl ? 'yes' : 'no'} | ${ms}ms`;
 }
 
@@ -189,6 +199,11 @@ async function main() {
   // extraction (sed '/=* SUMMARY =*/,$p') picks this up unchanged.
   console.log('\n================ SUMMARY ================');
   console.log('  (discovery stage only — says nothing about dish counts)');
+  // Provider health belongs in the summary: if a reader died partway through,
+  // every site after it is a false negative and the per-site results below are
+  // not evidence about the code.
+  if (jinaStatus()) console.log(`  ⚠ jina disabled mid-run: ${jinaStatus()}`);
+  if (firecrawlStatus()) console.log(`  ⚠ FIRECRAWL disabled mid-run: ${firecrawlStatus()}`);
   for (const r of results) console.log(`  ${r.ok ? '✓' : '✗'} ${r.name}`);
   const failed = results.filter((r) => !r.ok).length;
   console.log(`  ${results.length - failed}/${results.length} produced menu candidates`);
