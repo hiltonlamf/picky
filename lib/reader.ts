@@ -43,7 +43,8 @@ function reportReaderOutage(url: string): void {
   const detail =
     `No reader provider could render a page (first seen: ${url}). ` +
     `JS-rendered restaurant sites will be read as raw HTML and will look like they have no menu. ` +
-    `Jina key: ${process.env.JINA_API_KEY ? 'set' : 'MISSING'}, ` +
+    `Jina key: ${process.env.JINA_API_KEY ? 'set' : 'MISSING'}` +
+    `${jinaDisabledReason ? ` (disabled: ${jinaDisabledReason})` : ''}, ` +
     `Firecrawl key: ${process.env.FIRECRAWL_API_KEY ? 'set' : 'MISSING'}.`;
   console.error('[reader]', detail);
   Sentry.captureException(new Error(`Reader outage: ${detail}`), {
@@ -188,12 +189,36 @@ async function readWithFirecrawl(url: string): Promise<ReaderResult | null> {
 }
 
 /**
- * Jina Reader returns Markdown for a JS-rendered page. The keyless free tier
- * works for low volume; an optional JINA_API_KEY raises the rate limit.
- * It does not return rawHtml; we ask for the links/images sections so we can
- * still discover PDFs and image menus.
+ * Jina failures that will repeat identically on every subsequent page, so
+ * there is no point paying the round-trip again in this process:
+ *   401 — key missing or invalid
+ *   402 — account out of credit (a depleted/negative balance)
+ *   403 — Cloudflare challenge, which is what a keyless request now gets
+ * 429 is deliberately NOT here: rate limiting IS transient and already has a
+ * backoff retry below.
+ */
+const JINA_FATAL_STATUSES = new Set([401, 402, 403]);
+let jinaDisabledReason: string | null = null;
+
+/** Test seam + diagnostics: why Jina was taken out of the rotation, if it was. */
+export function jinaStatus(): string | null {
+  return jinaDisabledReason;
+}
+export function resetJinaCircuit(): void {
+  jinaDisabledReason = null;
+}
+
+/**
+ * Jina Reader returns Markdown for a JS-rendered page. A JINA_API_KEY is now
+ * effectively required: keyless requests get a Cloudflare challenge (verified
+ * 2026-08-05). It does not return rawHtml; we ask for the links/images sections
+ * so we can still discover PDFs and image menus.
  */
 async function readWithJina(url: string): Promise<ReaderResult | null> {
+  // Circuit open: a bad or unfunded key fails the same way every time, and
+  // retrying it per page just adds latency to every analysis before we get to
+  // the provider that actually works.
+  if (jinaDisabledReason) return null;
   try {
     const headers: Record<string, string> = {
       'User-Agent': BROWSER_UA,
@@ -219,6 +244,19 @@ async function readWithJina(url: string): Promise<ReaderResult | null> {
         signal: AbortSignal.timeout(25000),
         redirect: 'follow',
       });
+    }
+    if (JINA_FATAL_STATUSES.has(res.status)) {
+      const meaning =
+        res.status === 402
+          ? 'account out of credit'
+          : res.status === 401
+            ? 'key missing or invalid'
+            : process.env.JINA_API_KEY
+              ? 'forbidden'
+              : 'Cloudflare challenge (no API key set)';
+      jinaDisabledReason = `HTTP ${res.status} — ${meaning}`;
+      console.error(`[reader] Jina disabled for this process: ${jinaDisabledReason}`);
+      return null;
     }
     if (!res.ok) return null;
 

@@ -99,7 +99,19 @@ async function probeJinaRaw(url: string): Promise<string> {
   try {
     const res = await fetch(`https://r.jina.ai/${url}`, { headers, signal: AbortSignal.timeout(25000) });
     const body = (await res.text().catch(() => '')).slice(0, 300).replace(/\s+/g, ' ');
-    return `HTTP ${res.status} | key: ${process.env.JINA_API_KEY ? 'set' : 'NONE'} | body: ${body}`;
+    // Name the status so the cause is unmistakable in a CI log: an unfunded
+    // key and a missing key look identical from the outside otherwise.
+    const meaning =
+      res.status === 402
+        ? ' ← ACCOUNT OUT OF CREDIT (top up or rely on Firecrawl)'
+        : res.status === 401
+          ? ' ← KEY INVALID'
+          : res.status === 403
+            ? ' ← FORBIDDEN (keyless requests get a Cloudflare challenge)'
+            : res.status === 429
+              ? ' ← RATE LIMITED'
+              : '';
+    return `HTTP ${res.status}${meaning} | key: ${process.env.JINA_API_KEY ? 'set' : 'NONE'} | body: ${body}`;
   } catch (err) {
     return `THREW: ${err instanceof Error ? err.message : String(err)}`;
   }

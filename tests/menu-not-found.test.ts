@@ -17,7 +17,7 @@ import {
 } from '@/lib/scraper';
 import { resolveDocumentUrl } from '@/lib/doc-url';
 import { looksLikePdf } from '@/lib/ai';
-import { readerResultIsThin } from '@/lib/reader';
+import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit } from '@/lib/reader';
 
 describe('Google Drive / Dropbox menu links (waterkantamsterdam.nl)', () => {
   it('rewrites a Drive share link to a direct download', () => {
@@ -178,5 +178,61 @@ describe('reader quality gate (when to pay for Firecrawl)', () => {
 
   it('does not pay again for a substantive read', () => {
     expect(readerResultIsThin({ ...base, markdown: 'x'.repeat(1200) })).toBe(false);
+  });
+});
+
+describe('a dead or unfunded Jina key is not retried on every page', () => {
+  beforeEach(() => {
+    resetJinaCircuit();
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the circuit on 402 (out of credit) and stops calling Jina', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 402,
+      json: async () => ({}),
+      text: async () => 'insufficient balance',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await readPage('https://a.example/1')).toBeNull();
+    expect(await readPage('https://a.example/2')).toBeNull();
+    expect(await readPage('https://a.example/3')).toBeNull();
+
+    // One attempt total, not one per page.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(jinaStatus()).toContain('402');
+    expect(jinaStatus()).toContain('out of credit');
+  });
+
+  it('names a keyless 403 as the Cloudflare challenge it is', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}), text: async () => 'Just a moment...' })
+    );
+    await readPage('https://a.example/1');
+    expect(jinaStatus()).toContain('Cloudflare challenge');
+  });
+
+  it('does NOT open the circuit on 429 — rate limiting is transient', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({}),
+      text: async () => 'rate limited',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    // Fake timers: the 429 path deliberately sleeps 12s before its one retry.
+    vi.useFakeTimers();
+    try {
+      const pending = readPage('https://a.example/1');
+      await vi.runAllTimersAsync();
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(jinaStatus()).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // initial + the backoff retry
   });
 });
