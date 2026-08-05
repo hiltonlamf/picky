@@ -52,16 +52,20 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Without a working reader, every JS-rendered restaurant looks like it has
+      # no menu — so make the reader's configuration impossible to miss.
+      # r.jina.ai now answers keyless requests with a Cloudflare challenge
+      # (verified 2026-08-05, run #29: HTTP 403 "Just a moment..."), so the
+      # keyless tier can no longer be relied on.
       - name: Reader configuration
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
         run: |
-          if [ -n "$FIRECRAWL_API_KEY" ]; then
-            echo "Firecrawl fallback: ENABLED (key length ${#FIRECRAWL_API_KEY})"
-          else
-            echo "Firecrawl fallback: DISABLED — no FIRECRAWL_API_KEY repo secret."
-            echo "This run exercises the keyless Jina path only; JS-heavy sites may fail for"
-            echo "reasons a production run with Firecrawl configured would not hit."
+          [ -n "$JINA_API_KEY" ] && echo "Jina: keyed (${#JINA_API_KEY} chars)" || echo "Jina: KEYLESS — expect HTTP 403 from Cloudflare"
+          [ -n "$FIRECRAWL_API_KEY" ] && echo "Firecrawl fallback: ENABLED (${#FIRECRAWL_API_KEY} chars)" || echo "Firecrawl fallback: DISABLED — no FIRECRAWL_API_KEY repo secret"
+          if [ -z "$JINA_API_KEY" ] && [ -z "$FIRECRAWL_API_KEY" ]; then
+            echo "::warning::No reader is configured. JS-rendered sites cannot be read, and this run will report menus as missing for reasons unrelated to the code under test."
           fi
       - name: Diagnose (free — no AI calls, no DB writes)
         if: inputs.mode == 'diagnose'
@@ -69,6 +73,7 @@ jobs:
         shell: bash
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       - name: API key sanity check
         if: inputs.mode != 'diagnose'
         env:

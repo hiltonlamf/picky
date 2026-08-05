@@ -1,8 +1,33 @@
 # Known gap: JS-rendered + "lies-about-its-language" restaurant sites
 
-**Status:** open, deferred to a future PR/session (surfaced 2026-07-24 while
-seeding the Amsterdam guide).
+**Status:** ADDRESSED 2026-08-05 (PR #27) — see the resolution section below.
+Originally surfaced 2026-07-24 while seeding the Amsterdam guide.
 **Example restaurant:** [ramen-ya.nl](https://ramen-ya.nl/) (Amsterdam).
+
+## Resolution (2026-08-05, PR #27)
+
+The recommendation below was "measure how common the pattern is before building
+anything." Six founder-reported restaurants — four of them Amsterdam sites —
+were that measurement, and both root causes named here were confirmed:
+
+- **Root cause 2 (the lying `lang` attribute) is fixed.** `findEnglishVariant`
+  no longer trusts `<html lang>`; `looksEnglish()` checks the actual text with a
+  free stop-word test, and the matcher now handles `/eng/`, `/english/`,
+  `?taal=en` and flag-image switchers.
+- **Root cause 1 (JS rendering) turned out to be worse than described**, and not
+  really about carousels: **the reader itself was dead.** `r.jina.ai` answers
+  keyless requests with a Cloudflare challenge (HTTP 403 "Just a moment…",
+  verified across six sites in run #29), so every JS-rendered site had been
+  falling back to raw HTML. That is a configuration/infrastructure problem, not
+  a heuristics one — no amount of tab-expanding logic helps when the renderer
+  returns nothing. Fixed by keying Jina and adding Firecrawl as a paid fallback
+  (`lib/reader.ts`, `readerResultIsThin`).
+- **Option 3 ("drive the reader to expand tabs/swipers") was NOT needed** in the
+  form imagined. Keeping `[aria-hidden="true"]` content in `extractText` recovers
+  inactive tab panels and closed overlays for free, because the markup is already
+  in the DOM.
+
+Keep the analysis below for context; it diagnosed the problem correctly.
 
 ## Symptom
 
