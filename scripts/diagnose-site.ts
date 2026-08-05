@@ -36,12 +36,24 @@ interface Case {
   url: string;
 }
 
+/** Comma-separated substrings, so one run can target a specific set of sites
+ *  ("tofu,lina,kas") rather than the whole suite — the keyless reader tier is
+ *  rate-limited, so diagnosing 34 sites to look at 6 is self-defeating. */
+export function selectCases(all: Case[], filter?: string): Case[] {
+  const terms = (filter ?? '')
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  if (terms.length === 0) return all;
+  return all.filter((c) =>
+    terms.some((t) => c.name.toLowerCase().includes(t) || c.url.toLowerCase().includes(t))
+  );
+}
+
 function casesFromJson(filter?: string): Case[] {
   const file = path.join(__dirname, '..', 'tests', 'pipeline-cases.json');
   const all = (JSON.parse(readFileSync(file, 'utf8')) as { cases: Case[] }).cases;
-  if (!filter) return all;
-  const f = filter.toLowerCase();
-  return all.filter((c) => c.name.toLowerCase().includes(f) || c.url.toLowerCase().includes(f));
+  return selectCases(all, filter);
 }
 
 function list(label: string, items: string[] | undefined, limit = 8): void {

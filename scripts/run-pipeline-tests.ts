@@ -3,6 +3,7 @@
  *
  *   npx tsx scripts/run-pipeline-tests.ts            # core cases (PR gate)
  *   npx tsx scripts/run-pipeline-tests.ts misters    # filter by substring
+ *   npx tsx scripts/run-pipeline-tests.ts tofu,lina  # or several, comma-separated
  *   npx tsx scripts/run-pipeline-tests.ts --smoke    # stable 3-site subset
  *   npx tsx scripts/run-pipeline-tests.ts --extended # core + extended Dublin QA set
  *
@@ -185,7 +186,15 @@ async function main() {
     : extended
       ? CASES
       : filter
-        ? CASES.filter((c) => c.name.toLowerCase().includes(filter) || c.url.includes(filter))
+        ? // Comma-separated substrings: "tofu,lina,kas" targets exactly those
+          // sites. Re-verifying one fix shouldn't mean paying for 15 cases.
+          CASES.filter((c) =>
+            filter
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)
+              .some((t) => c.name.toLowerCase().includes(t) || c.url.toLowerCase().includes(t))
+          )
         : CASES.filter((c) => !c.extended);
 
   console.log(`Reader enabled: ${isReaderEnabled()} | provider auto${smoke ? ' | SMOKE subset' : extended ? ' | EXTENDED set' : ''}`);
