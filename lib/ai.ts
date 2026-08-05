@@ -3,6 +3,7 @@ import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
 import { documentUrlCandidates } from './doc-url';
+import { readPage } from './reader';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -697,7 +698,7 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
  * content-type are logged so the next failure names itself instead of becoming
  * another silent "no menu".
  */
-async function fetchDocument(url: string): Promise<ArrayBuffer | null> {
+async function fetchDocument(url: string, depth = 0): Promise<ArrayBuffer | null> {
   let referer = '';
   try {
     referer = new URL(url).origin + '/';
@@ -720,16 +721,48 @@ async function fetchDocument(url: string): Promise<ArrayBuffer | null> {
   }
 
   const buffer = await res.arrayBuffer();
-  if (buffer.byteLength > 20 * 1024 * 1024) {
+  if (buffer.byteLength > MAX_PDF_BYTES) {
     console.error(`[pdf] too large (${buffer.byteLength} bytes): ${url}`);
     return null;
   }
   if (!looksLikePdf(new Uint8Array(buffer.slice(0, 8)))) {
     const ct = res.headers.get('content-type') ?? 'unknown';
     console.error(`[pdf] not a PDF (content-type: ${ct}, ${buffer.byteLength} bytes): ${url}`);
+    // Google Drive answers big files with a small HTML page carrying a confirm
+    // FORM — the token is generated per request, so it cannot be guessed with a
+    // static `confirm=t`. Read it out of the page and replay it once. Measured
+    // on waterkantamsterdam.nl: 1,789 bytes of text/html from both endpoints.
+    if (depth === 0 && ct.includes('text/html') && buffer.byteLength < 100_000) {
+      const html = Buffer.from(buffer).toString('utf8');
+      const followUp = driveConfirmUrl(html);
+      if (followUp) {
+        console.error(`[pdf] following Drive confirm form → ${followUp}`);
+        return fetchDocument(followUp, depth + 1);
+      }
+    }
     return null;
   }
   return buffer;
+}
+
+/** Anthropic's document limit; also what we'll transfer for one menu. */
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Rebuild Google Drive's download URL from the confirm page it serves for
+ * larger files. The page is a plain `<form>` whose hidden inputs carry a
+ * per-request `uuid` alongside the file id — that's why a fixed `confirm=t`
+ * doesn't work on its own.
+ */
+export function driveConfirmUrl(html: string): string | null {
+  const action = /<form[^>]+action="([^"]+)"/i.exec(html)?.[1];
+  if (!action || !/google\.com/.test(action)) return null;
+  const params = new URLSearchParams();
+  const inputRe = /<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"/gi;
+  let m: RegExpExecArray | null;
+  while ((m = inputRe.exec(html))) params.set(m[1], m[2].replace(/&amp;/g, '&'));
+  if (!params.has('id')) return null;
+  return `${action.replace(/&amp;/g, '&')}?${params.toString()}`;
 }
 
 export async function classifyMenuFromPdf(
@@ -750,8 +783,19 @@ export async function classifyMenuFromPdf(
     // Verify it really is a PDF BEFORE spending a call. Anything else (a viewer
     // page, a login wall, an error page) would be posted as application/pdf and
     // rejected by the API — a guaranteed-fail call we would still be billed for.
-    // Returning null lets the retry ladder try the page/screenshot instead.
-    if (!buffer) return null;
+    if (!buffer) {
+      // Last resort before giving up on a menu we KNOW exists: ask the reader
+      // for it. tofuvegan.com serves a real 8-page menu PDF that opens in a
+      // browser but refuses our request, and the reader fetches from different
+      // infrastructure and returns extracted text. Reading it as text is just
+      // as good — a menu is words either way.
+      const viaReader = await readPage(pdfUrl).catch(() => null);
+      if (viaReader && viaReader.markdown.length >= 200) {
+        console.error(`[pdf] direct fetch refused; extracted via ${viaReader.provider}: ${pdfUrl}`);
+        return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
+      }
+      return null;
+    }
 
     const pdfBase64 = Buffer.from(buffer).toString('base64');
     return classifyMenuFromPdfBuffer(pdfBase64, restaurantName, modelOverride);

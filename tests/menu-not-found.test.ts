@@ -16,9 +16,10 @@ import {
   isSamePage,
 } from '@/lib/scraper';
 import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
-import { looksLikePdf, AICallError } from '@/lib/ai';
+import { looksLikePdf, AICallError, driveConfirmUrl } from '@/lib/ai';
 import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit } from '@/lib/reader';
 import { sumUsage } from '@/lib/menu-extract';
+import { isNonFoodMenu } from '@/lib/menu-discovery';
 
 describe('Google Drive / Dropbox menu links (waterkantamsterdam.nl)', () => {
   it('rewrites a Drive share link to a direct download', () => {
@@ -325,5 +326,44 @@ describe('a billed-but-unusable call must not report $0 (run #33 undercount)', (
     const total = sumUsage(a, b);
     expect(total.costUsd).toBeCloseTo(0.03);
     expect(total.tokensIn).toBe(300);
+  });
+});
+
+describe('Google Drive confirm form (waterkantamsterdam.nl, round 3)', () => {
+  it('rebuilds the download URL from the confirm page, uuid and all', () => {
+    // The token is generated per request, which is why a fixed confirm=t fails.
+    const html = `<html><body><form id="download-form" action="https://drive.usercontent.google.com/download" method="get">
+      <input type="hidden" name="id" value="1XhR71TLkaDi">
+      <input type="hidden" name="export" value="download">
+      <input type="hidden" name="confirm" value="t">
+      <input type="hidden" name="uuid" value="abc-123-def">
+    </form></body></html>`;
+    const url = driveConfirmUrl(html);
+    expect(url).toContain('https://drive.usercontent.google.com/download?');
+    expect(url).toContain('id=1XhR71TLkaDi');
+    expect(url).toContain('uuid=abc-123-def');
+    expect(url).toContain('confirm=t');
+  });
+
+  it('returns null for a page that is not a Drive confirm form', () => {
+    expect(driveConfirmUrl('<html><body>Sorry, file not found</body></html>')).toBeNull();
+    expect(driveConfirmUrl('<form action="https://evil.example/steal"><input type="hidden" name="id" value="x"></form>')).toBeNull();
+  });
+
+  it('returns null when the form carries no file id', () => {
+    expect(driveConfirmUrl('<form action="https://drive.google.com/x"><input type="hidden" name="uuid" value="q"></form>')).toBeNull();
+  });
+});
+
+describe('private-dining packs are not the restaurant menu (linastores.co.uk)', () => {
+  it('drops a "PDR Combined" brochure', () => {
+    expect(isNonFoodMenu('PDR Combined (1)')).toBe(true);
+    expect(isNonFoodMenu('Private Dining and Events')).toBe(true);
+  });
+
+  it('still keeps ordinary food menus', () => {
+    expect(isNonFoodMenu('Dinner Menu')).toBe(false);
+    expect(isNonFoodMenu('A La Carte')).toBe(false);
+    expect(isNonFoodMenu('Lunch')).toBe(false);
   });
 });

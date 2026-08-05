@@ -87,7 +87,7 @@ export const DRINK_SOURCE_RE =
  * or city. Kept separate from DRINK_SOURCE_RE for clarity.
  */
 export const NON_FOOD_MENU_RE =
-  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu)\b/i;
+  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack)\b/i;
 
 /** True if a menu label / hint is a non-food menu that should never be captured. */
 export function isNonFoodMenu(text: string): boolean {
