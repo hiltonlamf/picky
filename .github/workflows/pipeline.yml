@@ -77,10 +77,9 @@ jobs:
           else
             npx tsx scripts/diagnose-site.ts --cases "$FILTER" 2>&1 | tee pipeline-log.txt
           fi
-        env:
-          FILTER: ${{ inputs.filter }}
         shell: bash
         env:
+          FILTER: ${{ inputs.filter }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       - name: API key sanity check
