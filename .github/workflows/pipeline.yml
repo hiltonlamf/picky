@@ -14,6 +14,16 @@ name: Live pipeline QA
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'diagnose = FREE scrape/discover dump (no AI). pipeline = the real, paid suite.'
+        type: choice
+        options: [pipeline, diagnose]
+        default: pipeline
+      filter:
+        description: 'Optional case-name/URL substring (e.g. "newking"). Blank = the whole set.'
+        type: string
+        default: ''
   push:
     branches: [main] # i.e. every PR merge — ~$0.75/run at current model tiering
 
@@ -42,7 +52,25 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Reader configuration
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+        run: |
+          if [ -n "$FIRECRAWL_API_KEY" ]; then
+            echo "Firecrawl fallback: ENABLED (key length ${#FIRECRAWL_API_KEY})"
+          else
+            echo "Firecrawl fallback: DISABLED — no FIRECRAWL_API_KEY repo secret."
+            echo "This run exercises the keyless Jina path only; JS-heavy sites may fail for"
+            echo "reasons a production run with Firecrawl configured would not hit."
+          fi
+      - name: Diagnose (free — no AI calls, no DB writes)
+        if: inputs.mode == 'diagnose'
+        run: npx tsx scripts/diagnose-site.ts --cases ${{ inputs.filter }} 2>&1 | tee pipeline-log.txt
+        shell: bash
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
       - name: API key sanity check
+        if: inputs.mode != 'diagnose'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -55,7 +83,8 @@ jobs:
             -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
           grep -o '"type":"[a-z_]*"' /tmp/api-check.json | head -2 || true
       - name: Run live pipeline suite
-        run: npm run test:pipeline 2>&1 | tee pipeline-log.txt
+        if: inputs.mode != 'diagnose'
+        run: npx tsx scripts/run-pipeline-tests.ts ${{ inputs.filter }} 2>&1 | tee pipeline-log.txt
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
