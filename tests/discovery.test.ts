@@ -460,3 +460,62 @@ describe('the 2026-08-05 "no menu listed on this site" cluster', () => {
     expect(res.candidates.some((c) => c.ref === 'https://chain.com/menus/soho-dinner.pdf')).toBe(true);
   });
 });
+
+describe('a subpage named "menu" survives a wrong labeler verdict (neni-amsterdam.nl)', () => {
+  it('keeps /menus even when the labeler says it is not distinct', async () => {
+    // NENI's /menus page was found correctly, then judged "not distinct" and
+    // dropped, leaving only homepage nav text — the restaurant came back with
+    // no dishes. The labeler never sees page content, so its guess is the
+    // weaker signal against a URL that literally says "menus".
+    mockLabeler.mockImplementation(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Menu',
+        isDistinctMenu: false,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }))
+    );
+    const scrape = makeScrape({ menuLinks: ['https://neni-amsterdam.nl/menus'] });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.ref === 'https://neni-amsterdam.nl/menus')).toBe(true);
+  });
+
+  it('still drops a non-menu subpage the labeler rejects', async () => {
+    mockLabeler.mockImplementation(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Page',
+        isDistinctMenu: false,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }))
+    );
+    const scrape = makeScrape({ menuLinks: ['https://example.com/order-takeaway'] });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.ref.includes('order-takeaway'))).toBe(false);
+  });
+});
+
+describe('each branch of a chain becomes its own named menu (founder, 2026-08-05)', () => {
+  it('labels menus by location and keeps several branches', async () => {
+    const scrape = makeScrape({ navLinks: ['https://chain.com/locations'] });
+    mockScrape.mockImplementation(async (url: string) => {
+      if (url === 'https://chain.com/locations') {
+        return makeScrape({
+          canonicalUrl: url,
+          title: 'Our Locations',
+          navLinks: ['https://chain.com/locations/soho', 'https://chain.com/locations/kings-cross'],
+        });
+      }
+      const slug = url.split('/').pop();
+      return makeScrape({ canonicalUrl: url, menuPdfUrls: [`https://chain.com/menus/${slug}.pdf`] });
+    });
+
+    const res = await discoverMenus(scrape);
+    const labels = res.candidates.map((c) => c.label.toLowerCase()).join(' | ');
+    expect(res.candidates.length).toBeGreaterThanOrEqual(2);
+    expect(labels).toContain('soho');
+    expect(labels).toContain('kings cross');
+  });
+});

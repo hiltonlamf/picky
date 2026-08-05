@@ -15,15 +15,21 @@ import {
   looksEnglish,
   isSamePage,
 } from '@/lib/scraper';
-import { resolveDocumentUrl } from '@/lib/doc-url';
-import { looksLikePdf } from '@/lib/ai';
+import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
+import { looksLikePdf, AICallError } from '@/lib/ai';
 import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit } from '@/lib/reader';
+import { sumUsage } from '@/lib/menu-extract';
 
 describe('Google Drive / Dropbox menu links (waterkantamsterdam.nl)', () => {
   it('rewrites a Drive share link to a direct download', () => {
+    // Preferred form is the post-consent endpoint: the plain uc?export=download
+    // hands back a virus-scan interstitial for anything sizeable, which is what
+    // actually defeated this restaurant. Both are still tried, in order.
     expect(
       resolveDocumentUrl('https://drive.google.com/file/d/1XhR71TLkaDiQuR5pvMH3x8oGBYJ7B-tj/view?usp=sharing')
-    ).toBe('https://drive.google.com/uc?export=download&id=1XhR71TLkaDiQuR5pvMH3x8oGBYJ7B-tj');
+    ).toBe(
+      'https://drive.usercontent.google.com/download?id=1XhR71TLkaDiQuR5pvMH3x8oGBYJ7B-tj&export=download&confirm=t'
+    );
   });
 
   it('handles the /preview form and the ?id= form', () => {
@@ -276,5 +282,48 @@ describe('a locale in a third-party URL is not a translation (waterkantamsterdam
       </head><body><p>${dutch}</p></body></html>
     `);
     expect(findEnglishVariant($, 'https://example.nl/')).toBeNull();
+  });
+});
+
+describe('Google Drive virus-scan interstitial (waterkantamsterdam.nl, round 2)', () => {
+  it('offers the confirm-token endpoint FIRST, then the plain uc download', () => {
+    const urls = documentUrlCandidates('https://drive.google.com/file/d/FILEID/view?usp=sharing');
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toBe('https://drive.usercontent.google.com/download?id=FILEID&export=download&confirm=t');
+    expect(urls[1]).toBe('https://drive.google.com/uc?export=download&id=FILEID');
+  });
+
+  it('extracts the id from the ?id= form too', () => {
+    expect(documentUrlCandidates('https://drive.google.com/open?id=ABC')[0]).toContain('id=ABC');
+  });
+
+  it('leaves a normal PDF as a single candidate', () => {
+    expect(documentUrlCandidates('https://x.ie/menu.pdf')).toEqual(['https://x.ie/menu.pdf']);
+  });
+
+  it('googleDriveFileId returns null for non-Drive URLs', () => {
+    expect(googleDriveFileId('https://x.ie/menu.pdf')).toBeNull();
+  });
+});
+
+describe('a billed-but-unusable call must not report $0 (run #33 undercount)', () => {
+  it('AICallError carries the usage of the call that was already charged', () => {
+    const usage = { model: 'claude-haiku-4-5-20251001', tokensIn: 5000, tokensOut: 8192, costUsd: 0.0459 };
+    const err = new AICallError('AI returned invalid JSON.', usage);
+    expect(err.usage).toEqual(usage);
+    expect(err.truncated).toBe(false);
+  });
+
+  it('flags truncation separately, so the caller can split rather than give up', () => {
+    const err = new AICallError('hit the output limit', { model: 'm', tokensIn: 1, tokensOut: 2, costUsd: 0.5 }, true);
+    expect(err.truncated).toBe(true);
+  });
+
+  it('sumUsage adds a failed attempt cost into the running total', () => {
+    const a = { model: 'haiku', tokensIn: 100, tokensOut: 50, costUsd: 0.01 };
+    const b = { model: 'haiku', tokensIn: 200, tokensOut: 80, costUsd: 0.02 };
+    const total = sumUsage(a, b);
+    expect(total.costUsd).toBeCloseTo(0.03);
+    expect(total.tokensIn).toBe(300);
   });
 });

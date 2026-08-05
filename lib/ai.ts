@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
-import { resolveDocumentUrl } from './doc-url';
+import { documentUrlCandidates } from './doc-url';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -32,6 +32,58 @@ export type AIUsage = {
   tokensOut: number;
   costUsd: number;
 };
+
+// Browser-shaped UA for fetching linked assets (PDFs, images). Some hosts
+// reject anything that doesn't look like a browser.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+/**
+ * A call that reached Anthropic — and was therefore BILLED — but whose result
+ * we could not use (truncated JSON, unexpected content type, parse failure).
+ *
+ * It exists because the alternative loses money silently. A helper typed
+ * `Promise<T | null>` that returns `null` on failure returns a shape that
+ * cannot carry usage, so spend Anthropic had already charged us for vanished
+ * from every in-process total. That is the 2026-07-25 8× undercount pattern in
+ * `CLAUDE.md`, and live run #33 showed it still biting: three restaurants
+ * reported "$0.0000 spent" while having made real calls (New King made four).
+ *
+ * `callClaude` still records every call to `ai_usage_log` the moment it
+ * returns — that ledger was always right. This is what keeps the *in-process*
+ * figure (what the retry ladder sums, what the pipeline suite prints, what the
+ * route attributes to a restaurant) honest as well.
+ */
+export class AICallError extends Error {
+  usage?: AIUsage;
+  /** True when the model hit max_tokens — the output is cut off, not wrong. */
+  truncated: boolean;
+  constructor(message: string, usage?: AIUsage, truncated = false) {
+    super(message);
+    this.name = 'AICallError';
+    this.usage = usage;
+    this.truncated = truncated;
+  }
+}
+
+/** Usage for a message that already came back from the API. */
+export function usageOf(message: Anthropic.Message): AIUsage {
+  const u = message.usage as Anthropic.Usage & {
+    cache_creation_input_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+  };
+  const cacheWrite = u.cache_creation_input_tokens ?? 0;
+  const cacheRead = u.cache_read_input_tokens ?? 0;
+  const model = String(message.model);
+  return {
+    model,
+    tokensIn: u.input_tokens + cacheWrite + cacheRead,
+    tokensOut: u.output_tokens,
+    costUsd:
+      calcCost(model, u.input_tokens, u.output_tokens) +
+      calcCost(model, Math.round(cacheWrite * 1.25 + cacheRead * 0.1), 0),
+  };
+}
 
 /** True for Anthropic account failures (credits exhausted, monthly usage cap
  *  reached, invalid/missing API key) — callers must surface these instead of
@@ -184,6 +236,77 @@ function buildPrompt(menuText: string, restaurantName?: string): string {
   return `${nameHint}Analyse this restaurant menu and classify all dishes. Return ONLY JSON.\n\nMenu content:\n\n${menuText.slice(0, 30000)}`;
 }
 
+/** Text longer than this is split before extraction rather than after a
+ *  wasted truncated call. Sized from the failure that motivated it: New King's
+ *  13,552-character menu reliably overran the 8,192-token output cap. */
+const CHUNK_CHARS = 9000;
+/** Hard cap on splits, so a pathological page can't fan out into many calls. */
+const MAX_CHUNKS = 4;
+
+/** Split on blank lines / list boundaries so a dish is never cut in half. */
+function splitMenuText(text: string, parts: number): string[] {
+  if (parts <= 1) return [text];
+  const target = Math.ceil(text.length / parts);
+  const lines = text.split('\n');
+  const chunks: string[] = [];
+  let current = '';
+  for (const line of lines) {
+    if (current.length >= target && current.length > 0) {
+      chunks.push(current);
+      current = '';
+    }
+    current += line + '\n';
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function mergeSections(menus: ClassifiedMenu[]): ClassifiedMenu {
+  const base = menus[0] ?? { sections: [] };
+  return {
+    restaurantName: menus.find((m) => m.restaurantName)?.restaurantName,
+    language: menus.find((m) => m.language)?.language,
+    cuisine: menus.find((m) => m.cuisine)?.cuisine ?? base.cuisine,
+    sections: menus.flatMap((m) => m.sections),
+  };
+}
+
+/** One extraction call over one piece of text. Throws AICallError (carrying
+ *  usage) rather than a bare Error, so a billed-but-unusable call is never
+ *  dropped from the spend total. */
+async function classifyMenuChunk(
+  menuText: string,
+  model: string,
+  restaurantName?: string
+): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> {
+  const message = await callClaude({
+    model,
+    max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: buildPrompt(menuText, restaurantName) }],
+  });
+  const usage = usageOf(message);
+
+  // Truncated output is not a bad model, it's too many dishes for one response.
+  // Flag it so the caller can split and retry instead of discarding the work.
+  if (message.stop_reason === 'max_tokens') {
+    throw new AICallError('AI response hit the output limit before finishing the menu.', usage, true);
+  }
+
+  const content = message.content[0];
+  if (content.type !== 'text') throw new AICallError('Unexpected AI response type', usage);
+
+  const text = content.text.trim();
+  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
+  const jsonText = jsonMatch[1]?.trim() ?? text;
+
+  try {
+    return { menu: stripDrinksAndHeaders(JSON.parse(jsonText) as ClassifiedMenu), usage };
+  } catch {
+    throw new AICallError('AI returned invalid JSON. Please try again.', usage);
+  }
+}
+
 export async function classifyMenuWithAI(
   menuText: string,
   restaurantName?: string,
@@ -194,32 +317,58 @@ export async function classifyMenuWithAI(
   // double-check downstream regardless of which model extracted.
   const model = modelOverride ?? EXTRACTION_MODEL;
 
-  const message = await callClaude({
-    model,
-    max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildPrompt(menuText, restaurantName) }],
-  });
+  // Pre-split obviously-oversized menus. Cheaper than paying for a truncated
+  // call first and splitting afterwards, and the input cost is the same either
+  // way (the text is sent once in total, just across several messages).
+  const plannedChunks = Math.min(MAX_CHUNKS, Math.max(1, Math.ceil(menuText.length / CHUNK_CHARS)));
 
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected AI response type');
+  const runChunks = async (parts: number): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> => {
+    const pieces = splitMenuText(menuText, parts);
+    const menus: ClassifiedMenu[] = [];
+    let usage: AIUsage | undefined;
+    let truncatedUsage: AIUsage | undefined;
+    for (const piece of pieces) {
+      try {
+        const res = await classifyMenuChunk(piece, model, restaurantName);
+        menus.push(res.menu);
+        usage = addUsage(usage, res.usage);
+      } catch (err) {
+        // Keep every billed call in the total, whatever the outcome.
+        if (err instanceof AICallError) {
+          usage = addUsage(usage, err.usage);
+          if (err.truncated) truncatedUsage = usage;
+          else throw new AICallError(err.message, usage, false);
+        } else {
+          throw err;
+        }
+      }
+    }
+    if (truncatedUsage && parts < MAX_CHUNKS) {
+      // Still too big even split this way — split finer and try again. The
+      // already-spent usage rides along so it can't disappear.
+      const finer = await runChunks(Math.min(MAX_CHUNKS, parts * 2));
+      return { menu: finer.menu, usage: addUsage(usage, finer.usage)! };
+    }
+    if (menus.length === 0) {
+      throw new AICallError('AI response hit the output limit before finishing the menu.', usage, true);
+    }
+    return { menu: mergeSections(menus), usage: usage! };
+  };
 
-  const text = content.text.trim();
-  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
-  const jsonText = jsonMatch[1]?.trim() ?? text;
+  return runChunks(plannedChunks);
+}
 
-  let menu: ClassifiedMenu;
-  try {
-    menu = JSON.parse(jsonText) as ClassifiedMenu;
-  } catch {
-    throw new Error('AI returned invalid JSON. Please try again.');
-  }
-
-  const tokensIn = message.usage.input_tokens;
-  const tokensOut = message.usage.output_tokens;
-  const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
-
-  return { menu: stripDrinksAndHeaders(menu), usage };
+/** Sum two usages; either may be undefined. Kept local to avoid importing from
+ *  menu-extract (which imports this module). */
+function addUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    model: a.model === b.model ? a.model : `${a.model}+${b.model}`,
+    tokensIn: a.tokensIn + b.tokensIn,
+    tokensOut: a.tokensOut + b.tokensOut,
+    costUsd: a.costUsd + b.costUsd,
+  };
 }
 
 async function downloadImageAsBase64(
@@ -335,8 +484,14 @@ export async function classifyMenuFromImageBuffers(
     ],
   });
 
+  // The call is billed the moment it returns, so every exit below carries its
+  // usage rather than returning a bare null (see AICallError).
+  const usage = usageOf(message);
   const content = message.content[0];
-  if (content.type !== 'text') return null;
+  if (content.type !== 'text') throw new AICallError('Unexpected AI response type', usage);
+  if (message.stop_reason === 'max_tokens') {
+    throw new AICallError('AI response hit the output limit before finishing the menu.', usage, true);
+  }
 
   const text = content.text.trim();
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
@@ -346,14 +501,14 @@ export async function classifyMenuFromImageBuffers(
   try {
     menu = JSON.parse(jsonText) as ClassifiedMenu;
   } catch {
-    return null;
+    throw new AICallError('AI returned invalid JSON from images.', usage);
   }
 
-  if (!menu.sections || menu.sections.length === 0) return null;
-
-  const tokensIn = message.usage.input_tokens;
-  const tokensOut = message.usage.output_tokens;
-  const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
+  // No dishes is a legitimate answer (the images weren't a menu), not a
+  // failure — but it still cost money, so report it as a priced empty result.
+  if (!menu.sections || menu.sections.length === 0) {
+    throw new AICallError('No menu text found in the images.', usage);
+  }
 
   return { menu: stripDrinksAndHeaders(menu), usage };
 }
@@ -531,6 +686,52 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
   return bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
 }
 
+/**
+ * Fetch a document the way a browser would.
+ *
+ * A bare User-Agent is not enough for a lot of hosts: tofuvegan.com serves a
+ * real 8-page menu PDF that opens fine in Chrome, but our request came back as
+ * something that wasn't a PDF at all. Sending the headers a browser actually
+ * sends — Accept, Accept-Language, Referer from the file's own origin — is what
+ * separates "the site blocks us" from "the file isn't there". The status and
+ * content-type are logged so the next failure names itself instead of becoming
+ * another silent "no menu".
+ */
+async function fetchDocument(url: string): Promise<ArrayBuffer | null> {
+  let referer = '';
+  try {
+    referer = new URL(url).origin + '/';
+  } catch {}
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': BROWSER_UA,
+      Accept: 'application/pdf,application/octet-stream,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      ...(referer ? { Referer: referer } : {}),
+    },
+    // Generous: the founder reports this PDF takes a few seconds in a browser,
+    // and a slow menu PDF is still a menu.
+    signal: AbortSignal.timeout(45000),
+    redirect: 'follow',
+  });
+  if (!res.ok) {
+    console.error(`[pdf] HTTP ${res.status} fetching ${url}`);
+    return null;
+  }
+
+  const buffer = await res.arrayBuffer();
+  if (buffer.byteLength > 20 * 1024 * 1024) {
+    console.error(`[pdf] too large (${buffer.byteLength} bytes): ${url}`);
+    return null;
+  }
+  if (!looksLikePdf(new Uint8Array(buffer.slice(0, 8)))) {
+    const ct = res.headers.get('content-type') ?? 'unknown';
+    console.error(`[pdf] not a PDF (content-type: ${ct}, ${buffer.byteLength} bytes): ${url}`);
+    return null;
+  }
+  return buffer;
+}
+
 export async function classifyMenuFromPdf(
   pdfUrl: string,
   restaurantName?: string,
@@ -538,31 +739,25 @@ export async function classifyMenuFromPdf(
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
   try {
     // Share links (Google Drive /view, Dropbox ?dl=0) serve an HTML viewer,
-    // not the file — rewrite them to a direct download first.
-    const res = await fetch(resolveDocumentUrl(pdfUrl), {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      },
-      signal: AbortSignal.timeout(20000),
-      redirect: 'follow',
-    });
-    if (!res.ok) return null;
-
-    const buffer = await res.arrayBuffer();
-    // Skip files > 20 MB
-    if (buffer.byteLength > 20 * 1024 * 1024) return null;
-
+    // not the file — rewrite them to a direct download first. Drive may still
+    // answer the first request with a virus-scan interstitial, so try each
+    // candidate URL in turn (see documentUrlCandidates).
+    let buffer: ArrayBuffer | null = null;
+    for (const candidate of documentUrlCandidates(pdfUrl)) {
+      buffer = await fetchDocument(candidate);
+      if (buffer) break;
+    }
     // Verify it really is a PDF BEFORE spending a call. Anything else (a viewer
     // page, a login wall, an error page) would be posted as application/pdf and
     // rejected by the API — a guaranteed-fail call we would still be billed for.
     // Returning null lets the retry ladder try the page/screenshot instead.
-    if (!looksLikePdf(new Uint8Array(buffer.slice(0, 8)))) return null;
+    if (!buffer) return null;
 
     const pdfBase64 = Buffer.from(buffer).toString('base64');
     return classifyMenuFromPdfBuffer(pdfBase64, restaurantName, modelOverride);
   } catch (err) {
     if (isBillingError(err)) throw err;
+    if (err instanceof AICallError) throw err; // carries usage — must not be swallowed
     return null;
   }
 }
@@ -602,8 +797,12 @@ export async function classifyMenuFromPdfBuffer(
       messages: [{ role: 'user', content: pdfContent }],
     });
 
+    const usage = usageOf(message);
     const content = message.content[0];
-    if (content.type !== 'text') return null;
+    if (content.type !== 'text') throw new AICallError('Unexpected AI response type', usage);
+    if (message.stop_reason === 'max_tokens') {
+      throw new AICallError('AI response hit the output limit before finishing the PDF menu.', usage, true);
+    }
 
     const text = content.text.trim();
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? [null, text];
@@ -613,18 +812,17 @@ export async function classifyMenuFromPdfBuffer(
     try {
       menu = JSON.parse(jsonText) as ClassifiedMenu;
     } catch {
-      return null;
+      throw new AICallError('AI returned invalid JSON from the PDF.', usage);
     }
 
-    if (!menu.sections || menu.sections.length === 0) return null;
-
-    const tokensIn = message.usage.input_tokens;
-    const tokensOut = message.usage.output_tokens;
-    const usage: AIUsage = { model, tokensIn, tokensOut, costUsd: calcCost(model, tokensIn, tokensOut) };
+    if (!menu.sections || menu.sections.length === 0) {
+      throw new AICallError('No menu found in the PDF.', usage);
+    }
 
     return { menu: stripDrinksAndHeaders(menu), usage };
   } catch (err) {
     if (isBillingError(err)) throw err;
+    if (err instanceof AICallError) throw err; // carries usage — never swallow
     return null;
   }
 }

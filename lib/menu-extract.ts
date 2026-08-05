@@ -1,5 +1,6 @@
 import type { ClassifiedMenu, MenuCandidate, RawSection } from '@/types';
 import {
+  AICallError,
   AIUsage,
   classifyMenuWithAI,
   classifyMenuFromPdf,
@@ -101,14 +102,21 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
     let best: Extraction = null;
     let usage: AIUsage | undefined;
     for (const attempt of attempts) {
-      const res = await attemptOrNull(attempt);
-      usage = sumUsage(usage, res?.usage);
-      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-      if (isValid(res)) break;
+      const { result, usage: spent } = await attemptOrNull(attempt);
+      usage = sumUsage(usage, spent);
+      if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
+      if (isValid(result)) break;
     }
-    return best ? { menu: best.menu, usage: usage! } : null;
+    if (best) return { menu: best.menu, usage: usage! };
+    // Nothing usable — but this sub-page may have burned several calls getting
+    // there. Surface the spend instead of returning a bare null that loses it.
+    if (usage && usage.costUsd > 0) {
+      throw new AICallError(`No menu found on ${url}`, usage);
+    }
+    return null;
   } catch (err) {
     if (isBillingError(err)) throw err;
+    if (err instanceof AICallError) throw err;
     return null;
   }
 }
@@ -147,16 +155,27 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * surface as such; retrying other sources just burns more calls and ends in a
  * misleading "couldn't read the menu".
  */
-async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction> {
+type Attempt = { result: Extraction; usage?: AIUsage };
+
+async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
   try {
-    return await fn();
+    const result = await fn();
+    return { result, usage: result?.usage };
   } catch (err) {
     if (isBillingError(err)) {
       // Keep the underlying cause in server logs; users get the generic line.
       console.error('[extract] API access error:', err instanceof Error ? err.message : err);
       throw new Error('Our AI service is temporarily unavailable. Please try again later.');
     }
-    return null;
+    // A call that reached Anthropic was billed even though we can't use its
+    // output. Carrying its usage out is the difference between a rung of the
+    // retry ladder costing $0.02 and appearing to cost nothing — the undercount
+    // that made three of six restaurants report "$0.0000 spent" in run #33.
+    if (err instanceof AICallError) {
+      console.error('[extract] unusable AI response:', err.message);
+      return { result: null, usage: err.usage };
+    }
+    return { result: null };
   }
 }
 
@@ -241,9 +260,9 @@ export async function extractMenuResumable(
       return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i };
     }
     progress(plan[i].note);
-    const res = await attemptOrNull(plan[i].run);
-    usage = sumUsage(usage, res?.usage);
-    if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
+    const { result, usage: spent } = await attemptOrNull(plan[i].run);
+    usage = sumUsage(usage, spent);
+    if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
   }
 
   return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null };

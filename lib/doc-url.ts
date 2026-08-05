@@ -17,25 +17,53 @@
  *
  * Returns the URL unchanged when no rewrite applies.
  */
-export function resolveDocumentUrl(url: string): string {
+/** The Drive file id, from any of its share-link shapes. */
+export function googleDriveFileId(url: string): string | null {
   try {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
-
-    if (host === 'drive.google.com' || host.endsWith('.drive.google.com') || host === 'docs.google.com') {
-      // /file/d/<id>/view  ·  /file/d/<id>/preview  ·  ?id=<id>
-      const fromPath = /\/file\/d\/([^/]+)/.exec(u.pathname)?.[1];
-      const id = fromPath ?? u.searchParams.get('id');
-      if (id) return `https://drive.google.com/uc?export=download&id=${id}`;
+    if (host !== 'drive.google.com' && !host.endsWith('.drive.google.com') && host !== 'docs.google.com') {
+      return null;
     }
-
-    if (host === 'dropbox.com' || host.endsWith('.dropbox.com')) {
-      u.searchParams.set('dl', '1');
-      return u.toString();
-    }
-
-    return url;
+    return /\/file\/d\/([^/]+)/.exec(u.pathname)?.[1] ?? u.searchParams.get('id');
   } catch {
-    return url;
+    return null;
   }
+}
+
+export function resolveDocumentUrl(url: string): string {
+  return documentUrlCandidates(url)[0];
+}
+
+/**
+ * Every URL worth trying for one linked document, best first.
+ *
+ * Google Drive needs more than one: `uc?export=download` hands back the actual
+ * bytes for small files, but for anything big enough to skip virus scanning it
+ * returns an HTML "we can't scan this, continue?" interstitial instead. That is
+ * what defeated waterkantamsterdam.nl — the menu link is a Drive share URL, the
+ * rewrite looked right, and the download was still a web page. The
+ * `drive.usercontent.google.com` endpoint with `confirm=t` is the post-consent
+ * form, so try it as well rather than giving up on the restaurant.
+ */
+export function documentUrlCandidates(url: string): string[] {
+  const driveId = googleDriveFileId(url);
+  if (driveId) {
+    return [
+      `https://drive.usercontent.google.com/download?id=${driveId}&export=download&confirm=t`,
+      `https://drive.google.com/uc?export=download&id=${driveId}`,
+    ];
+  }
+
+  try {
+    const u = new URL(url);
+    if (u.hostname.toLowerCase().replace(/^www\./, '') === 'dropbox.com' || u.hostname.toLowerCase().endsWith('.dropbox.com')) {
+      u.searchParams.set('dl', '1');
+      return [u.toString()];
+    }
+  } catch {
+    return [url];
+  }
+
+  return [url];
 }
