@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { capture } from '@/lib/posthog-client';
 import type { Restaurant, Dish } from '@/types';
-import { isVeg, isCountedVeg } from '@/lib/menu-insights';
+import { isVeg, makeCountedTest } from '@/lib/menu-insights';
 import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
 type ShareChannel = 'native' | 'whatsapp' | 'copy';
@@ -20,16 +20,29 @@ function withAttribution(pageUrl: string, src: ShareChannel): string {
   }
 }
 
-function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
+function buildShareMessage(
+  restaurant: Restaurant,
+  pageUrl: string,
+  sections: Restaurant['sections']
+): string {
   // Same counted/aside split as the page and the guide card — a shared message
   // promising 40 veggie options that the page then reports as 16 is worse than
   // no share at all. Sides and sweets are listed last, clearly labelled.
+  //
+  // Two things this has to match, both of which it used to get wrong:
+  //  - `sections` is the menu the reader is LOOKING at, not every menu the
+  //    restaurant has. Sharing lunch+dinner+brunch from a page showing dinner
+  //    made the message disagree with the page it links to.
+  //  - makeCountedTest, not isCountedVeg: the price tiebreak needs the whole
+  //    restaurant for its price level, and without it a €20.50 flatbread got
+  //    filed under "sides & sweets" here while the page counted it as a dish.
+  const isCounted = makeCountedTest(restaurant.sections);
   const counted: Dish[] = [];
   const aside: Dish[] = [];
-  for (const section of restaurant.sections) {
+  for (const section of sections) {
     for (const dish of section.dishes) {
       if (dish.deletedAt || !isVeg(dish)) continue;
-      (isCountedVeg(section.name, dish) ? counted : aside).push(dish);
+      (isCounted(section.name, dish) ? counted : aside).push(dish);
     }
   }
   const veganDishes = counted.filter((d) => d.classification === 'vegan');
@@ -70,7 +83,16 @@ function buildShareMessage(restaurant: Restaurant, pageUrl: string): string {
   return lines.join('\n');
 }
 
-export default function ShareButton({ restaurant }: { restaurant: Restaurant }) {
+export default function ShareButton({
+  restaurant,
+  visibleSections,
+}: {
+  restaurant: Restaurant;
+  /** The sections currently on screen — the share text must describe the menu
+   *  the reader is looking at, not every menu the restaurant has. */
+  visibleSections?: Restaurant['sections'];
+}) {
+  const shared = visibleSections ?? restaurant.sections;
   const [copied, setCopied] = useState(false);
   // Detected in an effect: navigator isn't available during SSR, and
   // rendering different buttons on server vs client breaks hydration.
@@ -91,7 +113,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
     capture('share_clicked', { channel: 'native', restaurant_id: restaurant.id });
     try {
       await navigator.share({
-        text: buildShareMessage(restaurant, withAttribution(pageUrl, 'native')),
+        text: buildShareMessage(restaurant, withAttribution(pageUrl, 'native'), shared),
       });
     } catch {
       // user closed the share sheet — the click is still tracked above
@@ -101,7 +123,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
   async function handleCopy() {
     capture('share_clicked', { channel: 'copy', restaurant_id: restaurant.id });
     await navigator.clipboard.writeText(
-      buildShareMessage(restaurant, withAttribution(pageUrl, 'copy'))
+      buildShareMessage(restaurant, withAttribution(pageUrl, 'copy'), shared)
     );
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -122,7 +144,7 @@ export default function ShareButton({ restaurant }: { restaurant: Restaurant }) 
   }
 
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
-    buildShareMessage(restaurant, withAttribution(pageUrl, 'whatsapp'))
+    buildShareMessage(restaurant, withAttribution(pageUrl, 'whatsapp'), shared)
   )}`;
 
   return (
