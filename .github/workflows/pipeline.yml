@@ -21,7 +21,7 @@ on:
         options: [pipeline, diagnose]
         default: pipeline
       filter:
-        description: 'Optional case-name/URL substring (e.g. "newking"). Blank = the whole set.'
+        description: 'Case-name substrings (e.g. "newking,dekas"), OR a full https:// URL to probe directly in diagnose mode. Blank = the whole set.'
         type: string
         default: ''
   push:
@@ -67,9 +67,18 @@ jobs:
           if [ -z "$JINA_API_KEY" ] && [ -z "$FIRECRAWL_API_KEY" ]; then
             echo "::warning::No reader is configured. JS-rendered sites cannot be read, and this run will report menus as missing for reasons unrelated to the code under test."
           fi
+      # A full URL is probed directly (useful for a single stubborn asset, e.g.
+      # "can the reader read THIS pdf?"); anything else filters the case list.
       - name: Diagnose (free — no AI calls, no DB writes)
         if: inputs.mode == 'diagnose'
-        run: npx tsx scripts/diagnose-site.ts --cases ${{ inputs.filter }} 2>&1 | tee pipeline-log.txt
+        run: |
+          if [ "${FILTER#https://}" != "$FILTER" ] || [ "${FILTER#http://}" != "$FILTER" ]; then
+            npx tsx scripts/diagnose-site.ts "$FILTER" 2>&1 | tee pipeline-log.txt
+          else
+            npx tsx scripts/diagnose-site.ts --cases "$FILTER" 2>&1 | tee pipeline-log.txt
+          fi
+        env:
+          FILTER: ${{ inputs.filter }}
         shell: bash
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}

@@ -74,9 +74,13 @@ async function probe(url: string): Promise<string> {
       redirect: 'follow',
       signal: AbortSignal.timeout(20000),
     });
+    const ct = res.headers.get('content-type') ?? 'unknown';
     const body = await res.text().catch(() => '');
     const lang = /<html[^>]*\blang=["']([^"']+)["']/i.exec(body)?.[1] ?? '(none)';
-    return `HTTP ${res.status} ${res.ok ? '' : '(NOT OK — error page may be parsed as content)'} | ${body.length} bytes | <html lang="${lang}"> | final: ${res.url}`;
+    // %PDF matters when probing a menu PDF directly: it separates "the host
+    // served us the file" from "the host served us a page about the file".
+    const isPdf = body.startsWith('%PDF') ? ' | REAL PDF' : '';
+    return `HTTP ${res.status} ${res.ok ? '' : '(NOT OK — error page may be parsed as content)'} | ${ct} | ${body.length} bytes${isPdf} | <html lang="${lang}"> | final: ${res.url}`;
   } catch (err) {
     return `FETCH FAILED: ${err instanceof Error ? err.message : String(err)}`;
   }
