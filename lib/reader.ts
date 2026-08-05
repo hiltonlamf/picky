@@ -25,6 +25,15 @@ import * as Sentry from '@sentry/nextjs';
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+/** Default per-provider request budget. Generous enough for a JS-heavy page,
+ *  short enough that an analysis doesn't stall on one dead host. */
+const READER_TIMEOUT_MS = 25000;
+/** Big documents need longer. tofuvegan.com's menu is a 26 MB PDF: it downloads
+ *  fine, but 25s was not enough for the reader to fetch and extract it, so the
+ *  restaurant looked menu-less purely because we gave up too early. Only the
+ *  document path pays this; ordinary pages keep the short budget. */
+export const DOCUMENT_TIMEOUT_MS = 90000;
+
 /**
  * A dead reader is invisible from the outside: every provider swallows its own
  * errors and returns null, callers fall back to raw HTML, and the app confidently
@@ -152,7 +161,7 @@ export function resetFirecrawlCircuit(): void {
 /** Credit/auth failures are permanent for this process; 429 is not. */
 const FIRECRAWL_FATAL_STATUSES = new Set([401, 402, 403]);
 
-async function readWithFirecrawl(url: string): Promise<ReaderResult | null> {
+async function readWithFirecrawl(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
   const key = process.env.FIRECRAWL_API_KEY;
   if (!key) return null;
   if (firecrawlDisabledReason) return null;
@@ -169,7 +178,7 @@ async function readWithFirecrawl(url: string): Promise<ReaderResult | null> {
           formats: ['markdown', 'rawHtml', 'links', 'screenshot'],
           onlyMainContent: false,
         }),
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
     let res = await call();
@@ -257,7 +266,7 @@ export function resetJinaCircuit(): void {
  * 2026-08-05). It does not return rawHtml; we ask for the links/images sections
  * so we can still discover PDFs and image menus.
  */
-async function readWithJina(url: string): Promise<ReaderResult | null> {
+async function readWithJina(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
   // Circuit open: a bad or unfunded key fails the same way every time, and
   // retrying it per page just adds latency to every analysis before we get to
   // the provider that actually works.
@@ -275,7 +284,7 @@ async function readWithJina(url: string): Promise<ReaderResult | null> {
 
     let res = await fetch(`https://r.jina.ai/${url}`, {
       headers,
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: 'follow',
     });
     // Keyless tier is ~20 rpm — long QA runs hit 429s. One bounded backoff
@@ -284,7 +293,7 @@ async function readWithJina(url: string): Promise<ReaderResult | null> {
       await new Promise((r) => setTimeout(r, 12000));
       res = await fetch(`https://r.jina.ai/${url}`, {
         headers,
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(timeoutMs),
         redirect: 'follow',
       });
     }
@@ -415,7 +424,7 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
  */
 const PAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PAGE_CACHE_MAX = 200;
-const pageCache = new Map<string, { at: number; result: ReaderResult | null }>();
+const pageCache = new Map<string, { at: number; result: ReaderResult | null; timeoutMs: number }>();
 
 /** Test seam: number of live entries. */
 export function pageCacheSize(): number {
@@ -425,56 +434,61 @@ export function clearPageCache(): void {
   pageCache.clear();
 }
 
-function cacheGet(url: string): { result: ReaderResult | null } | undefined {
+function cacheGet(url: string, timeoutMs: number): { result: ReaderResult | null } | undefined {
   const hit = pageCache.get(url);
   if (!hit) return undefined;
   if (Date.now() - hit.at > PAGE_CACHE_TTL_MS) {
     pageCache.delete(url);
     return undefined;
   }
+  // A cached *failure* is only evidence for the budget that produced it. The
+  // document path deliberately asks for a longer one (a 26 MB PDF times out at
+  // 25s and succeeds at 90s), so serving it the earlier null would cache the
+  // very bug this fixes. A cached success is valid for any budget.
+  if (!hit.result && hit.timeoutMs < timeoutMs) return undefined;
   return hit;
 }
 
-function cacheSet(url: string, result: ReaderResult | null): void {
+function cacheSet(url: string, result: ReaderResult | null, timeoutMs: number): void {
   // Oldest-first eviction: insertion order is Map's iteration order, and every
   // write is a fresh insert, so the first key is the oldest.
   if (pageCache.size >= PAGE_CACHE_MAX) {
     const oldest = pageCache.keys().next().value;
     if (oldest !== undefined) pageCache.delete(oldest);
   }
-  pageCache.set(url, { at: Date.now(), result });
+  pageCache.set(url, { at: Date.now(), result, timeoutMs });
 }
 
-export async function readPage(url: string): Promise<ReaderResult | null> {
-  const cached = cacheGet(url);
+export async function readPage(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
+  const cached = cacheGet(url, timeoutMs);
   if (cached) return cached.result;
-  const result = await readPageUncached(url);
+  const result = await readPageUncached(url, timeoutMs);
   // Negative results are cached too: a page that just refused to render will
   // refuse again thirty seconds later, and retrying it per candidate is exactly
   // the duplicated work this exists to stop.
-  cacheSet(url, result);
+  cacheSet(url, result, timeoutMs);
   return result;
 }
 
-async function readPageUncached(url: string): Promise<ReaderResult | null> {
+async function readPageUncached(url: string, timeoutMs: number): Promise<ReaderResult | null> {
   const provider = selectProvider();
   if (provider === 'off') return null;
-  if (provider === 'jina') return readWithJina(url);
+  if (provider === 'jina') return readWithJina(url, timeoutMs);
   if (provider === 'firecrawl') {
-    const result = await readWithFirecrawl(url);
+    const result = await readWithFirecrawl(url, timeoutMs);
     // Explicitly-chosen Firecrawl still degrades to keyless Jina rather than
     // returning nothing — a missing key shouldn't take the reader offline.
-    return result ?? readWithJina(url);
+    return result ?? readWithJina(url, timeoutMs);
   }
 
   // auto: free first, pay only when the free read is useless.
-  const jina = await readWithJina(url);
+  const jina = await readWithJina(url, timeoutMs);
   if (jina && !readerResultIsThin(jina)) return jina;
   if (!isFirecrawlConfigured()) {
     if (!jina) reportReaderOutage(url);
     return jina;
   }
-  const firecrawl = await readWithFirecrawl(url);
+  const firecrawl = await readWithFirecrawl(url, timeoutMs);
   // Keep Jina's thin result if the paid attempt also failed — some content
   // beats none, and we've already paid for the attempt either way.
   const result = firecrawl ?? jina;

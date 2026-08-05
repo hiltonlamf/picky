@@ -17,7 +17,15 @@ import {
 } from '@/lib/scraper';
 import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
 import { looksLikePdf, AICallError, driveConfirmUrl, MenuAccessBlockedError } from '@/lib/ai';
-import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit, clearPageCache, pageCacheSize } from '@/lib/reader';
+import {
+  readerResultIsThin,
+  readPage,
+  jinaStatus,
+  resetJinaCircuit,
+  clearPageCache,
+  pageCacheSize,
+  DOCUMENT_TIMEOUT_MS,
+} from '@/lib/reader';
 import { sumUsage, BLOCKED_MENU_MESSAGE, ExtractionError } from '@/lib/menu-extract';
 import { isNonFoodMenu } from '@/lib/menu-discovery';
 
@@ -415,6 +423,51 @@ describe('page cache — the same page is never fetched twice in one analysis', 
     vi.stubGlobal('fetch', fetchMock);
     expect(await readPage('https://dead.example/')).toBeNull();
     expect(await readPage('https://dead.example/')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a cached failure when the caller asks for a LONGER budget', async () => {
+    // tofuvegan.com in one test: the 26 MB menu PDF times out on the ordinary
+    // 25s page budget, and the document path then asks for 90s. Serving it the
+    // earlier null would cache the exact bug the longer budget exists to fix.
+    let call = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw new Error('The operation was aborted due to timeout');
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { content: 'z'.repeat(2000), url: 'https://slow.example/menu.pdf', links: [], images: [] } }),
+        text: async () => '',
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await readPage('https://slow.example/menu.pdf')).toBeNull();
+    const retried = await readPage('https://slow.example/menu.pdf', DOCUMENT_TIMEOUT_MS);
+    expect(retried?.markdown.length).toBeGreaterThan(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT re-fetch a cached failure for an equal or shorter budget', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}), text: async () => '' });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await readPage('https://dead2.example/', DOCUMENT_TIMEOUT_MS)).toBeNull();
+    expect(await readPage('https://dead2.example/')).toBeNull(); // shorter — no point retrying
+    expect(await readPage('https://dead2.example/', DOCUMENT_TIMEOUT_MS)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves a cached SUCCESS to any budget — success is success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { content: 'w'.repeat(2000), url: 'https://ok.example/', links: [], images: [] } }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await readPage('https://ok.example/');
+    await readPage('https://ok.example/', DOCUMENT_TIMEOUT_MS);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

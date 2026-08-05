@@ -3,7 +3,7 @@ import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
 import { documentUrlCandidates } from './doc-url';
-import { readPage } from './reader';
+import { readPage, DOCUMENT_TIMEOUT_MS } from './reader';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -783,7 +783,14 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
   return buffer;
 }
 
-/** Anthropic's document limit; also what we'll transfer for one menu. */
+/**
+ * Anthropic's document limit; also what we'll transfer for one menu.
+ *
+ * Raising it would not help the file that hits it: base64 inflates by a third,
+ * so a 26 MB PDF (tofuvegan.com's, the one that exposed this) is a ~35 MB
+ * request body — over the API's own ~32 MB ceiling. Oversize documents go to
+ * the reader instead, which returns extracted text; a menu is words either way.
+ */
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
 /**
@@ -872,7 +879,10 @@ export async function classifyMenuFromPdf(
       // the share link renders a JS viewer shell with no dish text in it, while
       // the direct-download URL gives the reader the actual document.
       for (const candidate of Array.from(new Set([pdfUrl, ...candidates]))) {
-        const viaReader = await readPage(candidate).catch(() => null);
+        // A long budget on purpose: this path only runs for documents, and the
+        // one that sent us here is a 26 MB PDF the reader needs ~a minute to
+        // fetch and extract. The default 25s page budget gave up on it.
+        const viaReader = await readPage(candidate, DOCUMENT_TIMEOUT_MS).catch(() => null);
         if (viaReader && viaReader.markdown.length >= 200) {
           console.error(`[pdf] direct fetch refused; extracted via ${viaReader.provider}: ${candidate}`);
           return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
