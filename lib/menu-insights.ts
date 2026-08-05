@@ -117,6 +117,22 @@ function isCountedWithPrice(
   return !cheap;
 }
 
+/**
+ * The product's real verdict for one dish, price tiebreak included, bound to a
+ * restaurant's whole menu for the price context.
+ *
+ * Exported for scripts/audit-dish-roles.ts. The report used to bucket dishes on
+ * `classifyDishRole().role` alone, which ignores the tiebreak — so a €20.50
+ * flatbread showed as excluded when the site counts it. A review artifact that
+ * disagrees with the product is worse than none.
+ */
+export function makeCountedTest(
+  priceContext: MenuSection[]
+): (sectionName: string | null | undefined, dish: Dish) => boolean {
+  const priceTest = makePriceTest(priceContext);
+  return (sectionName, dish) => isCountedWithPrice(sectionName ?? '', dish, priceTest);
+}
+
 /** Live (non-deleted) dishes of a section. */
 function liveDishes(section: MenuSection): Dish[] {
   return section.dishes.filter((d) => !d.deletedAt);

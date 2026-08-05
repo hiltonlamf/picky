@@ -17,9 +17,9 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { getCityGuides, getFeaturedRestaurants } from '@/lib/db';
 import { classifyDishRole, type DishRole } from '@/lib/dish-role';
-import { parsePrice } from '@/lib/menu-insights';
+import { parsePrice, headlineCounts, makeCountedTest } from '@/lib/menu-insights';
 import { formatPrice } from '@/lib/format-price';
-import type { Restaurant } from '@/types';
+import type { Restaurant, MenuSection } from '@/types';
 
 interface DishRow {
   section: string;
@@ -56,33 +56,42 @@ const SOFT_SECTION_HINTS = [
 const isVeg = (c: string) => c === 'vegan' || c === 'vegetarian' || c === 'unknown';
 
 /**
- * Before/after headline figures, both computed here from scratch.
+ * Before/after headline figures for one restaurant.
  *
- * `before` deliberately does NOT call guideInsights: that function now applies
- * the role rule, so using it would compare the new behaviour against itself and
- * report "no change" for every restaurant. `before` is the OLD definition —
- * every veg dish on the best single menu, sides and sweets included.
+ * `before` is computed here from scratch and deliberately does NOT call
+ * guideInsights: that function now applies the role rule, so using it would
+ * compare the new behaviour against itself and report "no change" for every
+ * restaurant. `before` is the OLD definition — every veg dish on the best
+ * single menu, sides and sweets included.
+ *
+ * `after` MUST come from headlineCounts, the same function the guide card and
+ * restaurant page call. An earlier version of this counted `role === 'counted'`
+ * by hand, which skipped both the de-duplication and the price tiebreak and so
+ * reported Rasam as 15 where the site shows 13. A review artifact that
+ * disagrees with the product is worse than no artifact.
  */
 function headlineFigures(r: Restaurant): { before: number; after: number; aside: number } {
-  const byLabel = new Map<string | null, { all: number; counted: number }>();
+  const byLabel = new Map<string | null, MenuSection[]>();
+  const rawTotals = new Map<string | null, number>();
   for (const s of r.sections) {
+    const k = s.menuLabel ?? null;
+    byLabel.set(k, (byLabel.get(k) ?? []).concat(s));
     for (const d of s.dishes) {
       if (d.deletedAt || !isVeg(d.classification)) continue;
-      const k = s.menuLabel ?? null;
-      const acc = byLabel.get(k) ?? { all: 0, counted: 0 };
-      acc.all++;
-      if (classifyDishRole(s.name, d).role === 'counted') acc.counted++;
-      byLabel.set(k, acc);
+      rawTotals.set(k, (rawTotals.get(k) ?? 0) + 1);
     }
   }
-  const menus = Array.from(byLabel.values());
-  if (!menus.length) return { before: 0, after: 0, aside: 0 };
+  if (!rawTotals.size) return { before: 0, after: 0, aside: 0 };
 
-  const before = Math.max(...menus.map((m) => m.all));
+  const before = Math.max(...Array.from(rawTotals.values()));
   // The "best" menu is the one with the most COUNTED options — same tie-break
   // the guide card uses, so the aside figure belongs to the menu on show.
-  const best = menus.reduce((a, b) => (b.counted > a.counted ? b : a));
-  return { before, after: best.counted, aside: best.all - best.counted };
+  let best = { counted: 0, aside: 0 };
+  byLabel.forEach((sections) => {
+    const h = headlineCounts(sections, r.sections);
+    if (h.counted > best.counted) best = { counted: h.counted, aside: h.aside };
+  });
+  return { before, after: best.counted, aside: best.aside };
 }
 
 function buildReport(city: string, r: Restaurant): RestaurantReport {
@@ -97,6 +106,11 @@ function buildReport(city: string, r: Restaurant): RestaurantReport {
 
   const excluded: DishRow[] = [];
   const ambiguous: DishRow[] = [];
+
+  // The product's verdict, price tiebreak included — not the raw name verdict,
+  // which would list Fade Street's €20.50 flatbread as excluded when the guide
+  // counts it.
+  const counts = makeCountedTest(r.sections);
 
   for (const s of r.sections) {
     for (const d of s.dishes) {
@@ -114,8 +128,15 @@ function buildReport(city: string, r: Restaurant): RestaurantReport {
         rule: verdict.rule,
       };
 
-      if (verdict.role !== 'counted') {
-        excluded.push({ ...base, ambiguous: false, ambiguousWhy: null });
+      if (!counts(s.name, d)) {
+        excluded.push({
+          ...base,
+          // A name-ambiguous dish that price demoted: say so, it's the case the
+          // founder is most likely to want to argue with.
+          rule: verdict.ambiguous ? `${verdict.rule ?? 'ambiguous'} + cheap for this menu` : verdict.rule,
+          ambiguous: false,
+          ambiguousWhy: null,
+        });
         continue;
       }
 
