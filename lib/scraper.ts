@@ -277,23 +277,75 @@ function resolveUrl(href: string, base: string): string {
   }
 }
 
+// Stop-words that appear constantly in English prose and (deliberately) are NOT
+// ordinary words in Dutch, German, French, Spanish or Italian. "is", "of", "we"
+// and "al" are excluded precisely because they ARE Dutch words — they would make
+// a Dutch page read as English.
+const ENGLISH_STOPWORD_RE = /\b(the|and|with|our|for|from|your|are|this|that|you|served|please)\b/gi;
+
 /**
- * When a page declares itself non-English but offers an English version, return
- * that English URL so the whole pipeline reads the English menu. Generic and
- * language-agnostic — works for a Dutch, French, German or five-language site
- * identically; nothing is hardcoded per language. Returns null when the page is
- * already English (or has no language declared) or offers no English variant.
+ * Cheap, free, deterministic "does this read as English?" check.
+ *
+ * Exists because `<html lang>` lies. Squarespace defaults to `lang="en-US"` on
+ * sites that serve Dutch, and WordPress/Elementor sites declare `en-GB` while
+ * rendering the Dutch translation (see docs/multilingual-js-menu-gap.md) — so
+ * trusting the attribute means silently ingesting a non-English page and never
+ * looking for the English one that exists.
+ *
+ * Conservative by design: on too little text to judge it answers "English", so
+ * a thin page can never trigger a speculative extra fetch.
+ */
+export function looksEnglish(text: string): boolean {
+  const sample = (text ?? '').slice(0, 4000);
+  const words = sample.split(/\s+/).filter(Boolean).length;
+  if (words < 40) return true; // not enough signal — don't act on noise
+  const hits = (sample.match(ENGLISH_STOPWORD_RE) ?? []).length;
+  // English prose runs ~8-12% of these; a Dutch/German page sits near zero.
+  // 2% is far below the English floor and far above the foreign-language noise.
+  return hits / words >= 0.02;
+}
+
+/** Does this URL path / query point at an English version of the site? */
+function pathLooksEnglish(pathAndQuery: string): boolean {
+  return (
+    // /en/ , /eng/ , /english/ , /en-gb/ , /en_us/ — "/enoteca" must NOT match,
+    // hence the required separator or end-of-path after the code.
+    /(^|\/)(en|eng|english|en[-_][a-z]{2})(\/|$)/.test(pathAndQuery) ||
+    /[?&](lang|language|locale|hl|l|taal|idioma|sprache)=(en|eng|english)(\b|-|_)/.test(pathAndQuery)
+  );
+}
+
+/** English-language flag icons: a flag image is often the ONLY switcher, with
+ *  no text at all (newking.nl uses a bare Union Jack). */
+const FLAG_HINT_RE = /(^|[^a-z])(en|eng|gb|uk|gbr|usa?|english|engels|union[-_]?jack)([^a-z]|$)/i;
+
+/**
+ * When a page isn't (really) English but offers an English version, return that
+ * English URL so the whole pipeline reads the English menu. Generic and
+ * language-agnostic — a Dutch, French, German or five-language site is handled
+ * identically; nothing is hardcoded per language.
+ *
+ * Reading the English version matters beyond politeness: most of our discovery
+ * keywords, menu-word heuristics and prompt rules are written in English, so an
+ * English variant we fail to follow costs us dishes.
  *
  * Detection order (cheapest, most reliable first):
- *   1. <html lang> — if it's already English, don't switch.
+ *   1. Skip entirely when the page both declares English AND reads as English.
  *   2. <link rel="alternate" hreflang="en..."> — the standard signal.
- *   3. A language-switcher link to English (/en/ path, en. subdomain,
- *      ?lang=en, or an "EN"/"English" nav link).
+ *   3. A language-switcher link to English (/en/, /eng/, en. subdomain,
+ *      ?lang=en, an "EN"/"ENG"/"English" label, or a flag icon).
  */
-export function findEnglishVariant($: cheerio.CheerioAPI, currentUrl: string): string | null {
+export function findEnglishVariant(
+  $: cheerio.CheerioAPI,
+  currentUrl: string,
+  pageText?: string
+): string | null {
   const htmlLang = ($('html').attr('lang') ?? '').trim().toLowerCase();
-  // No declared language → assume English and don't pay for a second fetch.
-  if (!htmlLang || htmlLang.startsWith('en')) return null;
+  // Only trust a declared "en" when the visible text backs it up. A missing
+  // lang attribute is no longer treated as "must be English" — plenty of
+  // non-English sites simply omit it.
+  if (htmlLang.startsWith('en') && looksEnglish(pageText ?? extractText($))) return null;
+  if (!htmlLang && looksEnglish(pageText ?? extractText($))) return null;
 
   const normalize = (u: string) => u.replace(/#.*$/, '').replace(/\/$/, '');
   const current = normalize(currentUrl);
@@ -318,36 +370,63 @@ export function findEnglishVariant($: cheerio.CheerioAPI, currentUrl: string): s
     const label = (
       $(el).text().trim() + ' ' + ($(el).attr('title') ?? '') + ' ' + ($(el).attr('aria-label') ?? '')
     ).toLowerCase().trim();
-    let path = '';
+    let pathAndQuery = '';
     let hostFirst = '';
     try {
       const u = new URL(abs);
-      path = (u.pathname + u.search).toLowerCase();
+      pathAndQuery = (u.pathname + u.search).toLowerCase();
       hostFirst = u.hostname.split('.')[0];
     } catch {
       return;
     }
-    const looksEnglish =
+    // A flag image inside the link, judged by its alt text and filename.
+    const flagHint = $(el)
+      .find('img')
+      .toArray()
+      .some((img) => {
+        const alt = ($(img).attr('alt') ?? '').toLowerCase();
+        const src = ($(img).attr('src') ?? $(img).attr('data-src') ?? '').toLowerCase();
+        const file = src.split('/').pop() ?? '';
+        return FLAG_HINT_RE.test(alt) || FLAG_HINT_RE.test(file);
+      });
+
+    const isEnglishLink =
       hostFirst === 'en' || // en.example.com
-      /(^|\/)en(\/|-|$)/.test(path) || // /en/ , /en-us/ , /en
-      /[?&](lang|language|locale|hl|l)=en(\b|-|_)/.test(path) || // ?lang=en
+      pathLooksEnglish(pathAndQuery) ||
       /\benglish\b/.test(label) ||
-      label === 'en';
-    if (looksEnglish) found = abs;
+      label === 'en' ||
+      label === 'eng' ||
+      flagHint;
+    if (isEnglishLink) found = abs;
   });
   return found;
 }
 
-// Does NOT mutate the cheerio DOM — only reads text
+// Does NOT mutate the cheerio DOM — only reads text.
+//
+// Note what is NOT stripped: `[aria-hidden="true"]`. That used to be removed as
+// noise, but it is exactly where tabbed menus keep their inactive panels and
+// where a closed modal keeps its content — so on a site whose menu is a set of
+// JS tabs (appetisers / soups / noodles) or a pop-up overlay, stripping it threw
+// the entire menu away and the user was told "no menu listed on this site".
+// Decorative icons carry no text, so keeping these nodes costs almost nothing.
+// nav/header/footer are still stripped: that is genuine chrome, and keeping it
+// would feed opening-hours tables to the price heuristics.
 function extractText($: cheerio.CheerioAPI): string {
   const $clone = cheerio.load($.html());
-  $clone('script, style, nav, footer, header, noscript, iframe, [aria-hidden="true"]').remove();
+  $clone('script, style, nav, footer, header, noscript, iframe').remove();
   return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
 }
 
 // Gift cards / vouchers are never menus, even on ordering platforms
 // (e.g. order.toasttab.com/egiftcards/...).
 const GIFT_LINK_RE = /\b(gift|giftcard|egift|voucher)/i;
+
+/** Same document ignoring the #fragment and a trailing slash. */
+export function isSamePage(a: string, b: string): boolean {
+  const strip = (u: string) => u.replace(/#.*$/, '').replace(/\/$/, '');
+  return strip(a) === strip(b);
+}
 
 export function findMenuLinks(
   $: cheerio.CheerioAPI,
@@ -376,6 +455,11 @@ export function findMenuLinks(
     const isExternal = !resolvedHref.startsWith(baseOrigin);
     if (EXCLUDED_EXTENSIONS.some((ext) => resolvedHref.toLowerCase().endsWith(ext))) return;
     if (resolvedHref === baseUrl) return;
+    // Same-page jump links (#chicken-dishes, #menuarea) are NOT separate menus.
+    // newking.nl's in-page menu nav produced five "subpage" candidates that were
+    // all the page we were already on — five duplicate extractions, five times
+    // the cost, and they crowded the real candidates out of the picker cap.
+    if (isSamePage(resolvedHref, baseUrl)) return;
     if (GIFT_LINK_RE.test(resolvedHref) || GIFT_LINK_RE.test(text)) return;
 
     const remember = (url: string) => {
@@ -464,7 +548,7 @@ export function findNavLinks($: cheerio.CheerioAPI, baseUrl: string, limit = 8):
     } catch {
       return;
     }
-    if (path === '/' || resolved === baseUrl) return;
+    if (path === '/' || resolved === baseUrl || isSamePage(resolved, baseUrl)) return;
     const slug = decodeURIComponent(path).toLowerCase();
     if (NAV_EXCLUDE_RE.test(slug) || NAV_EXCLUDE_RE.test(text)) return;
 
@@ -972,6 +1056,11 @@ function extractMarkdownLinkLabels(markdown: string): Record<string, string> {
   return labels;
 }
 
+/** How deep the reader and link discovery still run. A menu index page ("Menus"
+ *  → four PDF buttons) sits at depth 1, and treating it as a leaf is how those
+ *  PDFs were never found. Depth 2+ stays cheap: fetch only. */
+const LINK_DISCOVERY_MAX_DEPTH = 1;
+
 async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): Promise<HtmlPageResult> {
   let finalUrl = url;
   let staticHtml = '';
@@ -980,10 +1069,18 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     const res = await fetchWithRetry(url);
     finalUrl = res.url || url;
     staticHtml = await res.text();
+    // A non-OK response body is an error page, not the site: a Cloudflare
+    // challenge or a 404 would otherwise be parsed as content, yielding a
+    // confident "this restaurant has no menu". Drop it and let the reader
+    // (different infrastructure, different fingerprint) answer instead.
+    if (!res.ok) staticHtml = '';
     // Top-level pages: also run a JS-rendering reader so dynamic sites
     // (Weebly/Wix/Squarespace) and lazy-loaded menus are captured. Best-effort —
     // returns null when no provider/key is available or on error.
-    reader = depth === 0 ? await readPage(finalUrl).catch(() => null) : null;
+    reader = depth <= LINK_DISCOVERY_MAX_DEPTH ? await readPage(finalUrl).catch(() => null) : null;
+    if (!res.ok && !reader) {
+      throw new Error(`The website returned HTTP ${res.status} for this page.`);
+    }
   } catch (err) {
     // Our own fetch failed outright — most commonly a TLS trust-chain gap our
     // Node runtime hasn't caught up with yet (e.g. a brand-new CA root real
@@ -1010,7 +1107,10 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
   // (allowLangSwitch=false on the re-scrape) to avoid a switch loop. If the
   // English variant turns out thin/broken, fall through to the original page.
   if (depth === 0 && allowLangSwitch) {
-    const enUrl = findEnglishVariant($, finalUrl);
+    // Pass the rendered text so the check can tell a page that *declares*
+    // English from one that actually is (Squarespace/WPML sites routinely
+    // declare en-US while serving Dutch).
+    const enUrl = findEnglishVariant($, finalUrl, reader?.markdown || extractText($));
     if (enUrl) {
       try {
         const enResult = await scrapeHtmlPage(enUrl, 0, false);
@@ -1022,8 +1122,9 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
   }
 
   // Find links and images BEFORE extractText
+  const canDiscoverLinks = depth <= LINK_DISCOVERY_MAX_DEPTH;
   const { htmlLinks: cheerioLinks, pdfLinks: cheerioPdfs, linkLabels } =
-    depth === 0 ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [], linkLabels: {} };
+    canDiscoverLinks ? findMenuLinks($, finalUrl) : { htmlLinks: [], pdfLinks: [], linkLabels: {} };
   const navLinks = depth === 0 ? findNavLinks($, finalUrl) : [];
   const cheerioImages = findMenuImages($, finalUrl);
 
@@ -1060,10 +1161,24 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     }
   }
 
-  // Prefer the reader's clean rendered text when it looks substantive.
+  // Pick the text that is most likely to BE a menu, falling back to length.
+  //
+  // Longest-wins was the old rule, and it loses a real menu to a longer page of
+  // marketing copy: the two sources see different things (a JS reader misses
+  // content in inactive tabs; cheerio misses anything rendered client-side), so
+  // whichever one actually contains dish names and prices is the one we want.
   const cheerioText = extractText($);
   const readerText = reader?.markdown ?? '';
-  const text = readerText.length > cheerioText.length && readerText.length > 200 ? readerText : cheerioText;
+  const readerIsMenu = readerText.length > 200 && looksLikeMenu(readerText);
+  const cheerioIsMenu = looksLikeMenu(cheerioText);
+  const text =
+    readerIsMenu !== cheerioIsMenu
+      ? readerIsMenu
+        ? readerText
+        : cheerioText
+      : readerText.length > cheerioText.length && readerText.length > 200
+        ? readerText
+        : cheerioText;
 
   // "Menu | Uno Mas" → take last part if first is a generic section name
   const GENERIC_PAGE_WORDS = new Set([
@@ -1093,20 +1208,28 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     };
   }
 
-  // Try menu sub-pages in order, return first that has meaningful content
+  // Try menu sub-pages in order, return the first that carries something worth
+  // extracting. "Worth extracting" is NOT just text: a "Menus" page whose whole
+  // body is six buttons linking to PDFs has almost no text but holds every menu
+  // the restaurant has (neni-amsterdam.nl, tofuvegan.com). Requiring 200 chars
+  // skipped those pages entirely and reported "no menu listed on this site".
   for (const link of menuLinks) {
     try {
       const menuRes = await scrapeHtmlPage(link, depth + 1);
-      if (menuRes.text.length >= 200) {
+      const carriesSource = menuRes.text.length >= 200 || menuRes.menuPdfUrls.length > 0 || menuRes.menuImages.length > 0;
+      if (carriesSource) {
         return {
           ...menuRes,
           menuUrl: link,
           title: menuRes.title || title,
-          menuImages: menuRes.menuImages.length ? menuRes.menuImages : menuImages,
-          menuPdfUrls: menuRes.menuPdfUrls.length ? menuRes.menuPdfUrls : menuPdfUrls,
-          menuLinks,
+          // Merge rather than choose: the parent's PDFs and the sub-page's are
+          // both real menus (lunch on one page, dinner linked from the other),
+          // and picking one silently halved the menu.
+          menuImages: dedupeStrings([...menuRes.menuImages, ...menuImages]).slice(0, 6),
+          menuPdfUrls: dedupeStrings([...menuRes.menuPdfUrls, ...menuPdfUrls]),
+          menuLinks: dedupeStrings([...menuLinks, ...menuRes.menuLinks]),
           navLinks,
-          linkLabels,
+          linkLabels: { ...menuRes.linkLabels, ...linkLabels },
           screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
         };
       }

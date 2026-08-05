@@ -82,6 +82,29 @@ async function probe(url: string): Promise<string> {
   }
 }
 
+/**
+ * Raw probe of the Jina endpoint. `readWithJina` swallows every error and
+ * returns null, so a dead reader and a merely-unhelpful one look identical to
+ * callers — and a dead reader silently turns every JS-rendered restaurant into
+ * "no menu listed on this site". This prints the actual HTTP status.
+ */
+async function probeJinaRaw(url: string): Promise<string> {
+  const headers: Record<string, string> = {
+    'User-Agent':
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'X-Return-Format': 'markdown',
+    Accept: 'application/json',
+  };
+  if (process.env.JINA_API_KEY) headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
+  try {
+    const res = await fetch(`https://r.jina.ai/${url}`, { headers, signal: AbortSignal.timeout(25000) });
+    const body = (await res.text().catch(() => '')).slice(0, 300).replace(/\s+/g, ' ');
+    return `HTTP ${res.status} | key: ${process.env.JINA_API_KEY ? 'set' : 'NONE'} | body: ${body}`;
+  } catch (err) {
+    return `THREW: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 /** Which reader provider answered, and with how much — the rate-limit tell. */
 async function probeReader(url: string): Promise<string> {
   if (!isReaderEnabled()) return 'reader disabled (READER_PROVIDER=off)';
@@ -96,6 +119,7 @@ async function diagnose(c: Case): Promise<boolean> {
   console.log(`\n${'='.repeat(78)}\n=== ${c.name} — ${c.url}\n${'='.repeat(78)}`);
   console.log(`  direct fetch: ${await probe(c.url)}`);
   console.log(`  reader:       ${await probeReader(c.url)}`);
+  console.log(`  jina raw:     ${await probeJinaRaw(c.url)}`);
 
   let scrape;
   try {

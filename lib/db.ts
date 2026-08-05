@@ -2520,7 +2520,12 @@ export async function addMenuFromUrl(input: {
     screenshotUrl: scrape.screenshotUrl,
     pdfUrls: scrape.menuPdfUrls,
     imageUrls: scrape.menuImages,
-    pageUrl: scrape.canonicalUrl,
+    // The URL the human actually pasted, query string and all — NOT the
+    // canonical URL. Someone pointing us at an overlay menu
+    // (…/stable-street?menu=menu) is telling us exactly where the menu is; the
+    // canonical form drops the query, so the screenshot fallback rendered the
+    // page WITHOUT the menu open and we told them we couldn't read their link.
+    pageUrl: input.url,
   };
 
   const { best, usage: extractUsage } = await extractMenuResumable(candidate, ctx);

@@ -7,10 +7,17 @@
  * `null` so callers fall back to the existing cheerio path. Never throws.
  *
  * Provider selection:
- *   - READER_PROVIDER=firecrawl  → Firecrawl (needs FIRECRAWL_API_KEY)
- *   - READER_PROVIDER=jina       → Jina Reader (works keyless on the free tier)
+ *   - READER_PROVIDER=firecrawl  → Firecrawl only (needs FIRECRAWL_API_KEY)
+ *   - READER_PROVIDER=jina       → Jina Reader only (works keyless on the free tier)
  *   - READER_PROVIDER=off        → disabled (cheerio only)
- *   - unset → Firecrawl if FIRECRAWL_API_KEY is present, otherwise keyless Jina.
+ *   - unset → Jina first, Firecrawl as a FALLBACK when Jina returns nothing
+ *     useful (founder's call, 2026-08-05: pay per hard page, not per page).
+ *
+ * Why this order: Jina's keyless tier is free but rate-limited and gives up on
+ * some JS-heavy pages; Firecrawl is reliable but billed. Trying the free one
+ * first and escalating only on a genuinely poor result means the paid provider
+ * is used for the sites that actually need it — which is also exactly the set
+ * of sites where our "no menu listed" bug lives.
  */
 
 const BROWSER_UA =
@@ -28,21 +35,44 @@ export interface ReaderResult {
   provider: 'firecrawl' | 'jina';
 }
 
-type Provider = 'firecrawl' | 'jina' | 'off';
+type Provider = 'firecrawl' | 'jina' | 'off' | 'auto';
 
 function selectProvider(): Provider {
   const explicit = (process.env.READER_PROVIDER ?? '').toLowerCase().trim();
   if (explicit === 'off') return 'off';
   if (explicit === 'firecrawl') return 'firecrawl';
   if (explicit === 'jina') return 'jina';
-  // Auto: prefer Firecrawl when a key exists, else keyless Jina free tier.
-  if (process.env.FIRECRAWL_API_KEY) return 'firecrawl';
-  return 'jina';
+  return 'auto';
 }
 
 /** Whether a JS-rendering reader is available (i.e. not disabled). */
 export function isReaderEnabled(): boolean {
   return selectProvider() !== 'off';
+}
+
+/** Whether the paid fallback is actually available (key present). */
+export function isFirecrawlConfigured(): boolean {
+  return !!process.env.FIRECRAWL_API_KEY;
+}
+
+/**
+ * Is this read good enough to stop, or should we pay for a better one?
+ *
+ * A "successful" Jina read of a JS-heavy page is often a near-empty shell: the
+ * nav, a cookie banner, and nothing else. That reads as success to the caller
+ * and is precisely how a real menu becomes "no menu listed on this site". A
+ * page with almost no text AND almost no links found nothing worth having.
+ *
+ * Deliberately generous — this gate decides when to spend money, so it should
+ * only fire on reads that are obviously useless, not merely thin.
+ */
+const THIN_MARKDOWN_CHARS = 600;
+const THIN_LINK_COUNT = 5;
+
+export function readerResultIsThin(result: ReaderResult): boolean {
+  const hasSource = result.pdfLinks.length > 0 || result.imageUrls.length > 0;
+  if (hasSource) return false; // found a menu source — good enough, don't pay again
+  return result.markdown.length < THIN_MARKDOWN_CHARS && result.links.length < THIN_LINK_COUNT;
 }
 
 function absolutize(href: string, base: string): string | null {
@@ -261,11 +291,20 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
 export async function readPage(url: string): Promise<ReaderResult | null> {
   const provider = selectProvider();
   if (provider === 'off') return null;
+  if (provider === 'jina') return readWithJina(url);
   if (provider === 'firecrawl') {
     const result = await readWithFirecrawl(url);
-    if (result) return result;
-    // Fall back to keyless Jina if Firecrawl fails but is configured.
-    return readWithJina(url);
+    // Explicitly-chosen Firecrawl still degrades to keyless Jina rather than
+    // returning nothing — a missing key shouldn't take the reader offline.
+    return result ?? readWithJina(url);
   }
-  return readWithJina(url);
+
+  // auto: free first, pay only when the free read is useless.
+  const jina = await readWithJina(url);
+  if (jina && !readerResultIsThin(jina)) return jina;
+  if (!isFirecrawlConfigured()) return jina;
+  const firecrawl = await readWithFirecrawl(url);
+  // Keep Jina's thin result if the paid attempt also failed — some content
+  // beats none, and we've already paid for the attempt either way.
+  return firecrawl ?? jina;
 }

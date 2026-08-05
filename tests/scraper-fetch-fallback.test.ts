@@ -85,3 +85,94 @@ describe('scraper fetch-failure fallback (drurybuildings.com-class TLS gap)', ()
     expect(mockReadPage).toHaveBeenCalledTimes(1);
   });
 });
+
+/** A fetch stub that serves canned HTML per URL. */
+function htmlResponse(body: string, init: { ok?: boolean; status?: number; url?: string } = {}) {
+  return {
+    ok: init.ok ?? true,
+    status: init.status ?? 200,
+    url: init.url ?? 'https://example-restaurant.ie/',
+    text: async () => body,
+  };
+}
+
+describe('menu text hidden in tabs and overlays (newking.nl, linastores.co.uk)', () => {
+  it('reads dishes out of aria-hidden tab panels instead of discarding them', async () => {
+    // A tabbed menu keeps every panel but the active one aria-hidden. Stripping
+    // those threw the whole menu away and reported "no menu listed on this site".
+    const page = `
+      <html lang="en"><body>
+        <div role="tabpanel">Starters — Spring rolls €6.50, Wonton soup €7.00</div>
+        <div role="tabpanel" aria-hidden="true">
+          Mains — Kung Pao chicken €16.50, Mapo tofu €14.00, Beef chow fun €17.00,
+          Sweet and sour pork €16.00, Salt and pepper squid €18.00
+        </div>
+        <div role="tabpanel" aria-hidden="true">Desserts — Mango pudding €6.00</div>
+      </body></html>`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlResponse(page)));
+    mockReadPage.mockResolvedValue(null);
+
+    const promise = scrapeRestaurant('https://example-restaurant.ie');
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.menuText).toContain('Mapo tofu');
+    expect(result.menuText).toContain('Mango pudding');
+  });
+});
+
+describe('a "Menus" page that is only buttons (neni-amsterdam.nl, tofuvegan.com)', () => {
+  it('harvests the PDFs from a menu index page with almost no text of its own', async () => {
+    const home = `<html lang="en"><body><a href="/menus">Menus</a><p>Welcome to our restaurant.</p></body></html>`;
+    // Under 200 chars of text — the old length gate skipped pages like this
+    // outright, losing every PDF linked from them.
+    const menus = `<html lang="en"><body>
+        <a href="https://my.pocketmenu.nl/uploads/neni/a-la-carte.pdf">A la Carte Menu</a>
+        <a href="https://my.pocketmenu.nl/uploads/neni/sharing.pdf">Sharing Menus</a>
+      </body></html>`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string) =>
+        String(url).includes('/menus')
+          ? htmlResponse(menus, { url: 'https://example-restaurant.ie/menus' })
+          : htmlResponse(home)
+      )
+    );
+    mockReadPage.mockResolvedValue(null);
+
+    const promise = scrapeRestaurant('https://example-restaurant.ie');
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.menuPdfUrls).toContain('https://my.pocketmenu.nl/uploads/neni/a-la-carte.pdf');
+    expect(result.menuPdfUrls).toContain('https://my.pocketmenu.nl/uploads/neni/sharing.pdf');
+  });
+});
+
+describe('HTTP error pages are not the restaurant (Cloudflare / 404)', () => {
+  it('does not treat a 403 challenge page as site content', async () => {
+    const challenge = `<html><body>Just a moment... Enable JavaScript and cookies to continue. ${'Checking your browser. '.repeat(30)}</body></html>`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlResponse(challenge, { ok: false, status: 403 })));
+    mockReadPage.mockResolvedValue(null);
+
+    const promise = scrapeRestaurant('https://example-restaurant.ie').catch((e: Error) => e);
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    // Either it throws (nothing readable) or it returns no menu text — what it
+    // must NEVER do is present the challenge text as the restaurant's page.
+    if (result instanceof Error) expect(result.message).toBeTruthy();
+    else expect(result.menuText).not.toContain('Checking your browser');
+  });
+
+  it('uses the reader when our own fetch is blocked but the page is really up', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlResponse('blocked', { ok: false, status: 403 })));
+    mockReadPage.mockResolvedValue(readerResult());
+
+    const promise = scrapeRestaurant('https://example-restaurant.ie');
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.menuText).toContain('Starters');
+  });
+});

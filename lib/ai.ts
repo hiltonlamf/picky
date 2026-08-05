@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
+import { resolveDocumentUrl } from './doc-url';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -525,13 +526,20 @@ export function stripDrinksAndHeaders(menu: ClassifiedMenu): ClassifiedMenu {
   return { ...menu, sections: cleaned };
 }
 
+/** PDF magic bytes: every real PDF starts "%PDF-". */
+export function looksLikePdf(bytes: Uint8Array): boolean {
+  return bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+}
+
 export async function classifyMenuFromPdf(
   pdfUrl: string,
   restaurantName?: string,
   modelOverride?: string
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
   try {
-    const res = await fetch(pdfUrl, {
+    // Share links (Google Drive /view, Dropbox ?dl=0) serve an HTML viewer,
+    // not the file — rewrite them to a direct download first.
+    const res = await fetch(resolveDocumentUrl(pdfUrl), {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -544,6 +552,12 @@ export async function classifyMenuFromPdf(
     const buffer = await res.arrayBuffer();
     // Skip files > 20 MB
     if (buffer.byteLength > 20 * 1024 * 1024) return null;
+
+    // Verify it really is a PDF BEFORE spending a call. Anything else (a viewer
+    // page, a login wall, an error page) would be posted as application/pdf and
+    // rejected by the API — a guaranteed-fail call we would still be billed for.
+    // Returning null lets the retry ladder try the page/screenshot instead.
+    if (!looksLikePdf(new Uint8Array(buffer.slice(0, 8)))) return null;
 
     const pdfBase64 = Buffer.from(buffer).toString('base64');
     return classifyMenuFromPdfBuffer(pdfBase64, restaurantName, modelOverride);
