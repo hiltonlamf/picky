@@ -20,8 +20,37 @@
  * of sites where our "no menu listed" bug lives.
  */
 
+import * as Sentry from '@sentry/nextjs';
+
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+/**
+ * A dead reader is invisible from the outside: every provider swallows its own
+ * errors and returns null, callers fall back to raw HTML, and the app confidently
+ * reports "no menu listed on this site" for restaurants that plainly have one.
+ * That is exactly what happened — r.jina.ai began answering keyless requests with
+ * a Cloudflare challenge and nothing anywhere said so (found 2026-08-05).
+ *
+ * So: report it. Once per process, not per page — a total outage would otherwise
+ * fire thousands of identical events and get itself rate-limited into silence.
+ */
+let readerOutageReported = false;
+
+function reportReaderOutage(url: string): void {
+  if (readerOutageReported) return;
+  readerOutageReported = true;
+  const detail =
+    `No reader provider could render a page (first seen: ${url}). ` +
+    `JS-rendered restaurant sites will be read as raw HTML and will look like they have no menu. ` +
+    `Jina key: ${process.env.JINA_API_KEY ? 'set' : 'MISSING'}, ` +
+    `Firecrawl key: ${process.env.FIRECRAWL_API_KEY ? 'set' : 'MISSING'}.`;
+  console.error('[reader]', detail);
+  Sentry.captureException(new Error(`Reader outage: ${detail}`), {
+    tags: { area: 'reader' },
+    level: 'error',
+  });
+}
 
 export interface ReaderResult {
   markdown: string; // clean rendered text content
@@ -302,9 +331,14 @@ export async function readPage(url: string): Promise<ReaderResult | null> {
   // auto: free first, pay only when the free read is useless.
   const jina = await readWithJina(url);
   if (jina && !readerResultIsThin(jina)) return jina;
-  if (!isFirecrawlConfigured()) return jina;
+  if (!isFirecrawlConfigured()) {
+    if (!jina) reportReaderOutage(url);
+    return jina;
+  }
   const firecrawl = await readWithFirecrawl(url);
   // Keep Jina's thin result if the paid attempt also failed — some content
   // beats none, and we've already paid for the attempt either way.
-  return firecrawl ?? jina;
+  const result = firecrawl ?? jina;
+  if (!result) reportReaderOutage(url);
+  return result;
 }
