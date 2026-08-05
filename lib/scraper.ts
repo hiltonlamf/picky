@@ -319,6 +319,30 @@ function pathLooksEnglish(pathAndQuery: string): boolean {
  *  no text at all (newking.nl uses a bare Union Jack). */
 const FLAG_HINT_RE = /(^|[^a-z])(en|eng|gb|uk|gbr|usa?|english|engels|union[-_]?jack)([^a-z]|$)/i;
 
+/** Registrable-ish domain: last two labels ("newking.nl", "linastores.co.uk"
+ *  becomes "co.uk" — good enough here, since we only compare it against the
+ *  page's own domain rather than using it for policy). */
+function baseDomain(hostname: string): string {
+  return hostname.toLowerCase().split('.').slice(-2).join('.');
+}
+
+/**
+ * A language switcher always points at the SAME restaurant's site. Third-party
+ * widgets routinely carry a locale in their path — waterkantamsterdam.nl embeds
+ * a booking widget at `widget.formitable.com/side/en/…/book`, which matched the
+ * English-path rule and sent the whole pipeline off to a reservation form
+ * instead of the menu. Only same-site links may be treated as translations.
+ */
+function isSameSite(candidate: string, currentUrl: string): boolean {
+  try {
+    const a = new URL(candidate).hostname.toLowerCase();
+    const b = new URL(currentUrl).hostname.toLowerCase();
+    return a === b || baseDomain(a) === baseDomain(b);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * When a page isn't (really) English but offers an English version, return that
  * English URL so the whole pipeline reads the English menu. Generic and
@@ -358,7 +382,7 @@ export function findEnglishVariant(
     const lang = ($(el).attr('hreflang') ?? '').toLowerCase();
     if (lang !== 'en' && !lang.startsWith('en-')) return;
     const abs = resolveUrl($(el).attr('href') ?? '', currentUrl);
-    if (abs && abs.startsWith('http') && !isCurrent(abs)) found = abs;
+    if (abs && abs.startsWith('http') && !isCurrent(abs) && isSameSite(abs, currentUrl)) found = abs;
   });
   if (found) return found;
 
@@ -367,6 +391,8 @@ export function findEnglishVariant(
     if (found) return;
     const abs = resolveUrl($(el).attr('href') ?? '', currentUrl);
     if (!abs || !abs.startsWith('http') || isCurrent(abs)) return;
+    // Off-site links are never this site's English edition (see isSameSite).
+    if (!isSameSite(abs, currentUrl)) return;
     const label = (
       $(el).text().trim() + ' ' + ($(el).attr('title') ?? '') + ' ' + ($(el).attr('aria-label') ?? '')
     ).toLowerCase().trim();
@@ -1148,6 +1174,11 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     (l) =>
       MENU_LINK_KEYWORDS.some((k) => l.toLowerCase().includes(k)) &&
       !GIFT_LINK_RE.test(l) &&
+      // Same guard findMenuLinks applies: an in-page #anchor is not a separate
+      // menu. A working reader returns 60+ links, so without this newking.nl's
+      // six in-page jump links come back as six duplicate "menus" — the exact
+      // bug the cheerio path already fixed.
+      !isSamePage(l, finalUrl) &&
       (l.startsWith(pageOrigin) || isOrderingHost(l))
   );
   const menuLinks = dedupeStrings([...cheerioLinks, ...readerMenuLinks]);

@@ -236,3 +236,45 @@ describe('a dead or unfunded Jina key is not retried on every page', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2); // initial + the backoff retry
   });
 });
+
+describe('a locale in a third-party URL is not a translation (waterkantamsterdam.nl)', () => {
+  it('ignores an off-site booking widget whose path contains /en/', () => {
+    // Firecrawl surfaces embedded widgets that raw HTML hid. Waterkant embeds
+    // widget.formitable.com/side/en/<id>/book — matching the English-path rule
+    // sent the whole pipeline to a reservation form instead of the menu.
+    const dutch = 'Wij serveren gerechten met verse producten van het seizoen en lokale telers. '.repeat(12);
+    const $ = cheerio.load(`
+      <html lang="nl"><body>
+        <p>${dutch}</p>
+        <a href="https://widget.formitable.com/side/en/ef993c47/book?tag=Website">Book a table</a>
+      </body></html>
+    `);
+    expect(findEnglishVariant($, 'https://www.waterkantamsterdam.nl/')).toBeNull();
+  });
+
+  it('still follows a same-site English path', () => {
+    const dutch = 'Wij serveren gerechten met verse producten van het seizoen en lokale telers. '.repeat(12);
+    const $ = cheerio.load(`
+      <html lang="nl"><body><p>${dutch}</p><a href="/en/menu">EN</a></body></html>
+    `);
+    expect(findEnglishVariant($, 'https://www.waterkantamsterdam.nl/')).toBe('https://www.waterkantamsterdam.nl/en/menu');
+  });
+
+  it('allows a different subdomain of the same site', () => {
+    const dutch = 'Wij serveren gerechten met verse producten van het seizoen en lokale telers. '.repeat(12);
+    const $ = cheerio.load(`
+      <html lang="nl"><body><p>${dutch}</p><a href="https://en.example.nl/">English</a></body></html>
+    `);
+    expect(findEnglishVariant($, 'https://www.example.nl/')).toBe('https://en.example.nl/');
+  });
+
+  it('ignores an off-site hreflang alternate too', () => {
+    const dutch = 'Wij serveren gerechten met verse producten van het seizoen en lokale telers. '.repeat(12);
+    const $ = cheerio.load(`
+      <html lang="nl"><head>
+        <link rel="alternate" hreflang="en" href="https://someaggregator.com/nl/restaurant/en">
+      </head><body><p>${dutch}</p></body></html>
+    `);
+    expect(findEnglishVariant($, 'https://example.nl/')).toBeNull();
+  });
+});
