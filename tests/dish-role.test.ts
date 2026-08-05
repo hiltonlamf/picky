@@ -5,6 +5,9 @@ import { classifyDishRole, isCountedDish, isSimpleName } from '@/lib/dish-role';
 // pairs are the point: the same keyword must resolve differently depending on
 // whether the name is a staple or a composed dish.
 const role = (section: string, name: string) => classifyDishRole(section, { name }).role;
+/** Name alone can't settle it — lib/menu-insights lets price decide. */
+const ambiguous = (section: string, name: string) =>
+  classifyDishRole(section, { name }).ambiguous === true;
 
 describe('isSimpleName', () => {
   it('treats short staple names as simple', () => {
@@ -242,15 +245,17 @@ describe('classifyDishRole', () => {
       expect(role('Create Your Own', 'Curry')).toBe('condiment');
       expect(role('Toppings', 'Parmesan')).toBe('condiment');
       // A bare "Extras" is NOT a component list — Fade Street Social files a
-      // €21.50 Truffle Cheese Flatbread there.
-      expect(role('Extras', 'Truffle Cheese Flatbread')).toBe('counted');
+      // €21.50 Truffle Cheese Flatbread there. The name ends in "bread", so
+      // the verdict is deferred to price rather than settled here; at €20.50
+      // against a €14 median it comes back counted.
+      expect(ambiguous('Extras', 'Truffle Cheese Flatbread')).toBe(true);
     });
 
     it('keeps substantial vegetable sides', () => {
-      // A vegetarian at a steakhouse genuinely orders these.
+      // A vegetarian at a steakhouse genuinely orders these. Potatoes are the
+      // exception, by the founder's rule — see "potatoes on their own" above.
       expect(role('SIDES', 'Truffle Mac & Cheese')).toBe('counted');
       expect(role('SIDES', 'Creamed Spinach')).toBe('counted');
-      expect(role('Sides', 'Salt & Vinegar Potatoes')).toBe('counted');
       expect(role('Sides', 'Corn Ribs')).toBe('counted');
       expect(role('Sides', 'Wok Fried Pak Choi')).toBe('counted');
     });
