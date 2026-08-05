@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
+import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
@@ -213,6 +213,9 @@ export async function POST(request: NextRequest) {
             if (r.best && r.best.menu.sections.length > 0) {
               state.done.push({ label: candidate.label, menu: r.best.menu });
             }
+            // Remember a refusal across the resumable requests this analysis
+            // may be split into, so the final message can be the honest one.
+            if (r.blocked) state.blocked = true;
             state.usage = sumUsage(state.usage ?? undefined, r.usage);
             state.currentId = null;
             state.attemptIndex = 0;
@@ -238,9 +241,15 @@ export async function POST(request: NextRequest) {
           // no_menu so the results page shows the friendly, actionable screen
           // and future searches don't re-pay to re-read a menu-less site.
           // (spend already recorded by callClaude when the API call returned)
-          await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
-          await logAttempt(false, NO_MENU_MSG, undefined, 'no_menu');
-          await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
+          // "We were refused" is not "there is no menu". Record it as its own
+          // reason so the admin queue and the eval dashboard can tell the two
+          // apart, and show the user copy that asks for a hand instead of
+          // telling them the restaurant doesn't publish a menu.
+          const blockedRun = state.blocked === true;
+          const failureMsg = blockedRun ? BLOCKED_MENU_MESSAGE : NO_MENU_MSG;
+          await markRestaurantNoMenu(restaurantId, blockedRun ? 'blocked' : 'not_listed', failureMsg);
+          await logAttempt(false, failureMsg, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, failureMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }

@@ -713,6 +713,8 @@ async function fetchDocument(url: string, depth = 0): Promise<ArrayBuffer | null
   try {
     return await fetchDocumentInner(url, depth);
   } catch (err) {
+    // "Not allowed" is a different answer from "not there" and must survive.
+    if (err instanceof MenuAccessBlockedError) throw err;
     // Log it: a silent network refusal is indistinguishable from "no menu".
     console.error(`[pdf] fetch threw for ${url}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -738,6 +740,8 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
   });
   if (!res.ok) {
     console.error(`[pdf] HTTP ${res.status} fetching ${url}`);
+    const denied = accessDeniedReason(res.status, '');
+    if (denied) throw new MenuAccessBlockedError(denied);
     return null;
   }
 
@@ -767,9 +771,12 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<[^>]+>/g, ' ')
+        .replace(/&#39;/g, "'")
         .replace(/\s+/g, ' ')
         .trim();
       console.error(`[pdf] host returned a page instead of a file: "${visible.slice(0, 300)}"`);
+      const denied = accessDeniedReason(res.status, visible);
+      if (denied) throw new MenuAccessBlockedError(denied);
     }
     return null;
   }
@@ -778,6 +785,34 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
 
 /** Anthropic's document limit; also what we'll transfer for one menu. */
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/**
+ * The menu exists and a person can open it, but we are not permitted to.
+ *
+ * Distinct from "this restaurant has no menu", and the difference matters to
+ * the user: one is a fact about the restaurant, the other is a limitation of
+ * ours, and only the second is worth asking them for help with.
+ *
+ * Real case: waterkantamsterdam.nl publishes its menu as a Google Drive file
+ * the owner has set to view-only — Drive answers our download with "the owner
+ * hasn't given you permission to download this file". Telling that user their
+ * restaurant "doesn't publish a menu online" would simply be false.
+ */
+export class MenuAccessBlockedError extends Error {
+  constructor(public readonly detail: string) {
+    super(detail);
+    this.name = 'MenuAccessBlockedError';
+  }
+}
+
+/** Host responses that mean "not allowed", as opposed to "not there". */
+function accessDeniedReason(status: number, visibleText: string): string | null {
+  if (/hasn't given you permission|only the owner and editors|request access|sign in to continue/i.test(visibleText)) {
+    return 'the file owner has restricted downloads';
+  }
+  if (status === 401 || status === 403) return `the host refused our request (HTTP ${status})`;
+  return null;
+}
 
 /**
  * Rebuild Google Drive's download URL from the confirm page it serves for
@@ -808,8 +843,19 @@ export async function classifyMenuFromPdf(
     // candidate URL in turn (see documentUrlCandidates).
     const candidates = documentUrlCandidates(pdfUrl);
     let buffer: ArrayBuffer | null = null;
+    let blocked: MenuAccessBlockedError | null = null;
     for (const candidate of candidates) {
-      buffer = await fetchDocument(candidate);
+      try {
+        buffer = await fetchDocument(candidate);
+      } catch (err) {
+        if (err instanceof MenuAccessBlockedError) {
+          // Remember it, but keep trying the other URLs and the reader — being
+          // refused one route doesn't mean every route is closed.
+          blocked = err;
+          continue;
+        }
+        throw err;
+      }
       if (buffer) break;
     }
     // Verify it really is a PDF BEFORE spending a call. Anything else (a viewer
@@ -832,6 +878,9 @@ export async function classifyMenuFromPdf(
           return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
         }
       }
+      // Every route refused, and at least one said so explicitly. Surface that
+      // rather than letting it collapse into "this restaurant has no menu".
+      if (blocked) throw blocked;
       return null;
     }
 

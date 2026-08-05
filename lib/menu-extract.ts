@@ -2,6 +2,7 @@ import type { ClassifiedMenu, MenuCandidate, RawSection } from '@/types';
 import {
   AICallError,
   AIUsage,
+  MenuAccessBlockedError,
   classifyMenuWithAI,
   classifyMenuFromPdf,
   classifyMenuFromImages,
@@ -39,12 +40,25 @@ type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
  */
 export class ExtractionError extends Error {
   usage?: AIUsage;
-  constructor(message: string, usage?: AIUsage) {
+  /** The menu exists but we were refused access — a limitation of ours, not a
+   *  fact about the restaurant. Drives different, honest user-facing copy. */
+  blocked: boolean;
+  constructor(message: string, usage?: AIUsage, blocked = false) {
     super(message);
     this.name = 'ExtractionError';
     this.usage = usage;
+    this.blocked = blocked;
   }
 }
+
+/**
+ * Shown when a menu is there and a person could open it, but we could not.
+ * Founder's wording (2026-08-05): be straight about the limitation being ours
+ * and ask for a hand, rather than implying the restaurant has no menu.
+ */
+export const BLOCKED_MENU_MESSAGE =
+  "Sometimes AI agents can't read or access materials that people can — this menu is one of them. " +
+  'Can you give us a hand by uploading the menu, or pasting a direct link? We\'ll read it right away.';
 
 const HEADER_ITEM_RE =
   /\b(menu|selection|set\s*menu|set\s*lunch|set\s*dinner|tasting|à la carte|a la carte|platter|board|sample)\b/i;
@@ -155,7 +169,7 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * surface as such; retrying other sources just burns more calls and ends in a
  * misleading "couldn't read the menu".
  */
-type Attempt = { result: Extraction; usage?: AIUsage };
+type Attempt = { result: Extraction; usage?: AIUsage; blocked?: boolean };
 
 async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
   try {
@@ -174,6 +188,10 @@ async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
     if (err instanceof AICallError) {
       console.error('[extract] unusable AI response:', err.message);
       return { result: null, usage: err.usage };
+    }
+    if (err instanceof MenuAccessBlockedError) {
+      console.error('[extract] menu exists but access was refused:', err.detail);
+      return { result: null, blocked: true };
     }
     return { result: null };
   }
@@ -234,6 +252,8 @@ export interface ResumableResult {
   usage?: AIUsage;
   /** Attempt index to resume from, or null when the chain is finished. */
   nextIndex: number | null;
+  /** A source existed but refused us — see ExtractionError.blocked. */
+  blocked?: boolean;
 }
 
 /**
@@ -253,19 +273,21 @@ export async function extractMenuResumable(
   const plan = attemptPlan(candidate, ctx);
   let best: Extraction = carried;
   let usage: AIUsage | undefined = carriedUsage ?? carried?.usage;
+  let blocked = false;
 
   for (let i = startIndex; i < plan.length; i++) {
     if (isValid(best)) break;
     if (Date.now() >= deadline) {
-      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i };
+      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i, blocked };
     }
     progress(plan[i].note);
-    const { result, usage: spent } = await attemptOrNull(plan[i].run);
+    const { result, usage: spent, blocked: refused } = await attemptOrNull(plan[i].run);
     usage = sumUsage(usage, spent);
+    if (refused) blocked = true;
     if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
   }
 
-  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null };
+  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null, blocked };
 }
 
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
@@ -352,7 +374,10 @@ export async function extractAndMerge(
   ctx: ExtractContext
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> {
   const results = await Promise.all(
-    candidates.map(async (c) => ({ label: c.label, res: await extractMenu(c, ctx) }))
+    candidates.map(async (c) => {
+      const r = await extractMenuResumable(c, ctx);
+      return { label: c.label, res: r.best, blocked: r.blocked === true };
+    })
   );
 
   const named = results
@@ -369,9 +394,15 @@ export async function extractAndMerge(
     // nothing — either the menu is unreadable or the site doesn't really have
     // one. Be honest about both possibilities — and carry the cost of all
     // those failed attempts so it lands in the spend accounting.
+    // A menu we were REFUSED is not a restaurant without a menu. Saying the
+    // latter would be false, and it would put the blame in the wrong place.
+    const wasBlocked = results.some((r) => r.blocked);
     throw new ExtractionError(
-      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.",
-      usage
+      wasBlocked
+        ? BLOCKED_MENU_MESSAGE
+        : "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.",
+      usage,
+      wasBlocked
     );
   }
 

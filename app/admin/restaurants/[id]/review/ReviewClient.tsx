@@ -104,8 +104,13 @@ export default function ReviewClient({
   const [addMenuResult, setAddMenuResult] = useState<string | null>(null);
   // No-menu confirmation: the reason the admin will sign off on (defaults to
   // whatever the pipeline detected).
+  // 'blocked' is set by the pipeline, not chosen here — an admin confirming an
+  // outcome is picking between the human-judged reasons, so a blocked
+  // restaurant defaults to 'not_listed' unless they say otherwise.
   const [noMenuReason, setNoMenuReason] = useState<'not_listed' | 'unavailable' | 'closed'>(
-    restaurant.noMenuReason ?? 'not_listed'
+    restaurant.noMenuReason === 'blocked' || !restaurant.noMenuReason
+      ? 'not_listed'
+      : restaurant.noMenuReason
   );
   const [confirmedAt, setConfirmedAt] = useState<string | null>(restaurant.noMenuConfirmedAt ?? null);
   const [reparseResult, setReparseResult] = useState<string | null>(null);

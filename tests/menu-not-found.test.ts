@@ -16,9 +16,9 @@ import {
   isSamePage,
 } from '@/lib/scraper';
 import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
-import { looksLikePdf, AICallError, driveConfirmUrl } from '@/lib/ai';
+import { looksLikePdf, AICallError, driveConfirmUrl, MenuAccessBlockedError } from '@/lib/ai';
 import { readerResultIsThin, readPage, jinaStatus, resetJinaCircuit, clearPageCache, pageCacheSize } from '@/lib/reader';
-import { sumUsage } from '@/lib/menu-extract';
+import { sumUsage, BLOCKED_MENU_MESSAGE, ExtractionError } from '@/lib/menu-extract';
 import { isNonFoodMenu } from '@/lib/menu-discovery';
 
 describe('Google Drive / Dropbox menu links (waterkantamsterdam.nl)', () => {
@@ -416,5 +416,37 @@ describe('page cache — the same page is never fetched twice in one analysis', 
     expect(await readPage('https://dead.example/')).toBeNull();
     expect(await readPage('https://dead.example/')).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('"we were refused" is not "there is no menu" (waterkantamsterdam.nl)', () => {
+  it('recognises the Drive owner-restricted page as a refusal', () => {
+    // Verbatim from run #36's log.
+    const html =
+      '<html><body>Google Drive - Can&#39;t download file Sorry, the owner hasn&#39;t given you ' +
+      'permission to download this file. Only the owner and editors can download this file.</body></html>';
+    expect(looksLikePdf(new Uint8Array(Buffer.from(html, 'utf8')))).toBe(false);
+    // The wording the detector keys on survives entity-unescaping.
+    expect(/hasn't given you permission|only the owner and editors/i.test(html.replace(/&#39;/g, "'"))).toBe(true);
+  });
+
+  it('carries a reason a human can act on', () => {
+    const err = new MenuAccessBlockedError('the file owner has restricted downloads');
+    expect(err.detail).toContain('restricted downloads');
+    expect(err.name).toBe('MenuAccessBlockedError');
+  });
+
+  it('the blocked message asks for help instead of blaming the restaurant', () => {
+    // The distinction the founder asked for: our limitation, stated plainly.
+    expect(BLOCKED_MENU_MESSAGE).toMatch(/AI agents/i);
+    expect(BLOCKED_MENU_MESSAGE).toMatch(/give us a hand/i);
+    // It must NOT claim the restaurant has no menu — that would be false.
+    expect(BLOCKED_MENU_MESSAGE).not.toMatch(/may not publish|doesn't publish|no menu/i);
+  });
+
+  it('ExtractionError carries the blocked flag so routes can branch on it', () => {
+    const blocked = new ExtractionError(BLOCKED_MENU_MESSAGE, undefined, true);
+    expect(blocked.blocked).toBe(true);
+    expect(new ExtractionError('ordinary failure').blocked).toBe(false);
   });
 });
