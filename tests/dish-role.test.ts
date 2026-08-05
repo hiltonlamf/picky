@@ -65,6 +65,74 @@ describe('classifyDishRole', () => {
     });
   });
 
+  // Every rule here reads the FAR END of the name. The head rules above assume
+  // English dish names are head-initial ("Chips with mayo" is chips), which is
+  // true of an accompaniment but false of a modifier list: "Garlic, Onion and
+  // Coriander Naan" is a naan whose head is "garlic". Rasam's other five naans
+  // were excluded and that one was counted, which is how the gap surfaced.
+  describe('staples named head-finally', () => {
+    it('drops a naan however many things are sprinkled on it', () => {
+      expect(role('Tandoori Breads & Rice', 'Garlic, Onion and Coriander Naan')).toBe('staple');
+      expect(role('Breads, Rice', 'Garlic, Onion & Coriander Naan')).toBe('staple');
+    });
+
+    it('keeps a main course that merely arrives with a naan', () => {
+      // The "with …" clause is stripped before the tail is read, so the dish is
+      // judged on "paneer tikka" — otherwise every Indian main served with
+      // bread would vanish.
+      expect(role('Mains', 'Paneer Tikka with Butter Naan')).toBe('counted');
+    });
+
+    it('drops bread and butter without eating the composed starter', () => {
+      expect(role('Snacks', 'Guinness Bread & Butter')).toBe('staple');
+      expect(role('SHARING PLATES', 'Warm Focaccia & Whipped Smoked Butter')).toBe('staple');
+      // Mr Fox, €7. The comma is what saves it — the match cannot cross one.
+      expect(role('Starters', '48-hour Sourdough, Parmesan Custard, Cep Butter')).toBe('counted');
+    });
+
+    it('leaves a dish that merely ends in a bread', () => {
+      expect(role('Starters', 'Shitake Mushroom Parfait, Port Jelly, Focaccia')).toBe('counted');
+      expect(role('Rice Bowls', 'Tomato & Egg Rice')).toBe('counted');
+    });
+  });
+
+  // Founder's rule (2026-08-05): "any side of potatoes if potatoes is the only
+  // main ingredient — roast potatoes, fries, mashed potatoes". Measured as the
+  // single biggest gap in the head-only rules: 20 dish rows at 13 restaurants.
+  describe('potatoes on their own', () => {
+    it('drops the potato side however it is described', () => {
+      expect(role('Side Dishes', 'Creamed potatoes')).toBe('staple');
+      expect(role('Sides', 'Mashed Potatoes')).toBe('staple');
+      expect(role('VEGETABLES, SALADS & SIDES', 'Glazed New Potatoes')).toBe('staple');
+      expect(role('Accompaniments', 'Urlai Roast Potatoes')).toBe('staple');
+      expect(role('A La Carte - Sides', 'Golden Wonder Ballymakenny potatoes')).toBe('staple');
+      expect(role('Sides', 'Truffle & parmesan fries')).toBe('staple');
+    });
+
+    it('sees through a seasoning, wherever the potato sits in the name', () => {
+      // Six words — too long for the simple-name guard, which is exactly why
+      // these rules run before it.
+      expect(role('Side Dishes', 'Chive & Butter Sautéed Baby Potatoes')).toBe('staple');
+      expect(role('Side Dishes', 'Irish baby potatoes in herb butter')).toBe('staple');
+      expect(role('Sides', 'Fried maris piper potatoes, rosemary and garlic butter')).toBe('staple');
+      expect(role('Sides', 'Salt & Vinegar Potatoes')).toBe('staple');
+      expect(role('Sides', 'Roast potatoes with garlic mayo')).toBe('staple');
+    });
+
+    it('keeps potatoes that share the plate with real food', () => {
+      // What follows "with" decides: a sauce means a side, an ingredient means
+      // a meal.
+      expect(role('Mains', 'Baked potato with beans and cheese')).toBe('counted');
+      expect(role('Sides', 'Roast potatoes, chard & romesco')).toBe('counted');
+    });
+
+    it('keeps dishes where potato is an ingredient, not the dish', () => {
+      expect(role('Soups', 'Potato & leek soup')).toBe('counted');
+      expect(role('Mains', 'Potato Gnocchi')).toBe('counted');
+      expect(role('Tapas', 'Patatas Bravas')).toBe('counted');
+    });
+  });
+
   describe('pita is a meal at a Middle Eastern restaurant', () => {
     it('counts dips and sandwiches served with pita', () => {
       expect(role('Dips & Pita', 'Hummus & Pita')).toBe('counted');
@@ -104,7 +172,6 @@ describe('classifyDishRole', () => {
       // "mayo" anywhere in the string excluded most of its menu.
       expect(role('Chips', 'Chips with mayo')).toBe('staple'); // chips, not mayo
       expect(role('Chips', 'Chips, Parmesan & truffle mayo')).toBe('staple');
-      expect(role('Sides', 'Roast potatoes with garlic mayo')).toBe('counted');
       // The condiment sold on its own is still a condiment.
       expect(role('Create Your Own', 'Truffle mayo')).toBe('condiment');
       expect(role('Create Your Own', 'Vegan mayo')).toBe('condiment');
@@ -130,6 +197,13 @@ describe('classifyDishRole', () => {
 
     it('does not mistake a savoury "sweet & sour" section for pudding', () => {
       expect(role('Sweet & Sour', 'Crispy Tofu')).toBe('counted');
+    });
+
+    it('recognises a pudding section that avoids the word "dessert"', () => {
+      // Drury Buildings files its puddings under "Something Sweet"; two
+      // ice-cream tarts were counted as veggie options on the spelling alone.
+      expect(role('Something Sweet', 'Pistachio & Ricotta Tart, Pistachio Ice Cream')).toBe('dessert');
+      expect(role('To Finish', 'Affogato')).toBe('dessert');
     });
 
     it('leaves savoury dishes that borrow a dessert word', () => {

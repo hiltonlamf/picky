@@ -97,6 +97,22 @@ function headComponent(normalized: string): string {
   return components(normalized)[0] ?? normalized;
 }
 
+/**
+ * The dish, minus any accompaniment introduced by "with" or "in".
+ *
+ * "Paneer tikka with butter naan" is paneer tikka; "Irish baby potatoes in herb
+ * butter" is potatoes. Every head-final rule below reads THIS, not the raw
+ * name, so an accompaniment can never be mistaken for the dish.
+ */
+function dishPart(normalized: string): string {
+  return normalized.split(/\bwith\b|\bin\b/)[0].trim() || normalized;
+}
+
+function accompaniment(normalized: string): string {
+  const parts = normalized.split(/\bwith\b|\bin\b/);
+  return parts.length > 1 ? parts.slice(1).join(' ').trim() : '';
+}
+
 /** The guard that keeps keyword matching honest. A staple or condiment is named
  *  in a few words ("Bread & Butter", "Butter Naan", "Basmati Rice"); a dish that
  *  merely CONTAINS one is longer and lists its components ("48-hour Sourdough,
@@ -117,8 +133,13 @@ function includesAny(normalized: string, keywords: string[]): string | null {
 
 // Section names that are unambiguously the sweet course. "sweets" is plural on
 // purpose: a bare \bsweet\b would swallow a "Sweet & Sour" section.
+// "something sweet" / "to finish" / "afters" are here because Drury Buildings
+// files its puddings under "Something Sweet" — two ice-cream tarts were being
+// counted as veggie options purely because the section wasn't spelled
+// "Desserts". A bare \bsweet\b would swallow a "Sweet & Sour" section, hence
+// the exact phrases.
 const DESSERT_SECTION_RE =
-  /\bdesserts?\b|\bsweets\b|\bpuddings?\b|\bdolci\b|\bnagerecht|\bpostres?\b|\bpatisserie\b/i;
+  /\bdesserts?\b|\bsweets\b|\bpuddings?\b|\bdolci\b|\bnagerecht|\bpostres?\b|\bpatisserie\b|\bsomething sweet\b|\bsweet treats?\b|^to finish$|^afters$/i;
 
 // Dish names that are desserts wherever they appear. Deliberately excludes bare
 // "cake" (fish cake, rice cake) and "tart" (tomato tart) — both are savoury
@@ -180,6 +201,91 @@ const STAPLE_KEYWORDS = [
 /** Bare "rice"/"bread" as the entire dish name. */
 const BARE_STAPLE_RE = /^(rice|bread|pita|naan|chips|fries|olives)$/;
 
+/** Potato as the ENTIRE dish name. Unlike the staples above this is matched
+ *  against the whole name, never the head component: "Potato & leek soup" has
+ *  the head "potato" and is very much a dish. */
+const BARE_POTATO_RE = /^(potatoes?|mash|mashed potatoes?)$/;
+
+// ------------------------------------------------------- head-FINAL staples
+//
+// Everything above reads the HEAD of the name, because English dish names are
+// usually head-initial: "Chips with mayo" is chips. But a modifier list is
+// head-FINAL — "Garlic, Onion and Coriander Naan" is a naan, and reading its
+// head gives "garlic". We were only ever looking at one end of the name, which
+// is why Rasam's every-other-naan was excluded while that one was counted.
+//
+// The rules below read the far end. Each is deliberately narrow: a tail rule is
+// riskier than a head rule, because the last word of a composed dish name is
+// often its garnish ("Fried eggs on bread", "Hummus & Pita" — both real meals).
+
+/** Tandoori breads. Nobody sells "X Naan" as a main course, so this one needs
+ *  no price or length guard — only the with/in split (so "Paneer tikka with
+ *  butter naan" stays a paneer tikka). */
+const TANDOOR_BREAD_TAIL_RE = /\b(naans?|nan|rotis?|parathas?|paranthas?|chapatis?|papadums?|poppadoms?)$/;
+
+/** Ordinary breads. NOT safe on their own: Fade Street's €20.50 "Truffle Cheese
+ *  Flatbread" is a pizza and Winkel 43's €8 "Fried eggs on bread" is breakfast,
+ *  while Shouk's €3.00 "Gluten Free Bread" is bread. Price is what separates
+ *  them, so this returns `ambiguous` and lets the caller decide. */
+const BREAD_TAIL_RE = /\b(breads?|flatbreads?|sourdough|focaccias?|foccacia|toast)$/;
+
+/** Bread and butter, however it's dressed up — The Pig's Ear's €6.50 "Guinness
+ *  Bread & Butter" (the head rule reads that as "guinness bread") and
+ *  Featherblade's €5.50 "Warm Focaccia & Whipped Smoked Butter".
+ *
+ *  `[^,]*` is load-bearing: it stops the match crossing a comma, so Mr Fox's
+ *  "48-hour Sourdough, Parmesan Custard, Cep Butter" stays the €7 starter it
+ *  is rather than being read as bread with butter. */
+const BREAD_AND_BUTTER_RE = /\b(breads?|sourdough|focaccias?|foccacia|toast)\b[^,]*(?:and|&|\+|with)[^,]*\bbutter\b/;
+
+/**
+ * A potato side: potato is the only thing on the plate.
+ *
+ * Founder's rule (2026-08-05): "any side of potatoes if potatoes is the only
+ * main ingredient — roast potatoes, fries, mashed potatoes". Measured across
+ * both live guides this is the single biggest gap, 20 dish rows at 13
+ * restaurants (SOLE's "Creamed potatoes" and "Irish baby potatoes in herb
+ * butter", Fade Street's "Glazed New Potatoes", Old Street's "Chive & Butter
+ * Sautéed Baby Potatoes", Uno Mas, Kicky's, Bar Pez, Etto, Ananda…).
+ *
+ * Two guards keep it off real dishes:
+ *   - The potato component must be 2–4 words. "Potato & leek soup" has a
+ *     one-word "potato" component and a "leek soup" one, so it survives; so do
+ *     "Potato Gnocchi" and "Patatas Bravas" (potato isn't the last word).
+ *   - If the name carries a "with/in …" clause, that clause must be a SAUCE.
+ *     "Roast potatoes with garlic mayo" is a side; "Baked potato with beans and
+ *     cheese" is lunch, and the difference is entirely in what follows "with".
+ */
+const POTATO_TAIL_RE = /\b(potato|potatoes|mash|fries|chips)$/;
+const SAUCE_TRAILER_RE =
+  /\b(butter|mayo|mayonnaise|aioli|oils?|sauces?|creams?|gravy|dressing|vinaigrette|salt|herbs?|rosemary|thyme|truffle|garlic|parsley|chives?|skins?)\b/;
+
+/** A modified staple with nothing else on the plate — "Creamed potatoes",
+ *  "Truffle & parmesan fries". The staple may lead or trail the name, but
+ *  everything else in it must be a seasoning: "Roast potatoes, chard &
+ *  romesco" names two other vegetables, so it stays a dish. */
+function isSoloStaple(name: string, tailRe: RegExp): boolean {
+  const extra = accompaniment(name);
+  // Potatoes plus a sauce is a side; potatoes plus real food is lunch.
+  if (extra && !SAUCE_TRAILER_RE.test(extra)) return false;
+
+  const parts = components(dishPart(name));
+  const isStaple = (c: string) => wordCount(c) >= 2 && wordCount(c) <= 4 && tailRe.test(c);
+  const at = isStaple(parts[0]) ? 0 : isStaple(parts[parts.length - 1]) ? parts.length - 1 : -1;
+  if (at === -1) return false;
+  return parts.every((c, i) => i === at || SAUCE_TRAILER_RE.test(c));
+}
+
+/** A staple named head-finally, where the rest of the name only modifies it —
+ *  "Garlic, Onion and Coriander Naan". Reads the LAST component only: a dish
+ *  that merely ends with a bread is usually served on one ("48-hour Sourdough,
+ *  Parmesan Custard, Cep Butter" ends in butter and is a €7 starter). */
+function endsInStaple(name: string, tailRe: RegExp): boolean {
+  const parts = components(dishPart(name));
+  const last = parts[parts.length - 1] ?? '';
+  return wordCount(last) >= 2 && tailRe.test(last);
+}
+
 /**
  * Marks an add-on rather than a dish in its own right — the café pattern of
  * "add avocado", "+ fried egg", "side of strawberries". A topping is never a
@@ -208,6 +314,21 @@ export function classifyDishRole(
   // dish name is — "Burnt Basque Cheesecake, Caramelised Banana" is still pud.
   if (DESSERT_SECTION_RE.test(section)) return { role: 'dessert', rule: 'dessert section' };
   if (CONDIMENT_SECTION_RE.test(section)) return { role: 'condiment', rule: 'sauce/dip section' };
+
+  // Head-FINAL staples run BEFORE the simple-name guard, because the modifiers
+  // are what make these names long in the first place: "Chive & Butter Sautéed
+  // Baby Potatoes" is six words and still just potatoes. They carry their own
+  // guards (see isSoloStaple / endsInStaple) instead.
+  if (BARE_POTATO_RE.test(name) || isSoloStaple(name, POTATO_TAIL_RE)) {
+    return { role: 'staple', rule: 'potatoes on their own' };
+  }
+  if (endsInStaple(name, TANDOOR_BREAD_TAIL_RE)) return { role: 'staple', rule: 'named "… naan/roti"' };
+  if (BREAD_AND_BUTTER_RE.test(name)) return { role: 'staple', rule: 'bread & butter' };
+  // Bread alone can't settle it — a €3 "Gluten Free Bread" and a €20.50
+  // "Truffle Cheese Flatbread" have the same shape. Price decides.
+  if (endsInStaple(name, BREAD_TAIL_RE)) {
+    return { role: 'staple', rule: 'named "… bread"', ambiguous: true };
+  }
 
   // Everything below is dish-name matching, and must clear the simple-name
   // guard so composed dishes survive. Allta's "Braised kombu, salted milk ice
