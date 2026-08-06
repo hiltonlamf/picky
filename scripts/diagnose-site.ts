@@ -29,7 +29,7 @@ process.env.ANTHROPIC_API_KEY = '';
 
 import { scrapeRestaurant } from '../lib/scraper';
 import { discoverMenus, textLooksLikeMenu } from '../lib/menu-discovery';
-import { isReaderEnabled, readPage, jinaStatus, firecrawlStatus } from '../lib/reader';
+import { isReaderEnabled, readPage, jinaStatus, firecrawlStatus, DOCUMENT_TIMEOUT_MS } from '../lib/reader';
 
 interface Case {
   name: string;
@@ -121,11 +121,15 @@ async function probeJinaRaw(url: string): Promise<string> {
   }
 }
 
-/** Which reader provider answered, and with how much — the rate-limit tell. */
+/** Which reader provider answered, and with how much — the rate-limit tell.
+ *  Documents get the same longer budget the real pipeline gives them, so this
+ *  probe answers the question actually being asked ("can the reader read THIS
+ *  pdf?") rather than a stricter one the pipeline never poses. */
 async function probeReader(url: string): Promise<string> {
   if (!isReaderEnabled()) return 'reader disabled (READER_PROVIDER=off)';
+  const isDoc = /\.pdf($|\?)/i.test(url);
   const started = Date.now();
-  const res = await readPage(url).catch(() => null);
+  const res = await readPage(url, isDoc ? DOCUMENT_TIMEOUT_MS : undefined).catch(() => null);
   const ms = Date.now() - started;
   if (!res) {
     // Name the reason rather than leaving a bare "NO CONTENT": a sub-second

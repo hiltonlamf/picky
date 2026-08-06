@@ -503,3 +503,65 @@ describe('"we were refused" is not "there is no menu" (waterkantamsterdam.nl)', 
     expect(new ExtractionError('ordinary failure').blocked).toBe(false);
   });
 });
+
+/**
+ * Run #40's Tofu Vegan attempt made three real Anthropic calls and reported
+ * "total LLM cost: $0.0000". Same structural cause as the 2026-07-25 undercount
+ * CLAUDE.md records: spend was read off `best`, which is `null` on total
+ * failure — a shape that cannot carry usage. The accumulated total lives on the
+ * result itself, so read it from there.
+ */
+describe('a wholly failed extraction still reports what it spent (run #40)', () => {
+  it('carries usage out even when every attempt returned nothing', async () => {
+    vi.resetModules();
+    const spent = { model: 'claude-haiku-4-5-20251001', tokensIn: 4000, tokensOut: 900, costUsd: 0.0231 };
+    vi.doMock('@/lib/ai', async (orig) => {
+      const real = await orig<typeof import('@/lib/ai')>();
+      // Build the error from the SAME module instance menu-extract will import.
+      // `instanceof` is what routes usage out of a failed call, and a class from
+      // a different module registry silently fails that check — which would make
+      // this test pass for the wrong reason (or fail for one).
+      const billedButUseless = () => vi.fn().mockRejectedValue(new real.AICallError('No menu text found.', spent));
+      return {
+        ...real,
+        // Every rung reaches Anthropic, is billed, and yields nothing usable.
+        classifyMenuWithAI: billedButUseless(),
+        classifyMenuFromPdf: billedButUseless(),
+        classifyMenuFromImages: billedButUseless(),
+        classifyMenuFromScreenshot: billedButUseless(),
+      };
+    });
+    vi.doMock('@/lib/reader', async (orig) => ({
+      ...(await orig<typeof import('@/lib/reader')>()),
+      fetchScreenshot: vi.fn().mockResolvedValue('https://shot.example/x.png'),
+    }));
+
+    const { extractMenuResumable, extractAndMerge } = await import('@/lib/menu-extract');
+    // Tofu Vegan's shape exactly: one PDF candidate, every rung billed, none usable.
+    const candidate = {
+      id: 'c1',
+      type: 'pdf' as const,
+      label: 'Menu',
+      ref: 'https://www.tofuvegan.com/assets/menu/menu250120.pdf',
+      source: 'homepage' as const,
+    };
+    const ctx = { title: 'Tofu Vegan', pageUrl: 'https://www.tofuvegan.com' };
+
+    const r = await extractMenuResumable(candidate, ctx);
+    expect(r.best).toBeNull(); // nothing to show the user…
+    expect(r.usage?.costUsd).toBeGreaterThan(0); // …but it was NOT free
+
+    // And the failure the route actually sees carries the same number, rather
+    // than telling us a burned retry ladder cost nothing.
+    await expect(extractAndMerge([candidate], ctx)).rejects.toMatchObject({
+      usage: expect.objectContaining({ costUsd: expect.any(Number) }),
+    });
+    await extractAndMerge([candidate], ctx).catch((err) => {
+      expect(err.usage.costUsd).toBeGreaterThan(0);
+    });
+
+    vi.doUnmock('@/lib/ai');
+    vi.doUnmock('@/lib/reader');
+    vi.resetModules();
+  });
+});

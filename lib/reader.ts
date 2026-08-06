@@ -177,6 +177,13 @@ async function readWithFirecrawl(url: string, timeoutMs = READER_TIMEOUT_MS): Pr
           url,
           formats: ['markdown', 'rawHtml', 'links', 'screenshot'],
           onlyMainContent: false,
+          // Firecrawl enforces its OWN scrape timeout (30s by default) and
+          // answers HTTP 408 when it expires — so raising only our client-side
+          // budget changed nothing. Run #40: we waited 90s, Firecrawl gave up at
+          // exactly 30s on a 27.7 MB PDF. Ask it for the same budget we're
+          // prepared to wait, less a margin so its 408 arrives before our abort
+          // (a real answer, even a refusal, beats a bare timeout).
+          timeout: Math.max(timeoutMs - 5000, 10000),
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });

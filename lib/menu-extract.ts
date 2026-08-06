@@ -376,7 +376,14 @@ export async function extractAndMerge(
   const results = await Promise.all(
     candidates.map(async (c) => {
       const r = await extractMenuResumable(c, ctx);
-      return { label: c.label, res: r.best, blocked: r.blocked === true };
+      // Take `r.usage`, not `r.best.usage`: when every rung of the ladder fails,
+      // `best` is null — a shape that cannot carry usage — and reading spend off
+      // it discards calls Anthropic already billed. That is precisely the
+      // structural undercount CLAUDE.md records from 2026-07-25, and it was
+      // still live here: run #40 spent three real calls on Tofu Vegan and
+      // reported "$0.0000". `r.usage` is the accumulated total across every
+      // attempt, so it is also the more complete number on success.
+      return { label: c.label, res: r.best, usage: r.usage, blocked: r.blocked === true };
     })
   );
 
@@ -387,7 +394,7 @@ export async function extractAndMerge(
   if (named.length > 1) ctx.onProgress?.('Combining the menus and classifying every dish...');
 
   let usage: AIUsage | undefined;
-  for (const r of results) usage = sumUsage(usage, r.res?.usage);
+  for (const r of results) usage = sumUsage(usage, r.usage);
 
   if (named.length === 0) {
     // Every source (text, PDF, images, screenshot, escalation) came back with

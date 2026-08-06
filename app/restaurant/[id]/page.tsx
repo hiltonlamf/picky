@@ -247,10 +247,21 @@ export default function RestaurantPage() {
             heading: 'This restaurant looks closed',
             body: `${name} appears to be permanently closed, so there's no menu to show.`,
           }
-        : {
-            heading: 'No menu listed on this site',
-            body: `We looked, but ${name}'s website doesn't seem to publish a menu online.`,
-          };
+        : // 'blocked' means we FOUND the menu and were refused it — a fact about
+          // the host, not about the restaurant. Saying "no menu listed" here
+          // would be simply untrue, and it hides the one thing that fixes it.
+          reason === 'blocked'
+          ? {
+              heading: "We found the menu — but we can't open it",
+              body:
+                `Sometimes AI agents can't read or access materials that people can, and ${name}'s ` +
+                'menu is one of them. Can you give us a hand by uploading it, or pasting a direct ' +
+                "link? We'll read it right away.",
+            }
+          : {
+              heading: 'No menu listed on this site',
+              body: `We looked, but ${name}'s website doesn't seem to publish a menu online.`,
+            };
     return (
       <div className="max-w-lg mx-auto px-4 py-16">
         <div className="text-center mb-6">
