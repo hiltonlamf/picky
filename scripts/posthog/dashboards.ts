@@ -95,6 +95,12 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
         breakdownFilter: { breakdown: 'accepted', breakdown_type: 'event' },
       }),
       trend(
+        'HERO: guide vs search — the hypothesis under test',
+        'On 2026-08-06 the hero was rebuilt to lead with the Dublin guide, on the theory that people come here for "where can I eat", not "check this one restaurant" — which they could do themselves by opening its website. This chart is the direct read on whether that was right. Break the guide series down by `placement` to separate the hero button from the one in the band below it. A wide guide win says keep it; a narrow one, or a collapse in search_disclosed, says the search got buried and the hero should go back.',
+        [ev('guide_cta_clicked'), ev('search_disclosed')],
+        { breakdownFilter: { breakdown: 'placement', breakdown_type: 'event' } }
+      ),
+      trend(
         'TOP SEARCHED RESTAURANTS',
         'What people actually come here to look up, by domain. Read this next to "Searched restaurants — did they work?" on dashboard ③: a domain high in both lists is a popular restaurant we are failing, which is the most valuable thing to fix. NOTE: PostHog only sees consenting visitors and only the domain — /admin/searches has every search and the full URL.',
         [ev('search_submitted')],
@@ -125,6 +131,53 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
             dateRange: { date_from: '-30d' },
             properties: NOT_INTERNAL,
             funnelsFilter: { funnelVizType: 'steps' },
+          },
+        },
+      },
+      {
+        // Deliberately a NEW insight rather than a step spliced into "Core
+        // funnel" above: inserting a step in front of search_submitted changes
+        // that funnel's denominator, so its 30-day chart would read as a cliff
+        // for a month and stop being comparable to anything before the change.
+        name: 'Search funnel incl. disclosure',
+        description:
+          'The search path since the hero became guide-led (2026-08-06). The URL bar now sits behind a "Search a restaurant" button, so the first step is opening it — the drop from search_disclosed to search_submitted is people who opened the box and never pasted, which was invisible while the field was always on screen. A wide gap here means the search is discoverable but the ask is unclear; a tiny search_disclosed count means it is buried.',
+        query: {
+          kind: 'InsightVizNode',
+          source: {
+            kind: 'FunnelsQuery',
+            series: [
+              ev('search_disclosed'),
+              ev('search_submitted'),
+              ev('results_viewed', {
+                properties: [{ key: 'outcome', value: ['menu'], operator: 'exact', type: 'event' }],
+              }),
+              ev('results_engaged'),
+            ],
+            dateRange: { date_from: '-30d' },
+            properties: NOT_INTERNAL,
+            funnelsFilter: { funnelVizType: 'steps' },
+          },
+        },
+      },
+      {
+        name: 'Guide funnel incl. CTA click',
+        description:
+          'Adds the click itself in front of the arrival. guide_viewed only fires once someone lands on /dublin, so the gap between these two steps is clicks that never landed — a bounce, a back button, a slow route. A widening gap is a performance problem, not a content one.',
+        query: {
+          kind: 'InsightVizNode',
+          source: {
+            kind: 'FunnelsQuery',
+            series: [
+              ev('guide_cta_clicked'),
+              ev('guide_viewed'),
+              ev('results_viewed', {
+                properties: [{ key: 'source', value: ['guide'], operator: 'exact', type: 'event' }],
+              }),
+              ev('results_engaged'),
+            ],
+            dateRange: { date_from: '-30d' },
+            properties: NOT_INTERNAL,
           },
         },
       },

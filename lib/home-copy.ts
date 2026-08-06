@@ -7,20 +7,34 @@ export const HERO = {
   badge: 'AI-assisted · Human-verified · Made in Dublin',
   /** The headline is split so the middle part can be set in pink. */
   headline: {
-    before: 'See all ',
-    accent: 'veggie dishes',
-    after: ' at any restaurant, instantly.',
+    before: 'Every veggie dish in ',
+    accent: "Dublin's best restaurants",
+    after: '. Already read.',
   },
-  sub: "No more showing up in places that only offer mushroom risotto.",
-  subAccent: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
+  sub: "We read the menus so you don't have to open twelve tabs before booking dinner.",
+  /**
+   * Primary CTA. Worded differently from GUIDE.cta, which repeats lower down
+   * the page — so the `placement` breakdown in PostHog means something.
+   */
+  guideCta: 'Explore the Dublin guide →',
+  /** Secondary CTA — reveals the URL bar in place. */
+  searchTrigger: 'Search a restaurant',
+  /**
+   * Shown inside the revealed panel. This used to sit under the headline as
+   * `subAccent`, but it sells the *secondary* action — as a full-width pink
+   * line under a guide-led headline it contradicted the hierarchy.
+   */
+  searchHint: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
+  /** Collapses the panel again. Only offered while the search is idle. */
+  searchCancel: 'Cancel',
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
 export const GUIDE = {
-  eyebrow: 'Dublin, already tofu-analysed for you',
+  eyebrow: 'A taste of the guide',
   headline: "Veggie dishes in Dublin's most popular restaurants",
   lede: "These are the hottest spots in Dublin — we've read every menu so you can see what's there for vegetarians and vegans before you book.",
-  cta: 'View Dublin Guide →',
+  cta: 'See every restaurant →',
 } as const;
 
 export const STORY = {
