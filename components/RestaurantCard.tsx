@@ -12,7 +12,8 @@ interface Props {
 }
 
 export default function RestaurantCard({ restaurant }: Props) {
-  const { maxVegOptions, bestMenu, perMenu, highlights, highlightsAreThin } = guideInsights(restaurant);
+  const { maxVegOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
+    guideInsights(restaurant);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // Per-menu breakdown only matters when there's more than one source menu.
@@ -58,17 +59,35 @@ export default function RestaurantCard({ restaurant }: Props) {
         </div>
 
         {/* Dietary counts stay green with their emoji — pink never carries
-            dietary meaning. The capsule is glass, the numbers are not. */}
+            dietary meaning. The capsule is glass, the numbers are not.
+            The count is dishes you would order AS a dish; desserts, sauces and
+            plain breads are tallied beside it rather than folded in, so the
+            headline can't be inflated by a €3 pot of tahini. */}
         <div className="glass-light self-start inline-flex items-center gap-3 rounded-full px-3.5 py-2 text-sm font-semibold">
           {bestMenu.vegan > 0 && (
             <span className="text-picky-700 whitespace-nowrap">
               <span aria-hidden="true">🌱</span> {bestMenu.vegan} vegan
             </span>
           )}
-          <span className="text-picky-600 whitespace-nowrap">
-            <span aria-hidden="true">🍳</span> {maxVegOptions} veggie
-          </span>
+          {maxVegOptions > 0 ? (
+            <span className="text-picky-600 whitespace-nowrap">
+              <span aria-hidden="true">🍳</span> {maxVegOptions} veggie
+            </span>
+          ) : (
+            // An honest empty state beats a bare "0 veggie" next to a green
+            // badge — this restaurant has sides and sweets but no veggie dish.
+            <span className="text-forest/70 whitespace-nowrap">
+              <span aria-hidden="true">😢</span> No veggie mains
+            </span>
+          )}
         </div>
+
+        {asideCount > 0 && (
+          <p className="text-xs text-forest/60 -mt-1">
+            plus {asideCount} side{asideCount === 1 ? '' : 's'}, sauce
+            {asideCount === 1 ? '' : 's'} &amp; sweet{asideCount === 1 ? '' : 's'} we don&rsquo;t count
+          </p>
+        )}
 
         {/* A diner sees one menu per visit, so show each. */}
         {showPerMenu && (

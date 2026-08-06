@@ -33,3 +33,6 @@ next-env.d.ts
 
 # local-only, not for the public repo
 .claude/
+
+# generated reports (regenerate with scripts/audit-dish-roles.ts)
+/db/reports/

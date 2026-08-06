@@ -1,12 +1,15 @@
-import type { MenuSection as MenuSectionType } from '@/types';
+import type { Dish, MenuSection as MenuSectionType } from '@/types';
 import DishCard from './DishCard';
 
 interface Props {
   section: MenuSectionType;
   activeFilter?: string | null;
+  /** Whether a dish is one of the sides/sweets left out of the headline count.
+   *  Supplied by the page, which owns the price context the rule needs. */
+  isAside?: (sectionName: string, dish: Dish) => boolean;
 }
 
-export default function MenuSection({ section, activeFilter }: Props) {
+export default function MenuSection({ section, activeFilter, isAside }: Props) {
   const visibleDishes = section.dishes.filter((dish) => {
     if (!activeFilter || activeFilter === 'all') return true;
     if (activeFilter === 'vegan') return dish.classification === 'vegan';
@@ -29,7 +32,12 @@ export default function MenuSection({ section, activeFilter }: Props) {
       </h2>
       <div className="space-y-2">
         {visibleDishes.map((dish) => (
-          <DishCard key={dish.id} dish={dish} activeFilter={activeFilter} />
+          <DishCard
+            key={dish.id}
+            dish={dish}
+            activeFilter={activeFilter}
+            aside={isAside ? isAside(section.name, dish) : false}
+          />
         ))}
       </div>
     </section>

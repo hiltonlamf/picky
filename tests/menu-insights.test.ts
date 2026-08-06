@@ -42,6 +42,17 @@ describe('parsePrice', () => {
     expect(parsePrice('')).toBeNull();
     expect(parsePrice('Market Price')).toBeNull();
   });
+
+  // Stripping non-digits turned a €12.99 pizza into €912.99, which put it top
+  // of the "priciest first" highlight ranking at several restaurants.
+  it('survives sizes, ranges and decimal commas', () => {
+    expect(parsePrice('9" €12.99 / 12" €14.99')).toBe(12.99); // not 912.991214
+    expect(parsePrice('€18 (dinner) / €16 (lunch)')).toBe(18);
+    expect(parsePrice('€8–€11')).toBe(8);
+    expect(parsePrice('Half dozen €21 | Dozen €42')).toBe(21);
+    expect(parsePrice('3,75')).toBe(3.75); // Dutch decimal comma, not 375
+    expect(parsePrice('38/70')).toBe(38);
+  });
 });
 
 describe('guideInsights', () => {
@@ -54,10 +65,114 @@ describe('guideInsights', () => {
     expect(ins.maxVegOptions).toBe(3); // best menu, not 5 (the sum)
     expect(ins.bestMenu).toEqual({ label: 'Dinner', vegan: 1, vegetarian: 2 });
     expect(ins.perMenu).toEqual([
-      { label: 'Lunch', vegOptions: 2 },
-      { label: 'Dinner', vegOptions: 3 },
+      { label: 'Lunch', vegOptions: 2, asideOptions: 0 },
+      { label: 'Dinner', vegOptions: 3, asideOptions: 0 },
     ]);
     expect(ins.totalDishes).toBe(5);
+    expect(ins.asideCount).toBe(0);
+  });
+
+  it('splits the headline count from sides and sweets', () => {
+    const r = restaurant([
+      section('Mains', [dish('Wild mushroom risotto', 'vegetarian', '€22')]),
+      section('Sides', [dish('Butter Naan', 'vegetarian', '€3')]),
+      section('Desserts', [dish('Gulab Jamun', 'vegetarian', '€8')]),
+    ]);
+    const ins = guideInsights(r);
+    expect(ins.maxVegOptions).toBe(1); // the risotto alone
+    expect(ins.asideCount).toBe(2); // naan + pudding, shown but not counted
+    expect(ins.totalDishes).toBe(3); // nothing is hidden
+  });
+
+  it('counts the same dish once when a tasting menu repeats the a la carte', () => {
+    // Cornerstore's "Tasting Menu – Vegetarian" is its own plates bundled, and
+    // both carry no menuLabel — so six dishes were counted as eleven.
+    const r = restaurant([
+      section('Snacks', [dish('Crispy tofu', 'vegan', '€8'), dish('Lotus root pickle', 'vegan', '€7')]),
+      section('Tasting Menu – Vegetarian', [
+        dish('Crispy tofu', 'vegan', '€8'),
+        dish('Lotus root pickle', 'vegan', '€7'),
+        dish('Smoked tofu, green peas', 'vegan', '€12'),
+      ]),
+    ]);
+    const ins = guideInsights(r);
+    expect(ins.maxVegOptions).toBe(3); // not 5
+    expect(ins.bestMenu.vegan).toBe(3); // the split de-dupes the same way
+    expect(ins.totalDishes).toBe(5); // nothing is removed from the menu itself
+  });
+
+  describe('the price tiebreak for bar snacks', () => {
+    // Only fires in an explicit bar-snack section, and only under half the
+    // restaurant's median price.
+    const withMains = (extra: MenuSection[]) =>
+      restaurant([
+        section('Mains', [
+          dish('Risotto', 'vegetarian', '€20'),
+          dish('Steak', 'neither', '€28'),
+          dish('Cod', 'neither', '€24'),
+          dish('Gnocchi', 'vegetarian', '€19'),
+        ]),
+        ...extra,
+      ]);
+
+    it('demotes a cheap nibble but keeps a substantial one', () => {
+      const ins = guideInsights(
+        withMains([
+          section('Nibbles', [
+            dish('Tartine bread and olive oil', 'vegetarian', '€4'), // ~19% of median
+            dish('Padron pepper and romesco', 'vegan', '€12'), // ~57%, a real plate
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(3); // risotto, gnocchi, padron — not the tartine
+      expect(ins.asideCount).toBe(1);
+    });
+
+    it('never touches a "Sides" section, where the veg mains live', () => {
+      // Pickle's curries run €8.50–€14.50 against €38 mains. A price rule that
+      // reached them would delete the whole point of this feature.
+      const ins = guideInsights(
+        withMains([
+          section('Condiments/Sides', [
+            dish('Palak Paneer', 'vegetarian', '€8.50'),
+            dish('Bhindi Masala', 'vegetarian', '€8'),
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(4);
+    });
+
+    it('keeps an unpriced nibble — we cannot judge what we cannot see', () => {
+      const ins = guideInsights(withMains([section('Snacks', [dish('Mystery plate', 'vegan', null)])]));
+      expect(ins.maxVegOptions).toBe(3);
+    });
+
+    // Cuts the other way too. A Thai kitchen names main courses "… Sauce":
+    // Baan Thai sells "Tamarind Sauce" at €26.50 against a €20.95 median.
+    it('rescues an expensive dish named "… sauce" from the condiment rule', () => {
+      const ins = guideInsights(
+        withMains([
+          section('Signature', [
+            dish('Tamarind Sauce', 'vegetarian', '€26.50'), // a main course
+            dish('Mint Sauce', 'vegetarian', '€2.75'), // an actual condiment
+          ]),
+        ])
+      );
+      expect(ins.maxVegOptions).toBe(3); // risotto, gnocchi, tamarind
+      expect(ins.asideCount).toBe(1); // the mint sauce
+    });
+
+    it('leaves an unpriced "… sauce" as a condiment', () => {
+      const ins = guideInsights(withMains([section('Signature', [dish('Chilli Sauce', 'vegan', null)])]));
+      expect(ins.maxVegOptions).toBe(2);
+    });
+  });
+
+  it('counts "unknown" dishes as veggie — when in doubt, count it', () => {
+    const r = restaurant([
+      section('Mains', [dish('Soup of the day', 'unknown', '€8'), dish('Risotto', 'vegetarian', '€20')]),
+    ]);
+    expect(guideInsights(r).maxVegOptions).toBe(2);
   });
 
   it('highlights up to 3 priciest veg dishes, de-duped across menus, with prices', () => {
@@ -109,15 +224,25 @@ describe('guideInsights', () => {
       section('Menu', [
         dish('Priced main', 'vegan', '€18'),
         dish('Side salad', 'vegan', null),
-        dish('Bread', 'vegetarian', null),
+        dish('Grilled aubergine', 'vegetarian', null),
       ]),
     ]);
     // One priced dish leads; unpriced veg fills the remaining slots in order.
     expect(guideInsights(r).highlights).toEqual([
       { name: 'Priced main', price: '€18' },
       { name: 'Side salad', price: null },
-      { name: 'Bread', price: null },
+      { name: 'Grilled aubergine', price: null },
     ]);
+  });
+
+  it('never headlines a bread or a pudding', () => {
+    const r = restaurant([
+      section('Menu', [
+        dish('Tandoori Bread Basket', 'vegetarian', '€9.95'), // priciest, but bread
+        dish('Paneer Tikka', 'vegetarian', '€8'),
+      ]),
+    ]);
+    expect(guideInsights(r).highlights).toEqual([{ name: 'Paneer Tikka', price: '€8' }]);
   });
 
   it('excludes soft-deleted dishes', () => {
@@ -149,12 +274,26 @@ describe('guideInsights', () => {
       expect(guideInsights(r).highlightsAreThin).toBe(true);
     });
 
-    it('is false when at least one of the top 3 highlights is a main', () => {
+    it('is true when the only veg dishes are desserts, since none can be highlighted', () => {
+      // Desserts are excluded from the count entirely now, so there is nothing
+      // left to showcase — the card must say so rather than imply three picks.
       const r = restaurant([
         section('Mains', [dish('Truffle Risotto', 'vegetarian', '€24')]),
         section('Desserts', [
           dish('Sticky toffee pudding', 'vegetarian', '€9'),
           dish('Sorbet', 'vegan', '€7'),
+        ]),
+      ]);
+      expect(guideInsights(r).highlights).toEqual([{ name: 'Truffle Risotto', price: '€24' }]);
+      expect(guideInsights(r).highlightsAreThin).toBe(true);
+    });
+
+    it('is false when three countable dishes exist and one is a main', () => {
+      const r = restaurant([
+        section('Mains', [dish('Truffle Risotto', 'vegetarian', '€24')]),
+        section('Sides', [
+          dish('Truffle Mac & Cheese', 'vegetarian', '€9'),
+          dish('Creamed Spinach', 'vegetarian', '€7'),
         ]),
       ]);
       expect(guideInsights(r).highlightsAreThin).toBe(false);

@@ -27,6 +27,12 @@ export const EVENTS = {
   GUIDE_VIEWED: 'guide_viewed',
   GUIDE_RESTAURANT_CLICKED: 'guide_restaurant_clicked',
 
+  // --- transparency ---
+  // Fires once per visit when someone opens "How we count veggie dishes".
+  // If nobody opens it, the note is decoration and the split belongs on the
+  // card itself; if lots do, the number isn't explaining itself.
+  COUNTING_METHOD_EXPANDED: 'counting_method_expanded',
+
   // --- errors (see captureError) ---
   ERROR_SHOWN: 'error_shown',
   APP_CRASHED: 'app_crashed',

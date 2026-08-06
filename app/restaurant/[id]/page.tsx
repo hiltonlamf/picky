@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import type { Restaurant, DietaryClassification, MenuSection as MenuSectionType } from '@/types';
+import type { Restaurant, DietaryClassification, Dish as DishType, MenuSection as MenuSectionType } from '@/types';
 import MenuSection from '@/components/MenuSection';
 import FreshnessIndicator from '@/components/FreshnessIndicator';
 import Disclaimer from '@/components/Disclaimer';
@@ -15,6 +15,8 @@ import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { captureError, EVENTS } from '@/lib/analytics';
 import { SITE_TITLE } from '@/lib/site-copy';
+import CountingMethod from '@/components/CountingMethod';
+import { isVeg, headlineCounts, menuTallies, makeCountedTest, guideInsights, type CategoryTally } from '@/lib/menu-insights';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
 type Filter = 'all' | 'vegan' | 'vegetarian';
@@ -28,14 +30,34 @@ const PENDING_POLL_MS = 4000;
 // analysis.
 const MAX_PENDING_POLLS = 75;
 
+/** Raw dish counts, kept ONLY for the results_viewed event so the funnel stays
+ *  comparable across this change. Everything on screen uses menuTallies. */
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
-  const dishes = sections.flatMap((s) => s.dishes);
+  const dishes = sections.flatMap((s) => s.dishes).filter((d) => !d.deletedAt);
   if (filter === 'all') return dishes.length;
   return dishes.filter((d) => {
     if (filter === 'vegan') return d.classification === 'vegan';
-    if (filter === 'vegetarian') return d.classification === 'vegan' || d.classification === 'vegetarian';
+    if (filter === 'vegetarian') return isVeg(d);
     return false;
   }).length;
+}
+
+// Everything the page displays comes from menuTallies (lib/menu-insights),
+// which the guide card uses too — so the two surfaces cannot disagree about
+// what "N veggie" means, nor about which dishes are the same dish.
+
+/**
+ * A small aside line: how many of this category are sides, sauces or sweets.
+ * Rendered under the capsule's number, and mirrored by the "+N" on the tab.
+ */
+function AsideNote({ count }: { count: number }) {
+  if (count <= 0) return null;
+  const s = count === 1 ? '' : 's';
+  return (
+    <div className="text-[0.68rem] leading-tight text-forest/55 mt-1">
+      +{count} side{s}, sauce{s} &amp; sweet{s}
+    </div>
+  );
 }
 
 /**
@@ -76,8 +98,13 @@ export default function RestaurantPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('vegetarian');
   // 'all' or a specific source-menu label (Lunch/Dinner/...) when the
-  // restaurant has multiple analysed menus.
+  // restaurant has multiple analysed menus. Defaults to 'all' only until the
+  // data arrives — see the effect below, which switches to the menu the guide
+  // card headlines.
   const [menuFilter, setMenuFilter] = useState<string>('all');
+  // Whether the user has picked a menu themselves; their choice always wins
+  // over the default.
+  const menuChosen = useRef(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { setRestaurantName } = useHeader();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,8 +141,9 @@ export default function RestaurantPage() {
       })
       .then((data: Restaurant) => {
         setRestaurant(data);
-        const labels = distinctMenuLabels(data);
-        if (labels.length > 1) setMenuFilter((prev) => (prev === 'all' ? labels[0] : prev));
+        // The default menu is chosen in an effect below (the one the guide card
+        // headlines), not here — this used to pick labels[0], which is why the
+        // page opened on Sunday Menu while the card talked about the Main one.
         if (data.name) {
           setRestaurantName(data.name);
           document.title = `${data.name} | Picky`;
@@ -162,7 +190,12 @@ export default function RestaurantPage() {
             outcome: data.status === 'done' ? 'menu' : data.status,
             dish_count: dishCount,
             vegan_count: countDishes(data.sections, 'vegan'),
+            // Kept on the OLD definition (every veg dish, sides included) so
+            // charts built on it stay comparable across this change rather than
+            // silently re-baselining. The new headline figures ride alongside.
             veg_count: countDishes(data.sections, 'vegetarian'),
+            veg_counted: headlineCounts(data.sections).counted,
+            veg_aside: headlineCounts(data.sections).aside,
             menu_count: distinctMenuLabels(data).length,
             source: arrivalSource(),
             // Only set on a no_menu outcome; it's what separates "site is
@@ -195,6 +228,23 @@ export default function RestaurantPage() {
       document.title = SITE_TITLE;
     };
   }, [load, setRestaurantName]);
+
+  /**
+   * Land on the menu the guide card is talking about.
+   *
+   * The card headlines the BEST SINGLE menu, because a diner only eats off one
+   * menu per visit — but this page opened on "All menus", which sums them. Fade
+   * Street Social's card read "9 veggie" while the page showed a different
+   * number entirely, and neither was wrong; they were answering different
+   * questions. Now both describe the same menu, and "All menus" is one click
+   * away for anyone who wants the whole picture.
+   */
+  useEffect(() => {
+    if (!restaurant || menuChosen.current) return;
+    if (distinctMenuLabels(restaurant).length <= 1) return;
+    const best = guideInsights(restaurant).bestMenu.label;
+    if (best) setMenuFilter(best);
+  }, [restaurant]);
 
   // Closes the share loop: shared links carry ?ref=share&src=<channel>
   // (set in ShareButton), so share → visit → activation is measurable.
@@ -321,15 +371,30 @@ export default function RestaurantPage() {
       ? restaurant.sections.filter((s) => s.menuLabel === menuFilter || !s.menuLabel)
       : restaurant.sections;
 
-  const veganCount = countDishes(visibleSections, 'vegan');
-  const vegCount = countDishes(visibleSections, 'vegetarian');
-  const totalDishes = visibleSections.flatMap((s) => s.dishes).length;
+  // ONE tally, feeding BOTH the stat capsules and the filter tabs, from the
+  // same helper the guide card uses. Two bugs came from computing it here
+  // instead: the capsule showed the counted figure while the tab showed the
+  // whole list (Etto: "1 Vegan" above a "Vegan 4" button), and a hand-rolled
+  // walk skipped the de-duplication (Fade Street: card 9, page 10).
+  //
+  // The price level comes from the WHOLE restaurant, not the visible menu —
+  // guideInsights does the same, and judging a cheap lunch menu against itself
+  // gives a different answer.
+  const tallies = menuTallies(visibleSections, restaurant.sections);
 
-  const filters: { value: Filter; label: string; count: number }[] = [
-    { value: 'all', label: '🍽️ Everything', count: totalDishes },
-    { value: 'vegetarian', label: '🍳 Veggie', count: vegCount },
-    { value: 'vegan', label: '🌱 Vegan', count: veganCount },
+  // Marks the sides/sweets in the list itself, so the "+N" on the tab has
+  // something to point at. Same price context as the tally above.
+  const countedTest = makeCountedTest(restaurant.sections);
+  const isAsideDish = (sectionName: string, dish: DishType) =>
+    isVeg(dish) && !countedTest(sectionName, dish);
+
+  // One order everywhere: broadest first, narrowest last.
+  const filters: { value: Filter; label: string; tally: CategoryTally }[] = [
+    { value: 'all', label: '🍽️ All dishes', tally: { counted: tallies.all, aside: 0 } },
+    { value: 'vegetarian', label: '🍳 Veggie', tally: tallies.veg },
+    { value: 'vegan', label: '🌱 Vegan', tally: tallies.vegan },
   ];
+  const activeTally = filters.find((f) => f.value === filter)!.tally;
 
   return (
     <div className="relative">
@@ -370,7 +435,7 @@ export default function RestaurantPage() {
               <ChatIcon className="w-4 h-4" />
               Feedback
             </button>
-            <ShareButton restaurant={restaurant} />
+            <ShareButton restaurant={restaurant} visibleSections={visibleSections} />
           </div>
         </div>
         {restaurant.cuisine && (
@@ -420,22 +485,29 @@ export default function RestaurantPage() {
 
       {/* Stats — glass capsules over the mesh, but the numbers themselves stay
           solid green: dietary information must never lose contrast to an effect. */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-2">
         <div className="glass-light rounded-2xl p-3.5 text-center">
-          <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
-          <div className="font-display text-3xl text-picky-700">{veganCount}</div>
-          <div className="text-xs text-forest/75 mt-0.5">Vegan</div>
+          <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
+          <div className="font-display text-3xl text-forest/80">{tallies.all}</div>
+          <div className="text-xs text-forest/75 mt-0.5">All dishes</div>
         </div>
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍳</div>
-          <div className="font-display text-3xl text-picky-600">{vegCount}</div>
+          <div className="font-display text-3xl text-picky-600">{tallies.veg.counted}</div>
           <div className="text-xs text-forest/75 mt-0.5">Veggie</div>
+          <AsideNote count={tallies.veg.aside} />
         </div>
         <div className="glass-light rounded-2xl p-3.5 text-center">
-          <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
-          <div className="font-display text-3xl text-forest/80">{totalDishes}</div>
-          <div className="text-xs text-forest/75 mt-0.5">Dishes read</div>
+          <div className="text-lg mb-0.5" aria-hidden="true">🌱</div>
+          <div className="font-display text-3xl text-picky-700">{tallies.vegan.counted}</div>
+          <div className="text-xs text-forest/75 mt-0.5">Vegan</div>
+          <AsideNote count={tallies.vegan.aside} />
         </div>
+      </div>
+
+      {/* The number leaves things out on purpose, so it has to say so. */}
+      <div className="relative z-[2] mb-6">
+        <CountingMethod surface="restaurant" />
       </div>
 
       {/* Menu selector — only when multiple menus were analysed */}
@@ -447,7 +519,7 @@ export default function RestaurantPage() {
           <select
             id="menu-select"
             value={menuFilter}
-            onChange={(e) => { reportEngagement('menu_filter'); setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
+            onChange={(e) => { menuChosen.current = true; reportEngagement('menu_filter'); setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: params.id }); }}
             className="glass-light w-full sm:w-auto px-4 py-2.5 rounded-full text-sm font-medium text-forest focus:outline-none focus:ring-4 focus:ring-azalea-500/25"
           >
             {menuLabels.map((label) => (
@@ -475,11 +547,32 @@ export default function RestaurantPage() {
           >
             {f.label}
             <span className={`ml-1.5 text-xs ${filter === f.value ? 'text-azalea-400' : 'text-forest/70'}`}>
-              {f.count}
+              {f.tally.counted}
+              {/* The sides/sweets are still IN this list — the badge has to
+                  account for them or it contradicts the rows below it. */}
+              {f.tally.aside > 0 && (
+                <span className={filter === f.value ? 'text-paper/55' : 'text-forest/45'}>
+                  {' '}+{f.tally.aside}
+                </span>
+              )}
             </span>
           </button>
         ))}
       </div>
+
+      {/* The badge says 4 and the list shows nine rows; without this the
+          difference is unexplained. Names the count and points at the label
+          that marks the rest. */}
+      {filter !== 'all' && activeTally.aside > 0 && (
+        <p className="relative z-[2] -mt-4 mb-6 text-xs text-forest/65">
+          <strong className="font-semibold text-forest/80">{activeTally.counted}</strong>{' '}
+          {filter === 'vegan' ? 'vegan' : 'veggie'} dish
+          {activeTally.counted === 1 ? '' : 'es'} we count, plus {activeTally.aside} side
+          {activeTally.aside === 1 ? '' : 's'}, sauce{activeTally.aside === 1 ? '' : 's'} &amp;
+          sweet{activeTally.aside === 1 ? '' : 's'} marked{' '}
+          <em>not included in the veggie count</em> below.
+        </p>
+      )}
 
       {/* Menu sections */}
       {visibleSections.length === 0 ? (
@@ -496,7 +589,7 @@ export default function RestaurantPage() {
               <div key={label} className="mb-8">
                 <h2 className="font-display text-xl text-forest mb-3 pb-2 border-b-[1.5px] border-forest/15">{label}</h2>
                 {group.map((section) => (
-                  <MenuSection key={section.id} section={section} activeFilter={filter} />
+                  <MenuSection key={section.id} section={section} activeFilter={filter} isAside={isAsideDish} />
                 ))}
               </div>
             );
@@ -504,13 +597,13 @@ export default function RestaurantPage() {
           {visibleSections
             .filter((s) => !s.menuLabel)
             .map((section) => (
-              <MenuSection key={section.id} section={section} activeFilter={filter} />
+              <MenuSection key={section.id} section={section} activeFilter={filter} isAside={isAsideDish} />
             ))}
         </>
       ) : (
         <>
           {visibleSections.map((section) => (
-            <MenuSection key={section.id} section={section} activeFilter={filter} />
+            <MenuSection key={section.id} section={section} activeFilter={filter} isAside={isAsideDish} />
           ))}
         </>
       )}
