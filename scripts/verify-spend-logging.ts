@@ -10,7 +10,9 @@
  *
  * It deliberately includes a case that FAILS extraction, because the failure path
  * is the one that was broken and the one that costs the most (Haiku fails →
- * Sonnet escalation at 3× the price).
+ * Sonnet escalation at 3× the price). That case checks BOTH directions: the row
+ * reaches ai_usage_log, and the failure reports the same spend to its caller.
+ * Those are different bugs — PR #27 hit each of them separately.
  *
  * Cost: a handful of Haiku/Sonnet calls, well under $0.10. Run it after any
  * change to lib/ai.ts's call sites.
@@ -20,6 +22,7 @@
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
 import { labelMenuCandidates } from '../lib/ai';
+import { extractAndMerge, ExtractionError } from '../lib/menu-extract';
 import { withSpendContext } from '../lib/ai-spend';
 
 const supabase = createClient(
@@ -65,6 +68,47 @@ async function main() {
       ? `  PASS — ${labelDelta} row(s) written, +$${(afterLabel.total - before.total).toFixed(6)}\n`
       : `  FAIL — no row written; this call is still invisible spend\n`
   );
+
+  // --- Case 2: an extraction that FAILS --------------------------------------
+  // The header has always promised this case; the code never had it, so the one
+  // path that actually lost money went unchecked. It broke twice in PR #27
+  // alone: run #33 reported "$0.0000 spent" on real calls, and run #40 did it
+  // again one layer up, because spend was read off a value that is null when
+  // every rung of the ladder fails. Failure is the most expensive path in this
+  // pipeline — a ladder that escalates Haiku to Sonnet is 3x the price — so a
+  // verification that only covers the happy path verifies the cheap half.
+  console.log('Case 2 — an extraction where every attempt fails (the costly path)');
+  const beforeFail = await spendSnapshot();
+  let reportedCost = 0;
+  await withSpendContext(
+    { restaurantId: null, url: 'https://example.com/none', restaurantName: 'Spend Verification (failing)' },
+    async () => {
+      try {
+        await extractAndMerge(
+          [{ id: 'x', type: 'text', label: 'Menu', ref: '', source: 'homepage' }],
+          // Deliberately not a menu: the model will find no dishes, so every
+          // rung is billed and none of them can succeed.
+          { title: 'Spend Verification', inlineText: 'This page is about our history and our team. '.repeat(20) }
+        );
+        console.log('  (unexpected: extraction succeeded — the assertion below still applies)');
+      } catch (err) {
+        if (err instanceof ExtractionError) reportedCost = err.usage?.costUsd ?? 0;
+        else throw err;
+      }
+    }
+  );
+  const afterFail = await spendSnapshot();
+  const failRows = afterFail.rows - beforeFail.rows;
+  const failLogged = afterFail.total - beforeFail.total;
+  console.log(`  ledger  : ${failRows} row(s), +$${failLogged.toFixed(6)}`);
+  console.log(`  reported: $${reportedCost.toFixed(6)} (what the failure told its caller it cost)`);
+  if (failRows === 0) {
+    console.log('  FAIL — a billed failure wrote nothing to the ledger\n');
+  } else if (reportedCost <= 0) {
+    console.log('  FAIL — the failure reported $0 while the ledger recorded real spend\n');
+  } else {
+    console.log('  PASS — the failure both recorded AND reported its spend\n');
+  }
 
   // --- Summary ----------------------------------------------------------------
   const after = await spendSnapshot();
