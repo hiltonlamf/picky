@@ -98,7 +98,7 @@ export default async function HomePage() {
       </section>
 
       {/* ---------------- The story ---------------- */}
-      <section className="band plate z-[3] bg-forest text-paper">
+      <section id="story" className="band plate z-[3] bg-forest text-paper scroll-mt-[78px]">
         <div className="mesh mesh-animate" aria-hidden="true">
           <span className="w-[60%] h-[80%] left-[-14%] top-[-12%] bg-[#0f7a52] opacity-50" />
           <span className="w-[38%] h-[56%] left-[64%] top-[-10%] bg-azalea-500 opacity-[0.26]" />
@@ -141,7 +141,7 @@ export default async function HomePage() {
       </section>
 
       {/* ---------------- How Picky works: AI / human / you ---------------- */}
-      <section className="band plate plate-paper z-[4] bg-paper text-forest">
+      <section id="how" className="band plate plate-paper z-[4] bg-paper text-forest scroll-mt-[78px]">
         <div className="band-inner">
           <span className="eyebrow-pink">{PILLARS.eyebrow}</span>
           <h2 className="font-display text-[clamp(1.7rem,3.3vw,2.35rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[24ch]">

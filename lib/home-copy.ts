@@ -31,10 +31,10 @@ export const HERO = {
 } as const;
 
 export const GUIDE = {
-  eyebrow: 'A taste of the guide',
+  eyebrow: 'Dublin, already tofu-analysed for you',
   headline: "Veggie dishes in Dublin's most popular restaurants",
   lede: "These are the hottest spots in Dublin — we've read every menu so you can see what's there for vegetarians and vegans before you book.",
-  cta: 'See every restaurant →',
+  cta: 'View Dublin Guide →',
 } as const;
 
 export const STORY = {
