@@ -56,7 +56,7 @@ export default async function HomePage() {
             {HERO.badge}
           </span>
 
-          <h1 className="font-display text-[clamp(2.7rem,6.4vw,4.6rem)] leading-[1.03] tracking-[-0.025em] mt-5 mb-4 max-w-[22ch] text-balance">
+          <h1 className="font-display text-[clamp(2.4rem,4.4vw,3.6rem)] leading-[1.07] tracking-[-0.025em] mt-5 mb-4 max-w-[34ch] text-balance">
             {HERO.headline.before}
             <span className="text-azalea-400">{HERO.headline.accent}</span>
             {HERO.headline.after}
