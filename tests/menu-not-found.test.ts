@@ -16,7 +16,7 @@ import {
   isSamePage,
 } from '@/lib/scraper';
 import { resolveDocumentUrl, documentUrlCandidates, googleDriveFileId } from '@/lib/doc-url';
-import { looksLikePdf, AICallError, driveConfirmUrl, MenuAccessBlockedError } from '@/lib/ai';
+import { looksLikePdf, AICallError, driveConfirmUrl, MenuAccessBlockedError, filenameFor } from '@/lib/ai';
 import {
   readerResultIsThin,
   readPage,
@@ -563,5 +563,28 @@ describe('a wholly failed extraction still reports what it spent (run #40)', () 
     vi.doUnmock('@/lib/ai');
     vi.doUnmock('@/lib/reader');
     vi.resetModules();
+  });
+});
+
+/**
+ * tofuvegan.com's menu is a real 26.4 MB PDF. It is UNDER the API's 32 MB
+ * document limit as raw bytes and OVER it as base64 (+33%), which is why
+ * inlining it could never work and why raising the cap alone was not the fix.
+ * Run #41 also proved the reader is not a fallback here: Firecrawl returned
+ * HTTP 408 on this file even given a full 85s.
+ */
+describe('menu PDFs too large to inline (tofuvegan.com)', () => {
+  it('26.4 MB is over the inline ceiling but under the document limit', () => {
+    const bytes = 26355131; // the actual file, from run #39's probe
+    expect(bytes).toBeGreaterThan(20 * 1024 * 1024); // must not be inlined…
+    expect(bytes).toBeLessThan(32 * 1024 * 1024); // …but the API can still take it
+    expect(Math.ceil(bytes / 3) * 4).toBeGreaterThan(32 * 1024 * 1024); // base64 cannot
+  });
+
+  it('names the upload after the menu file, not "menu.pdf" for everyone', () => {
+    expect(filenameFor('https://www.tofuvegan.com/assets/menu/menu250120.pdf')).toBe('menu250120.pdf');
+    expect(filenameFor('https://x.example/menus/lunch')).toBe('lunch.pdf');
+    expect(filenameFor('not a url')).toBe('menu.pdf');
+    expect(filenameFor('https://x.example/')).toBe('menu.pdf');
   });
 });

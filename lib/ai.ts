@@ -122,8 +122,15 @@ function calcCost(model: string, tokensIn: number, tokensOut: number): number {
  *
  * Returns the raw message; callers parse it as before.
  */
-export async function callClaude(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
-  const message = await anthropic().messages.create(params);
+export async function callClaude(
+  params: Anthropic.MessageCreateParamsNonStreaming,
+  // Per-request options (extra headers, e.g. a beta gate). Deliberately routed
+  // THROUGH this function rather than around it: a call that needs a header is
+  // still a call that must be recorded, and the previous shape tempted callers
+  // to reach for the raw client to get one.
+  options?: { headers?: Record<string, string> }
+): Promise<Anthropic.Message> {
+  const message = await anthropic().messages.create(params, options);
 
   // Cache tokens are priced differently from fresh input: writes at 1.25× and
   // reads at 0.1×. The pipeline doesn't use prompt caching today, so these are
@@ -750,6 +757,9 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
     console.error(`[pdf] too large (${buffer.byteLength} bytes): ${url}`);
     return null;
   }
+  if (buffer.byteLength > INLINE_PDF_BYTES) {
+    console.error(`[pdf] ${buffer.byteLength} bytes — too big to inline, will upload via the Files API: ${url}`);
+  }
   if (!looksLikePdf(new Uint8Array(buffer.slice(0, 8)))) {
     const ct = res.headers.get('content-type') ?? 'unknown';
     console.error(`[pdf] not a PDF (content-type: ${ct}, ${buffer.byteLength} bytes): ${url}`);
@@ -784,14 +794,20 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
 }
 
 /**
- * Anthropic's document limit; also what we'll transfer for one menu.
+ * Two limits, because there are two ways to send a document.
  *
- * Raising it would not help the file that hits it: base64 inflates by a third,
- * so a 26 MB PDF (tofuvegan.com's, the one that exposed this) is a ~35 MB
- * request body — over the API's own ~32 MB ceiling. Oversize documents go to
- * the reader instead, which returns extracted text; a menu is words either way.
+ * Inline (base64 in the request body) inflates by a third, so the practical
+ * ceiling is ~23 MB of PDF before the body passes the API's ~32 MB request
+ * limit. 20 MB keeps a margin.
+ *
+ * Above that we upload the raw bytes via the Files API and reference the file
+ * by id — no base64, so the inflation simply doesn't apply, and the only limit
+ * left is the API's own 32 MB document size. tofuvegan.com's menu is a real
+ * 26.4 MB PDF: under 32 MB as bytes, over it as base64. That gap is the entire
+ * reason it read as "this restaurant has no menu".
  */
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const INLINE_PDF_BYTES = 20 * 1024 * 1024;
+const MAX_PDF_BYTES = 32 * 1024 * 1024;
 
 /**
  * The menu exists and a person can open it, but we are not permitted to.
@@ -888,9 +904,27 @@ export async function classifyMenuFromPdf(
           return classifyMenuWithAI(viaReader.markdown, restaurantName, modelOverride);
         }
       }
+      // Note the reader is NOT a safety net for large files: verified free on
+      // 2026-08-06 (run #41), Firecrawl answered HTTP 408 on tofuvegan.com's
+      // 26 MB PDF even given a full 85s. Big documents are handled above, by
+      // uploading rather than inlining — not here.
       // Every route refused, and at least one said so explicitly. Surface that
       // rather than letting it collapse into "this restaurant has no menu".
       if (blocked) throw blocked;
+      return null;
+    }
+
+    // Too big to base64 into the request body, but fine as raw bytes: upload it
+    // and reference the file by id. This is the only route left for a 20-32 MB
+    // menu — the reader cannot parse files this size (proven, run #41).
+    if (buffer.byteLength > INLINE_PDF_BYTES) {
+      const fileId = await uploadDocument(buffer, filenameFor(pdfUrl));
+      if (fileId) {
+        return classifyMenuFromDocumentSource({ type: 'file', file_id: fileId }, restaurantName, modelOverride, [
+          FILES_API_BETA,
+        ]);
+      }
+      console.error(`[pdf] upload failed for ${pdfUrl} — no route left for a ${buffer.byteLength}-byte document`);
       return null;
     }
 
@@ -914,29 +948,104 @@ export async function classifyMenuFromPdfBuffer(
   restaurantName?: string,
   modelOverride?: string
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
+  return classifyMenuFromDocumentSource(
+    { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+    restaurantName,
+    modelOverride
+  );
+}
+
+/** Beta gate for the Files API. Required on both the upload and any message
+ *  that references an uploaded file by id. */
+const FILES_API_BETA = 'files-api-2025-04-14';
+
+/** A readable filename for the upload — it shows up in API logs, and "menu.pdf"
+ *  for every restaurant makes those logs useless. */
+export function filenameFor(url: string): string {
+  try {
+    const base = new URL(url).pathname.split('/').filter(Boolean).pop() ?? '';
+    const clean = base.replace(/[^\w.-]/g, '').slice(-80);
+    if (clean) return clean.toLowerCase().endsWith('.pdf') ? clean : `${clean}.pdf`;
+  } catch {}
+  return 'menu.pdf';
+}
+
+/**
+ * Upload a document and get a file id back, for PDFs too large to inline.
+ *
+ * Hand-rolled rather than via the SDK: the pinned SDK (0.27.x) predates the
+ * Files API entirely, and bumping it to reach one endpoint would put a major
+ * dependency change on the menu-extraction critical path for no other gain.
+ * A single multipart POST is the smaller risk.
+ *
+ * Returns null on any failure — the caller still has the reader fallback and
+ * the "we were refused" path below it.
+ */
+async function uploadDocument(buffer: ArrayBuffer, filename: string): Promise<string | null> {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: 'application/pdf' }), filename);
+    const res = await fetch('https://api.anthropic.com/v1/files', {
+      method: 'POST',
+      headers: {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': FILES_API_BETA,
+      },
+      body: form,
+      signal: AbortSignal.timeout(120000), // a 26 MB upload is not instant
+    });
+    if (!res.ok) {
+      console.error(`[pdf] Files API upload HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+      return null;
+    }
+    const json = (await res.json()) as { id?: string };
+    if (!json.id) return null;
+    console.error(`[pdf] uploaded ${buffer.byteLength} bytes as ${json.id}`);
+    return json.id;
+  } catch (err) {
+    console.error(`[pdf] Files API upload threw: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * One implementation for every way a PDF can reach the model — inline base64 or
+ * an uploaded file id. Kept as one function on purpose: this is the path where
+ * usage has twice been dropped, and a second copy is a second place to drop it.
+ */
+async function classifyMenuFromDocumentSource(
+  // SDK 0.27.x types don't include 'document' yet, but the API supports it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  source: any,
+  restaurantName?: string,
+  modelOverride?: string,
+  betas?: string[]
+): Promise<{ menu: ClassifiedMenu; usage: AIUsage } | null> {
   try {
     const model = modelOverride ?? EXTRACTION_MODEL;
     const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 
-    // SDK 0.27.x types don't include 'document' yet, but the API supports it.
-    // eslint-disable-next-line
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pdfContent: any[] = [
-      {
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
-      },
+      { type: 'document', source },
       {
         type: 'text',
         text: `${nameHint}Analyse this restaurant menu PDF and classify all food dishes. Return ONLY JSON.`,
       },
     ];
 
-    const message = await callClaude({
-      model,
-      max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: pdfContent }],
-    });
+    const message = await callClaude(
+      {
+        model,
+        max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: pdfContent }],
+      },
+      betas?.length ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined
+    );
 
     const usage = usageOf(message);
     const content = message.content[0];
