@@ -588,3 +588,55 @@ describe('menu PDFs too large to inline (tofuvegan.com)', () => {
     expect(filenameFor('https://x.example/')).toBe('menu.pdf');
   });
 });
+
+/**
+ * Run #43: Google's refusal was detected FOUR times and logged verbatim, and the
+ * user was still told the restaurant "may not publish one online". The refusal
+ * was raised correctly and then swallowed by classifyMenuFromPdf's outer catch,
+ * which re-threw billing and AI errors but let this one fall through to null.
+ *
+ * The difference is not cosmetic: one is a fact about the restaurant, the other
+ * is a limitation of ours — and only the second has an action the user can take.
+ */
+describe('a refusal must survive the catch that ends the PDF path (run #43)', () => {
+  const DRIVE_DENIED =
+    "<html><body>Google Drive - Can't download file Sorry, the owner hasn't given you " +
+    'permission to download this file. Only the owner and editors can download this file.</body></html>';
+
+  beforeEach(() => {
+    clearPageCache();
+    resetJinaCircuit();
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects with MenuAccessBlockedError rather than returning null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        url: 'https://drive.usercontent.google.com/download',
+        headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
+        arrayBuffer: async () => new TextEncoder().encode(DRIVE_DENIED).buffer,
+        text: async () => DRIVE_DENIED,
+        json: async () => ({}),
+      })
+    );
+
+    // Compare against the class from the SAME module instance — `instanceof`
+    // across two registries is a false negative, not a real failure.
+    const ai = await import('@/lib/ai');
+    await expect(
+      ai.classifyMenuFromPdf('https://drive.google.com/file/d/1XhR71TLkaDiQuR5pvMH3x8oGBYJ7B-tj/view')
+    ).rejects.toBeInstanceOf(ai.MenuAccessBlockedError);
+  });
+
+  it('and that is what turns the user-facing copy into the ask-for-help message', () => {
+    // The other half of the chain, already wired: a blocked result selects the
+    // "give us a hand by uploading it" copy instead of "no menu online".
+    const blocked = new ExtractionError(BLOCKED_MENU_MESSAGE, undefined, true);
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.message).toContain('uploading');
+    expect(blocked.message).not.toContain('may not publish');
+  });
+});

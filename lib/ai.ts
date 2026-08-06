@@ -933,6 +933,12 @@ export async function classifyMenuFromPdf(
   } catch (err) {
     if (isBillingError(err)) throw err;
     if (err instanceof AICallError) throw err; // carries usage — must not be swallowed
+    // "We were refused" must not be flattened into "there is no menu". The
+    // refusal was raised deliberately a few lines above and this catch was
+    // quietly discarding it: run #43 logged Google's "the owner hasn't given
+    // you permission to download this file" four times, then told the user the
+    // restaurant may not publish a menu online.
+    if (err instanceof MenuAccessBlockedError) throw err;
     return null;
   }
 }
