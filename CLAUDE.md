@@ -299,6 +299,16 @@ redefines itself is worse than a wrong one.
 - **Touched anything that displays a count?** Check *all* the surfaces:
   home page, city guide card, restaurant page capsules, filter tabs, dish
   rows, share message. They must agree.
+- **One city-guide page serves every city — keep it that way.**
+  `app/[city]/page.tsx` renders Dublin, Amsterdam and every future guide.
+  Dublin used to have its own `app/dublin/page.tsx`, and a static route wins
+  over a dynamic one in Next.js, so the busiest page on the site silently
+  missed anything added to the generic one — that is how the methodology note
+  shipped "to the city guide" without appearing on Dublin (2026-08-06).
+  **Never add a per-city route.** City-specific values (country, flag,
+  tagline) come from the `city_guides` row, not from a bespoke page. If you
+  ever must special-case a city, do it with data or a prop, and check the
+  render on *two* cities before calling it done.
 - **Verify against live data before pushing, not after.** The script pattern
   that catches this: load every guide restaurant, compute card and page
   figures, assert 0 mismatches. It is free (no AI) and takes a minute. The

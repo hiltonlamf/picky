@@ -10,7 +10,7 @@ import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import CountingMethod from '@/components/CountingMethod';
 import GuideViewTracker from '@/components/GuideViewTracker';
 import { ADMIN_COOKIE_NAME, expectedAdminCookieValue } from '@/lib/admin-auth';
-import { GUIDE_HUMAN_LINE, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
+import { GUIDE_HUMAN_LINE, countryFlag, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
 
 // Reads the DB per request and must reflect the latest edits/publish state, so
@@ -80,11 +80,14 @@ export default async function CityGuidePage({ params }: { params: { city: string
   );
   const isInitialising = restaurants.length === 0 || pendingRestaurants.length > 0;
 
+  const where = guide.country ? `${guide.displayName}, ${guide.country}` : guide.displayName;
+  const flag = countryFlag(guide.country);
+
   return (
-    <div className="max-w-5xl mx-auto px-4 py-10">
+    <div className="bg-paper">
       {/* Admin preview banner — only shown to an admin previewing a draft. */}
       {previewMode && (
-        <div className="card p-5 mb-6 border-2 border-amber-400 bg-amber-50">
+        <div className="card p-5 m-4 border-2 border-amber-400 bg-amber-50">
           <p className="text-sm font-semibold text-amber-900 mb-1 font-mono tracking-[0.08em] uppercase">
             Preview — not yet live
           </p>
@@ -116,25 +119,42 @@ export default async function CityGuidePage({ params }: { params: { city: string
         </div>
       )}
 
-      {/* Header */}
-      <div className="mb-10">
-        <div className="inline-flex items-center gap-2 bg-forest text-paper text-xs font-medium px-4 py-1.5 rounded-full mb-4 font-mono tracking-[0.12em] uppercase">
-          <span className="w-1.5 h-1.5 rounded-full bg-azalea-500 animate-blink" />
-          <span>{guide.country ? `${guide.displayName}, ${guide.country}` : guide.displayName}</span>
+      {/* Header band — forest with the mesh field, same as the homepage hero.
+          This was Dublin's own design while it had a separate route; it is now
+          every city's, so the guides can't drift apart again. */}
+      <section className="relative overflow-hidden bg-forest-deep text-paper pt-14 pb-16">
+        <div className="mesh mesh-animate" aria-hidden="true">
+          <span className="w-[66%] h-[86%] left-[-12%] top-[-16%] bg-[#0f7a52] opacity-55" />
+          <span className="w-[54%] h-[74%] left-[44%] top-[14%] bg-[#14563c] opacity-75" />
+          <span className="w-[32%] h-[46%] left-[68%] top-[-12%] bg-azalea-500 opacity-[0.28]" />
         </div>
-        <h1 className="font-display text-[clamp(1.9rem,4.2vw,2.8rem)] leading-[1.04] tracking-[-0.025em] text-forest mb-4 max-w-[20ch] text-balance">
-          {guide.tagline ?? guideHeadline(guide.displayName)}
-        </h1>
-        <p className="text-forest/85 max-w-[62ch] text-[1.02rem] leading-relaxed">
-          {guideIntro(guide.displayName)}
-        </p>
-        <p className="text-forest/65 max-w-[62ch] text-sm mt-3">{GUIDE_HUMAN_LINE}</p>
-        <CountingMethod surface="guide" className="mt-3" />
-        <div className="mt-6">
-          <GuideFeedbackButton city={slug} />
-        </div>
-      </div>
+        <div className="grain" aria-hidden="true" />
 
+        <div className="band-inner">
+          <span className="glass inline-flex items-center gap-2.5 rounded-full px-4 py-2 font-mono text-[11px] tracking-[0.16em] uppercase text-paper/90">
+            <span className="w-1.5 h-1.5 rounded-full bg-azalea-500 animate-blink" />
+            {where}
+          </span>
+          <h1 className="font-display text-[clamp(2rem,4.6vw,3.1rem)] leading-[1.04] tracking-[-0.025em] mt-5 mb-4 max-w-[20ch] text-balance">
+            {flag && (
+              <span className="mr-2" role="img" aria-label={guide.country ?? ''}>
+                {flag}
+              </span>
+            )}
+            {guide.tagline ?? guideHeadline(guide.displayName)}
+          </h1>
+          <p className="text-paper/90 max-w-[62ch] text-[1.02rem] leading-relaxed">
+            {guideIntro(guide.displayName)}
+          </p>
+          <p className="text-paper/70 max-w-[62ch] text-sm mt-3">{GUIDE_HUMAN_LINE}</p>
+          <CountingMethod surface="guide" tone="dark" className="mt-3" />
+          <div className="mt-6">
+            <GuideFeedbackButton city={slug} tone="dark" />
+          </div>
+        </div>
+      </section>
+
+      <div className="max-w-5xl mx-auto px-6 py-12">
       {/* Initialising banner */}
       {isInitialising && (
         <div className="card p-5 mb-6 flex items-start gap-3">
@@ -210,6 +230,7 @@ export default async function CityGuidePage({ params }: { params: { city: string
           and review those results by hand before they go live.
         </p>
       </section>
+      </div>
     </div>
   );
 }

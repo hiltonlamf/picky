@@ -52,6 +52,44 @@ export const COUNTING_METHOD_BODY: string[] = [
   'Sharing plates are still dishes. At a tapas, mezze or dim sum place, small plates are the meal — so they count.',
 ];
 
+/* Flag emoji beside a guide headline. Dublin used to hardcode 🇮🇪 in its own
+ * route; now that every city shares one page, it comes from the guide's
+ * `country`. An unknown country simply renders no flag — the headline reads
+ * fine without one, which is better than shipping a wrong flag. */
+const COUNTRY_FLAGS: Record<string, string> = {
+  Ireland: '🇮🇪',
+  Netherlands: '🇳🇱',
+  'United Kingdom': '🇬🇧',
+  England: '🇬🇧',
+  Scotland: '🏴󠁧󠁢󠁳󠁣󠁴󠁿',
+  France: '🇫🇷',
+  Spain: '🇪🇸',
+  Portugal: '🇵🇹',
+  Italy: '🇮🇹',
+  Germany: '🇩🇪',
+  Belgium: '🇧🇪',
+  Denmark: '🇩🇰',
+  Sweden: '🇸🇪',
+  Norway: '🇳🇴',
+  Finland: '🇫🇮',
+  Poland: '🇵🇱',
+  Austria: '🇦🇹',
+  Switzerland: '🇨🇭',
+  Greece: '🇬🇷',
+  'Czech Republic': '🇨🇿',
+  Czechia: '🇨🇿',
+  Hungary: '🇭🇺',
+  'United States': '🇺🇸',
+  Canada: '🇨🇦',
+  Australia: '🇦🇺',
+  'New Zealand': '🇳🇿',
+};
+
+export function countryFlag(country: string | null | undefined): string | null {
+  if (!country) return null;
+  return COUNTRY_FLAGS[country.trim()] ?? null;
+}
+
 export function guideMetaDescription(city: string, where: string): string {
   return (
     `Which of ${where}'s most popular restaurants are actually good for vegetarians. ` +

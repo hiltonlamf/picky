@@ -8,6 +8,9 @@ import { COUNTING_METHOD_SUMMARY, COUNTING_METHOD_BODY } from '@/lib/site-copy';
 interface Props {
   /** Which page this is on, so we can tell guide curiosity from menu curiosity. */
   surface: 'guide' | 'restaurant';
+  /** 'dark' for the forest hero band (the Dublin guide), 'light' on paper.
+   *  Measured on forest-deep: paper/70 = 8.2:1, paper/80 = 9.2:1. */
+  tone?: 'light' | 'dark';
   className?: string;
 }
 
@@ -19,7 +22,8 @@ interface Props {
  * Built on native <details>/<summary> on purpose: it works with JavaScript off,
  * and is keyboard- and screen-reader-accessible without any ARIA of our own.
  */
-export default function CountingMethod({ surface, className = '' }: Props) {
+export default function CountingMethod({ surface, tone = 'light', className = '' }: Props) {
+  const dark = tone === 'dark';
   // Fire-once per visit, guarded by a ref rather than state — a "did they reach
   // X" event that double-fires corrupts every rate built on it.
   const reported = useRef(false);
@@ -33,9 +37,11 @@ export default function CountingMethod({ surface, className = '' }: Props) {
   return (
     <details onToggle={onToggle} className={`group ${className}`}>
       <summary
-        className="cursor-pointer list-none inline-flex items-center gap-1.5 text-xs text-forest/65
-                   hover:text-forest focus-visible:outline-none focus-visible:ring-4
-                   focus-visible:ring-azalea-500/25 rounded-full"
+        className={`cursor-pointer list-none inline-flex items-center gap-1.5 text-xs
+                   focus-visible:outline-none focus-visible:ring-4
+                   focus-visible:ring-azalea-500/25 rounded-full ${
+                     dark ? 'text-paper/70 hover:text-paper' : 'text-forest/65 hover:text-forest'
+                   }`}
       >
         <svg
           viewBox="0 0 12 12"
@@ -52,7 +58,11 @@ export default function CountingMethod({ surface, className = '' }: Props) {
         </svg>
         {COUNTING_METHOD_SUMMARY}
       </summary>
-      <div className="mt-2 max-w-[62ch] space-y-2 text-xs leading-relaxed text-forest/75">
+      <div
+        className={`mt-2 max-w-[62ch] space-y-2 text-xs leading-relaxed ${
+          dark ? 'text-paper/80' : 'text-forest/75'
+        }`}
+      >
         {COUNTING_METHOD_BODY.map((paragraph) => (
           <p key={paragraph}>{paragraph}</p>
         ))}
