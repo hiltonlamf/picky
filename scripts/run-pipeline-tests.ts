@@ -98,7 +98,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
  * test, so a run can be read back per restaurant rather than as a lump.
  */
 function runCase(c: Case): Promise<CaseResult> {
-  return withSpendContext({ url: c.url, restaurantName: `QA: ${c.name}` }, () => runCaseInner(c));
+  return withSpendContext({ url: c.url, restaurantName: `QA: ${c.name}`, source: 'qa' }, () => runCaseInner(c));
 }
 
 async function runCaseInner(c: Case): Promise<CaseResult> {

@@ -50,7 +50,7 @@ async function main() {
   // NOTHING at all despite running on every single analysis.
   console.log('Case 1 — labelMenuCandidates (previously never logged)');
   await withSpendContext(
-    { restaurantId: null, url: 'https://example.com', restaurantName: 'Spend Verification' },
+    { restaurantId: null, url: 'https://example.com', restaurantName: 'Spend Verification', source: 'qa' },
     async () => {
       await labelMenuCandidates(
         [
@@ -81,7 +81,7 @@ async function main() {
   const beforeFail = await spendSnapshot();
   let reportedCost = 0;
   await withSpendContext(
-    { restaurantId: null, url: 'https://example.com/none', restaurantName: 'Spend Verification (failing)' },
+    { restaurantId: null, url: 'https://example.com/none', restaurantName: 'Spend Verification (failing)', source: 'qa' },
     async () => {
       try {
         await extractAndMerge(

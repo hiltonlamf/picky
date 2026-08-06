@@ -147,10 +147,15 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
   tokens_in       INTEGER,
   tokens_out      INTEGER,
   cost_usd        NUMERIC(10, 6),
+  -- 'product' = the app serving a visitor, 'qa' = live pipeline QA and
+  -- spend-verification runs. Both are real money, but a total that can't
+  -- separate them cannot answer "what does it cost to serve a user?".
+  source          TEXT NOT NULL DEFAULT 'product',
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_usage_log_created_at ON ai_usage_log (created_at);
+CREATE INDEX IF NOT EXISTS ai_usage_log_source_created_idx ON ai_usage_log (source, created_at DESC);
 
 -- Multi-menu disambiguation: discovered candidate menus held between the
 -- discover and analyze phases (the analyze step references these by id only).

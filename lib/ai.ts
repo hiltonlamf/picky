@@ -4,6 +4,7 @@ import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
 import { documentUrlCandidates } from './doc-url';
 import { readPage, DOCUMENT_TIMEOUT_MS } from './reader';
+import { clampTimeout, outOfTime } from './deadline';
 
 // Pricing per million tokens (as of claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -749,7 +750,7 @@ async function fetchDocumentInner(url: string, depth = 0): Promise<ArrayBuffer |
     },
     // Generous: the founder reports this PDF takes a few seconds in a browser,
     // and a slow menu PDF is still a menu.
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(clampTimeout(45000)),
     redirect: 'follow',
   });
   if (!res.ok) {
@@ -1008,7 +1009,9 @@ async function uploadDocument(buffer: ArrayBuffer, filename: string): Promise<st
         'anthropic-beta': FILES_API_BETA,
       },
       body: form,
-      signal: AbortSignal.timeout(120000), // a 26 MB upload is not instant
+      // A 26 MB upload is not instant, but it must still fit inside the request
+      // that started it — an unclamped 120s here is twice the function's cap.
+      signal: AbortSignal.timeout(clampTimeout(120000)),
     });
     if (!res.ok) {
       console.error(`[pdf] Files API upload HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);

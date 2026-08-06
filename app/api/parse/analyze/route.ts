@@ -9,6 +9,7 @@ import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/tel
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
+import { withDeadline } from '@/lib/deadline';
 
 // Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
 // and, if unfinished, persists its progress and asks the client to call back
@@ -188,13 +189,20 @@ export async function POST(request: NextRequest) {
               continue;
             }
 
-            const r = await extractMenuResumable(
-              candidate,
-              ctx,
-              state.attemptIndex ?? 0,
-              deadline,
-              state.bestSoFar ?? null,
-              state.candidateUsage ?? undefined
+            // withDeadline, not just the `deadline` argument: that argument is
+            // only consulted BETWEEN attempts, so one slow fetch/read/upload
+            // inside an attempt could still outlive the function and drop the
+            // connection. The context clamps every outbound call to the time
+            // actually left.
+            const r = await withDeadline(deadline, () =>
+              extractMenuResumable(
+                candidate,
+                ctx,
+                state.attemptIndex ?? 0,
+                deadline,
+                state.bestSoFar ?? null,
+                state.candidateUsage ?? undefined
+              )
             );
 
             if (r.nextIndex !== null) {

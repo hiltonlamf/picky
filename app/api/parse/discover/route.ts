@@ -16,6 +16,7 @@ import {
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
+import { withDeadline } from '@/lib/deadline';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
@@ -55,7 +56,10 @@ export async function POST(request: NextRequest) {
       // Opened empty and filled in below: discovery runs before the restaurant
       // row exists, so attribution can't be known here yet. Spend is recorded
       // either way — this only decides whether the rows say which restaurant.
-      await withSpendContext({}, async () => {
+      // Same cap as extraction: scraping a slow site plus a deep crawl can run
+      // long, and without a deadline one read can consume the whole function.
+      // 50s leaves headroom under the 60s limit to still send a clean event.
+      await withDeadline(Date.now() + 50_000, () => withSpendContext({}, async () => {
       const send = (event: ParseEvent) => {
         try {
           controller.enqueue(encode(event));
@@ -337,7 +341,7 @@ export async function POST(request: NextRequest) {
         send({ type: 'error', error: msg });
       }
       close();
-      });
+      }));
     },
   });
 

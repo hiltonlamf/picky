@@ -28,6 +28,7 @@
  */
 
 import * as Sentry from '@sentry/nextjs';
+import { clampTimeout } from './deadline';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -482,6 +483,10 @@ function cacheSet(url: string, result: ReaderResult | null, timeoutMs: number): 
 }
 
 export async function readPage(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
+  // Never outlive the request. DOCUMENT_TIMEOUT_MS is 90s, which is longer than
+  // a Vercel function is allowed to exist — asking for it inside one killed the
+  // whole analysis instead of just this read.
+  timeoutMs = clampTimeout(timeoutMs);
   const cached = cacheGet(url, timeoutMs);
   if (cached) return cached.result;
   const result = await readPageUncached(url, timeoutMs);

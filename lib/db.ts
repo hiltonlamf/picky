@@ -382,19 +382,30 @@ export async function logUsage(
   restaurantId: string | null,
   url: string | null,
   usage: AIUsage,
-  restaurantName?: string | null
+  restaurantName?: string | null,
+  source: 'product' | 'qa' = 'product'
 ): Promise<void> {
   if (!usage.costUsd && !usage.tokensIn && !usage.tokensOut) return;
+  const row = {
+    restaurant_id: restaurantId,
+    restaurant_name: restaurantName ?? null,
+    url,
+    model_used: usage.model,
+    tokens_in: usage.tokensIn,
+    tokens_out: usage.tokensOut,
+    cost_usd: usage.costUsd,
+  };
   try {
-    await db().from('ai_usage_log').insert({
-      restaurant_id: restaurantId,
-      restaurant_name: restaurantName ?? null,
-      url,
-      model_used: usage.model,
-      tokens_in: usage.tokensIn,
-      tokens_out: usage.tokensOut,
-      cost_usd: usage.costUsd,
-    });
+    const { error } = await db().from('ai_usage_log').insert({ ...row, source });
+    // The `source` column arrives in a migration, and code deploys before
+    // migrations run. Rather than lose spend rows in that window — the one
+    // thing this table exists to prevent — fall back to the old shape and
+    // record the row without the label.
+    if (error) {
+      console.error('[db] ai_usage_log insert with source failed, retrying without:', error.message);
+      const { error: retry } = await db().from('ai_usage_log').insert(row);
+      if (retry) throw new Error(retry.message);
+    }
   } catch (err) {
     console.error('[db] ai_usage_log insert failed (non-fatal):', err instanceof Error ? err.message : err);
   }
