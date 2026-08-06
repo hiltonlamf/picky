@@ -235,6 +235,90 @@ When evaluating or improving the pipeline, weight the work by this order,
 and use the exportable **AI error log** (`/admin/errors`) as the concrete
 list of what to fix at the prompt level.
 
+## The veggie count — one number, everywhere (PR #26, 2026-08-05)
+
+**The single most visible way this product loses trust is showing two
+different numbers for the same restaurant.** The founder found exactly that
+on a live preview: the guide card said *9 veggie*, the restaurant page said
+*10*, and the filter tab said something else again. Neither number was
+"wrong" — they were answering different questions with the same word. That
+reads as broken software, and it undermines the one thing the app is for.
+
+### The rule: never count anything twice, in code
+
+`menuTallies()` in `lib/menu-insights.ts` is the **single walk of the menu**.
+The guide card, the restaurant-page capsules, the filter tabs, the dish rows
+and the share/WhatsApp message all derive from it. `headlineCounts()`,
+`splitVegDishes()` and `makeCountedTest()` are thin wrappers over the same
+logic — they exist so no surface has to re-implement it.
+
+**Do not compute a count inline in a component.** Every consistency bug in
+this area came from a second implementation drifting from the first. If a new
+surface needs a number, add a wrapper in `lib/menu-insights.ts`; don't count
+rows where you render them.
+
+### The methodology, in one place
+
+`lib/dish-role.ts` decides whether a dish is `counted | dessert | condiment |
+staple`. It is **pure, client-safe, and uses no AI** — deterministic string
+rules only. In outline:
+
+- **Match dish names, not section names** (except desserts and build-your-own
+  lists). Indian restaurants file vegetarian mains under "Sides" and
+  "Accompaniments" — a section rule would delete the dishes a vegetarian came
+  for.
+- **A keyword only fires on a *simple* name** (≤3 components, ≤5 words). So
+  "Bread & Butter" is bread, but "48-hour Sourdough, Parmesan Custard, Cep
+  Butter" is a starter.
+- **Read both ends of the name.** Head-initial rules ("Chips with mayo" is
+  chips) miss head-*final* names ("Garlic, Onion and Coriander Naan" is a
+  naan). Both directions are checked.
+- **Potatoes on their own don't count** — fries, mash, roast/baby/creamed
+  potatoes. What follows "with" decides: a *sauce* means a side, an
+  *ingredient* means a meal ("Baked potato with beans and cheese" counts).
+- **Price is the tiebreak, in both directions** — it demotes a €4 bar snack
+  and rescues a €26.50 "Tamarind Sauce" that is really a main. The
+  denominator is the restaurant's **median**, never the top-3 average (the
+  top of a menu is caviar).
+- **A dish listed twice on one menu counts once** — de-duped on normalised
+  name. This is what caused the 9-vs-10 bug.
+- **`unknown` counts as veggie.** Founder's call: when in doubt, count it —
+  under-promising beats hiding a real option.
+- **Excluded ≠ hidden.** Every dish still renders, tagged *"Not included in
+  the veggie count"* in small italics. Deliberately low-key — it is a
+  footnote, not a warning.
+
+The user-facing version of all this is `COUNTING_METHOD_BODY` in
+`lib/site-copy.ts`, shown collapsed on **both** the city guide and the
+restaurant page via `components/CountingMethod.tsx`. **If you change what the
+number means, change that copy in the same PR** — a number that silently
+redefines itself is worse than a wrong one.
+
+### The PR checklist
+
+- **Touched anything that displays a count?** Check *all* the surfaces:
+  home page, city guide card, restaurant page capsules, filter tabs, dish
+  rows, share message. They must agree.
+- **One city-guide page serves every city — keep it that way.**
+  `app/[city]/page.tsx` renders Dublin, Amsterdam and every future guide.
+  Dublin used to have its own `app/dublin/page.tsx`, and a static route wins
+  over a dynamic one in Next.js, so the busiest page on the site silently
+  missed anything added to the generic one — that is how the methodology note
+  shipped "to the city guide" without appearing on Dublin (2026-08-06).
+  **Never add a per-city route.** City-specific values (country, flag,
+  tagline) come from the `city_guides` row, not from a bespoke page. If you
+  ever must special-case a city, do it with data or a prop, and check the
+  render on *two* cities before calling it done.
+- **Verify against live data before pushing, not after.** The script pattern
+  that catches this: load every guide restaurant, compute card and page
+  figures, assert 0 mismatches. It is free (no AI) and takes a minute. The
+  9-vs-10 bug reached a preview because this step was skipped in favour of a
+  green build — **passing tests do not prove two surfaces agree.**
+- **Changed a counting rule?** Re-run `scripts/audit-dish-roles.ts`
+  (read-only, $0) and read the excluded list. Every rule bug so far was found
+  by reading real menus, none by a unit test.
+- **Added a surface that shows a number?** It needs the methodology note too.
+
 ## Instrumentation & error tracking (PR #21, 2026-07-25)
 
 **Every PR must ask: does this change what we can see?** Analytics and error

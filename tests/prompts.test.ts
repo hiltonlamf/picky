@@ -23,6 +23,16 @@ describe('SYSTEM_PROMPT', () => {
   it('excludes section headers as dish names (header-items bug)', () => {
     expect(SYSTEM_PROMPT).toMatch(/section headers used as dish names/i);
   });
+
+  // A Pad Thai offered with tofu, chicken or prawn is one menu line a
+  // vegetarian CAN eat — labelling it "neither" hides a real option from them.
+  it('treats a diner-chosen protein as vegetarian when a veg choice exists', () => {
+    expect(SYSTEM_PROMPT).toMatch(/DINER CHOOSES THE PROTEIN/i);
+    expect(SYSTEM_PROMPT).toMatch(/classify the dish as "vegetarian"/i);
+    // …but the diner must be told a choice is required.
+    expect(SYSTEM_PROMPT).toMatch(/name the vegetarian option explicitly/i);
+    expect(SYSTEM_PROMPT).toMatch(/every available choice contains meat/i);
+  });
 });
 
 describe('IMAGE_OCR_INSTRUCTION (food-photo hallucination bug)', () => {
@@ -89,6 +99,15 @@ describe('buildVerifyPrompt (Sonnet audit that makes Haiku extraction safe)', ()
   it('instructs conservative downgrading rather than benefit of the doubt', () => {
     expect(prompt).toMatch(/Be conservative/i);
     expect(prompt).toMatch(/downgrade/i);
+  });
+
+  // Without this, the audit pass would undo the extraction rule: told only to
+  // be conservative, it downgrades a choose-your-protein dish to "neither".
+  it('carves out diner-chosen proteins from that conservatism', () => {
+    expect(prompt).toMatch(/ONE EXCEPTION/i);
+    expect(prompt).toMatch(/DINER CHOOSES/i);
+    expect(prompt).toMatch(/KEEP the vegetarian\/vegan label/i);
+    expect(prompt).toMatch(/only when every available option contains meat/i);
   });
 
   it('includes every dish with its current label', () => {
