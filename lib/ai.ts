@@ -1018,7 +1018,7 @@ async function uploadDocument(buffer: ArrayBuffer, filename: string): Promise<st
  */
 async function classifyMenuFromDocumentSource(
   // SDK 0.27.x types don't include 'document' yet, but the API supports it.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line
   source: any,
   restaurantName?: string,
   modelOverride?: string,
@@ -1028,7 +1028,7 @@ async function classifyMenuFromDocumentSource(
     const model = modelOverride ?? EXTRACTION_MODEL;
     const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line
     const pdfContent: any[] = [
       { type: 'document', source },
       {
