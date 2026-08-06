@@ -17,6 +17,9 @@ const PANEL_ID = 'hero-search-panel';
  * the finished guide is the better first offer than an empty box asking the
  * visitor to supply the input. Search is one click behind the secondary button.
  *
+ * Both CTAs disappear once the search panel opens, leaving only the panel
+ * itself on screen — founder's call, to avoid two competing asks at once.
+ *
  * Split out of HeroSearch on purpose: that component carries the SSE reader and
  * the abandonment-metric refs, and keeping the disclosure out of it means its
  * diff stays small enough to review against those.
@@ -70,25 +73,25 @@ export default function HeroCta() {
 
   return (
     <div className="mt-8">
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Sized up beyond the shared .btn-guide: this is the page's primary
-            action now, and it is green-on-green — against the forest ground it
-            does not separate the way the pink CTA used to, so the hierarchy has
-            to come from size and weight instead of hue. */}
-        <GuideCtaLink
-          href="/dublin"
-          label={HERO.guideCta}
-          city="dublin"
-          placement="hero"
-          className="btn-guide text-[1.35rem] px-9 py-[1.15rem]"
-        />
+      {/* Both CTAs are unmounted (not just styled down) once the panel is open —
+          founder's call: with only one thing to do at a time on screen, showing
+          "explore the guide" next to an open search box read as confusing. The
+          only ways back are Cancel and Escape, both of which exist solely in
+          HeroSearch's idle branch, so this can never orphan a live analysis. */}
+      {!open && (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Pink per founder's request — a deliberate exception to the
+              pink-does/green-goes convention elsewhere on the site. Same
+              .btn-cta treatment as "Find my veggies" so the two catchy pink
+              pills read as a family. */}
+          <GuideCtaLink
+            href="/dublin"
+            label={HERO.guideCta}
+            city="dublin"
+            placement="hero"
+            className="btn-cta"
+          />
 
-        {/* Unmounted rather than disabled once the panel is open, and that is a
-            safety property, not a style choice: with no trigger there is no
-            control that could unmount HeroSearch mid-analysis and report a
-            running search as abandoned. The only ways back are Cancel and
-            Escape, both of which exist solely in HeroSearch's idle branch. */}
-        {!open && (
           <button
             ref={triggerRef}
             type="button"
@@ -99,8 +102,8 @@ export default function HeroCta() {
           >
             {HERO.searchTrigger}
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Always rendered so aria-controls resolves even while collapsed. */}
       <div id={PANEL_ID}>

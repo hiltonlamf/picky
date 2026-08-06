@@ -7,11 +7,11 @@ export const HERO = {
   badge: 'AI-assisted · Human-verified · Made in Dublin',
   /** The headline is split so the middle part can be set in pink. */
   headline: {
-    before: 'Every veggie dish in ',
-    accent: "Dublin's best restaurants",
-    after: '. Already read.',
+    before: 'See all ',
+    accent: 'veggie dishes',
+    after: " in Dublin's best restaurants, instantly.",
   },
-  sub: "We read the menus so you don't have to open twelve tabs before booking dinner.",
+  sub: 'No more showing up in places that only offer mushroom risotto.',
   /**
    * Primary CTA. Worded differently from GUIDE.cta, which repeats lower down
    * the page — so the `placement` breakdown in PostHog means something.
