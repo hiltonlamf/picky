@@ -84,15 +84,15 @@ export default function DishCard({ dish, activeFilter, aside }: Props) {
                   it the tab reads "4" above nine rows with nothing to explain
                   the difference. */}
               {aside && (
-                <span
-                  className="text-[10px] font-mono uppercase tracking-wide text-forest/60 bg-mint-100/70 px-1.5 py-0.5 rounded-full"
-                  title="Sides, sauces and sweets are shown but left out of the veggie count"
-                >
-                  not counted
+                <span className="text-[11px] text-evergreen/80 italic">
+                  Not included in the veggie count
                 </span>
               )}
               {uncertain && dish.confidenceReason && (
                 <span className="text-[11px] text-evergreen/80 italic">
+                  {/* Both notes are small italics, so a dish that is an aside
+                      AND uncertain would otherwise read as one run-on line. */}
+                  {aside && <span aria-hidden="true" className="mr-1.5">·</span>}
                   {dish.confidenceReason}
                 </span>
               )}

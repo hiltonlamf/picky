@@ -559,10 +559,7 @@ export default function RestaurantPage() {
           {activeTally.counted === 1 ? '' : 'es'} we count, plus {activeTally.aside} side
           {activeTally.aside === 1 ? '' : 's'}, sauce{activeTally.aside === 1 ? '' : 's'} &amp;
           sweet{activeTally.aside === 1 ? '' : 's'} marked{' '}
-          <span className="font-mono uppercase tracking-wide text-[10px] text-forest/60">
-            not counted
-          </span>{' '}
-          below.
+          <em>not included in the veggie count</em> below.
         </p>
       )}
 
