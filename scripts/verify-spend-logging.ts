@@ -113,7 +113,9 @@ async function main() {
   // --- Summary ----------------------------------------------------------------
   const after = await spendSnapshot();
   const newRows = after.rows - before.rows;
-  console.log('─'.repeat(58));
+  // Banner text matters: the workflow lifts everything after "SUMMARY" into the
+  // PR comment, so without it the result arrives as an empty code block.
+  console.log('\n================ SUMMARY ================');
   console.log(`rows added : ${newRows}`);
   console.log(`spend added: $${(after.total - before.total).toFixed(6)}`);
   console.log('─'.repeat(58));

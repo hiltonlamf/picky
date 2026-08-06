@@ -305,9 +305,8 @@ export default function RestaurantPage() {
               heading: "We found the menu — but we can't open it",
               body:
                 'Some things on the web are off-limits to AI agents: either we cannot read them, or ' +
-                `we are not permitted to. ${name}'s menu is one of those — a person can open it, but ` +
-                'we get turned away. Can you give us a hand by uploading it, or pasting a direct ' +
-                "link? We'll read it right away.",
+                'we are not permitted to. Can you give us a hand by uploading the menu, or pasting a ' +
+                "direct link? We'll read it right away.",
             }
           : {
               heading: 'No menu listed on this site',

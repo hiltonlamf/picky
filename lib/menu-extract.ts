@@ -58,8 +58,8 @@ export class ExtractionError extends Error {
  */
 export const BLOCKED_MENU_MESSAGE =
   'Some things on the web are off-limits to AI agents: either we cannot read them, or we are not ' +
-  'permitted to. This menu is one of those — a person can open it, but we get turned away. ' +
-  "Can you give us a hand by uploading the menu, or pasting a direct link? We'll read it right away.";
+  "permitted to. Can you give us a hand by uploading the menu, or pasting a direct link? We'll " +
+  'read it right away.';
 
 const HEADER_ITEM_RE =
   /\b(menu|selection|set\s*menu|set\s*lunch|set\s*dinner|tasting|à la carte|a la carte|platter|board|sample)\b/i;
