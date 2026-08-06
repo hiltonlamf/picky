@@ -648,6 +648,12 @@ describe('a refusal must survive the catch that ends the PDF path (run #43)', ()
     expect(blocked.blocked).toBe(true);
     expect(blocked.message).toContain('uploading');
     expect(blocked.message).not.toContain('may not publish');
+    // Founder's requirement (2026-08-06): say explicitly that some content is
+    // either unreadable by an AI agent OR off-limits to one. Both halves matter
+    // — "we couldn't" and "we weren't allowed to" are different explanations,
+    // and only naming the first makes us look broken rather than restricted.
+    expect(blocked.message).toMatch(/cannot read/i);
+    expect(blocked.message).toMatch(/not\s+permitted/i);
   });
 });
 
