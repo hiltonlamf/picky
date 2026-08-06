@@ -204,6 +204,10 @@ describe('a dead or unfunded Jina key is not retried on every page', () => {
     // never exercises the provider at all.
     clearPageCache();
     vi.unstubAllGlobals();
+    // A keyed Jina is the premise of this whole block: it is about what happens
+    // when a key exists but the ACCOUNT is dead, which is a different failure
+    // from having no key at all (covered separately below).
+    vi.stubEnv('JINA_API_KEY', 'test-key');
   });
 
   it('opens the circuit on 402 (out of credit) and stops calling Jina', async () => {
@@ -225,13 +229,13 @@ describe('a dead or unfunded Jina key is not retried on every page', () => {
     expect(jinaStatus()).toContain('out of credit');
   });
 
-  it('names a keyless 403 as the Cloudflare challenge it is', async () => {
+  it('names a 403 on a real key as a rejection, not a missing-key challenge', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}), text: async () => 'Just a moment...' })
+      vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}), text: async () => 'forbidden' })
     );
     await readPage('https://a.example/1');
-    expect(jinaStatus()).toContain('Cloudflare challenge');
+    expect(jinaStatus()).toContain('key rejected');
   });
 
   it('does NOT open the circuit on 429 — rate limiting is transient', async () => {
@@ -385,6 +389,9 @@ describe('page cache — the same page is never fetched twice in one analysis', 
     clearPageCache();
     resetJinaCircuit();
     vi.unstubAllGlobals();
+    // Jina is skipped outright without a key (the keyless tier is gone), so a
+    // test that means to exercise the Jina path has to supply one.
+    vi.stubEnv('JINA_API_KEY', 'test-key');
   });
 
   it('serves a repeat read from cache instead of paying again', async () => {
@@ -607,6 +614,9 @@ describe('a refusal must survive the catch that ends the PDF path (run #43)', ()
     clearPageCache();
     resetJinaCircuit();
     vi.unstubAllGlobals();
+    // Jina is skipped outright without a key (the keyless tier is gone), so a
+    // test that means to exercise the Jina path has to supply one.
+    vi.stubEnv('JINA_API_KEY', 'test-key');
   });
 
   it('rejects with MenuAccessBlockedError rather than returning null', async () => {
@@ -638,5 +648,48 @@ describe('a refusal must survive the catch that ends the PDF path (run #43)', ()
     expect(blocked.blocked).toBe(true);
     expect(blocked.message).toContain('uploading');
     expect(blocked.message).not.toContain('may not publish');
+  });
+});
+
+/**
+ * Founder asked directly (2026-08-06): "are we still using Jina? there's no
+ * credit and no valid key." Answer in code: without a key we do not call it at
+ * all. The keyless tier now returns a Cloudflare 403 every time, so attempting
+ * it is a guaranteed-wasted round-trip on the first page of every process.
+ */
+describe('no Jina key means Jina is not called at all', () => {
+  beforeEach(() => {
+    clearPageCache();
+    resetJinaCircuit();
+    vi.unstubAllGlobals();
+  });
+
+  it('goes straight to Firecrawl instead of spending a round-trip on a certain 403', async () => {
+    vi.stubEnv('JINA_API_KEY', '');
+    vi.stubEnv('FIRECRAWL_API_KEY', 'fc-test');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { markdown: 'Dishes '.repeat(200), rawHtml: '', links: [], metadata: { sourceURL: 'https://a.example/' } },
+      }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await readPage('https://a.example/');
+    expect(res?.provider).toBe('firecrawl');
+    // Exactly one request, and it is not to r.jina.ai.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('r.jina.ai');
+  });
+
+  it('leaves the circuit untouched — this is "not configured", not "broken"', async () => {
+    vi.stubEnv('JINA_API_KEY', '');
+    vi.stubEnv('FIRECRAWL_API_KEY', '');
+    vi.stubGlobal('fetch', vi.fn());
+    expect(await readPage('https://b.example/')).toBeNull();
+    expect(jinaStatus()).toBeNull();
   });
 });

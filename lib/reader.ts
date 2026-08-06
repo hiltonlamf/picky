@@ -8,16 +8,23 @@
  *
  * Provider selection:
  *   - READER_PROVIDER=firecrawl  → Firecrawl only (needs FIRECRAWL_API_KEY)
- *   - READER_PROVIDER=jina       → Jina Reader only (works keyless on the free tier)
+ *   - READER_PROVIDER=jina       → Jina Reader only (needs JINA_API_KEY)
  *   - READER_PROVIDER=off        → disabled (cheerio only)
- *   - unset → Jina first, Firecrawl as a FALLBACK when Jina returns nothing
- *     useful (founder's call, 2026-08-05: pay per hard page, not per page).
+ *   - unset → Jina first when a key is present, Firecrawl as the FALLBACK when
+ *     Jina returns nothing useful (founder's call, 2026-08-05: pay per hard
+ *     page, not per page).
  *
- * Why this order: Jina's keyless tier is free but rate-limited and gives up on
- * some JS-heavy pages; Firecrawl is reliable but billed. Trying the free one
- * first and escalating only on a genuinely poor result means the paid provider
- * is used for the sites that actually need it — which is also exactly the set
- * of sites where our "no menu listed" bug lives.
+ * Why this order: a keyed Jina is cheap per page but gives up on some JS-heavy
+ * ones; Firecrawl is reliable but billed. Trying the cheap one first and
+ * escalating only on a genuinely poor result means the paid provider handles
+ * the sites that actually need it — exactly the set where our "no menu listed"
+ * bug lives.
+ *
+ * STATE AS OF 2026-08-06: there is no funded Jina key, so in practice this is
+ * Firecrawl-only. `readWithJina` returns immediately without a key rather than
+ * spending a round-trip on Jina's guaranteed Cloudflare 403 — the keyless free
+ * tier no longer exists. Nothing else changes: add a funded JINA_API_KEY and
+ * the cheap-first ladder comes back on its own.
  */
 
 import * as Sentry from '@sentry/nextjs';
@@ -269,11 +276,18 @@ export function resetJinaCircuit(): void {
 
 /**
  * Jina Reader returns Markdown for a JS-rendered page. A JINA_API_KEY is now
- * effectively required: keyless requests get a Cloudflare challenge (verified
- * 2026-08-05). It does not return rawHtml; we ask for the links/images sections
- * so we can still discover PDFs and image menus.
+ * REQUIRED: keyless requests get a Cloudflare challenge (verified twice —
+ * 2026-08-05 run #29, and again 2026-08-06 run #41). It does not return
+ * rawHtml; we ask for the links/images sections so we can still discover PDFs
+ * and image menus.
  */
 async function readWithJina(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
+  // No key means no Jina, full stop. The keyless tier is gone, so attempting it
+  // buys a guaranteed 403 — a wasted round-trip on the first page of every
+  // process (on serverless, that's every cold start) before we reach the
+  // provider that works. Returning early keeps the whole path intact: set
+  // JINA_API_KEY and Jina is first in line again with no code change.
+  if (!process.env.JINA_API_KEY) return null;
   // Circuit open: a bad or unfunded key fails the same way every time, and
   // retrying it per page just adds latency to every analysis before we get to
   // the provider that actually works.
@@ -305,14 +319,15 @@ async function readWithJina(url: string, timeoutMs = READER_TIMEOUT_MS): Promise
       });
     }
     if (JINA_FATAL_STATUSES.has(res.status)) {
+      // No keyless branch here any more: we return before the request when
+      // there is no key, so a 403 that reaches this point is a real refusal of
+      // a real key, not the Cloudflare challenge the keyless tier used to give.
       const meaning =
         res.status === 402
           ? 'account out of credit'
           : res.status === 401
-            ? 'key missing or invalid'
-            : process.env.JINA_API_KEY
-              ? 'forbidden'
-              : 'Cloudflare challenge (no API key set)';
+            ? 'key invalid'
+            : 'forbidden (key rejected)';
       jinaDisabledReason = `HTTP ${res.status} — ${meaning}`;
       console.error(`[reader] Jina disabled for this process: ${jinaDisabledReason}`);
       return null;

@@ -23,6 +23,7 @@ import { discoverMenus, DRINK_SOURCE_RE, MAX_PICKER_CANDIDATES } from '../lib/me
 import { extractAndMerge, ExtractionError, ExtractContext, looksLikeHeaderItems, MIN_FOOD_ITEMS } from '../lib/menu-extract';
 import { countFoodItems } from '../lib/ai';
 import { isReaderEnabled } from '../lib/reader';
+import { withSpendContext } from '../lib/ai-spend';
 import type { ClassifiedMenu } from '../types';
 
 type Category = 'text' | 'pdf' | 'image' | 'multilang' | 'js' | 'multi';
@@ -86,7 +87,21 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-async function runCase(c: Case): Promise<CaseResult> {
+/**
+ * QA spend is real spend, and it was invisible.
+ *
+ * Every call here goes through callClaude, which writes an ai_usage_log row —
+ * but only if Supabase is configured. In CI it wasn't, so a whole class of
+ * genuine spend (this PR alone: ~$1.25 across nine runs; CLAUDE.md records a
+ * two-day QA session that burned ~$12) never reached the ledger we make budget
+ * decisions from. Wrapping each case attributes its rows to the site under
+ * test, so a run can be read back per restaurant rather than as a lump.
+ */
+function runCase(c: Case): Promise<CaseResult> {
+  return withSpendContext({ url: c.url, restaurantName: `QA: ${c.name}` }, () => runCaseInner(c));
+}
+
+async function runCaseInner(c: Case): Promise<CaseResult> {
   cur = { pass: 0, fail: 0, skip: 0, row: '' };
   console.log(`\n=== ${c.name} [${c.category}] — ${c.url} ===`);
   try {
