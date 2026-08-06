@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
-import HeroSearch from '@/components/HeroSearch';
+import GuideCtaLink from '@/components/GuideCtaLink';
+import HeroCta from '@/components/HeroCta';
 import RestaurantCard from '@/components/RestaurantCard';
 import SiteFeedbackButton from '@/components/SiteFeedbackButton';
 import { getFeaturedRestaurants } from '@/lib/db';
@@ -12,6 +12,9 @@ import type { Restaurant } from '@/types';
 export const metadata: Metadata = {
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
+  // The city guides now link to /?search=1 to open the hero's search directly.
+  // Without a canonical that becomes a second indexable copy of the homepage.
+  alternates: { canonical: '/' },
 };
 
 // Reads the Dublin guide for the preview strip. Cached for 5 minutes: it's a
@@ -38,7 +41,7 @@ export default async function HomePage() {
   return (
     <div className="flex flex-col bg-forest">
       {/* ---------------- Hero ---------------- */}
-      <section className="relative overflow-hidden bg-forest-deep text-paper pt-20 pb-[calc(78px+var(--overlap))]">
+      <section className="relative overflow-hidden bg-forest-deep text-paper pt-14 md:pt-16 pb-[calc(56px+var(--overlap))]">
         <div className="mesh mesh-animate" aria-hidden="true">
           <span className="w-[70%] h-[88%] left-[-10%] top-[-18%] bg-[#0f7a52] opacity-55" />
           <span className="w-[58%] h-[76%] left-[40%] top-[16%] bg-[#14563c] opacity-75" />
@@ -53,7 +56,7 @@ export default async function HomePage() {
             {HERO.badge}
           </span>
 
-          <h1 className="font-display text-[clamp(2.7rem,6.4vw,4.6rem)] leading-[1.03] tracking-[-0.025em] mt-6 mb-5 max-w-[22ch] text-balance">
+          <h1 className="font-display text-[clamp(2.4rem,4.4vw,3.6rem)] leading-[1.07] tracking-[-0.025em] mt-5 mb-4 max-w-[34ch] text-balance">
             {HERO.headline.before}
             <span className="text-azalea-400">{HERO.headline.accent}</span>
             {HERO.headline.after}
@@ -62,11 +65,10 @@ export default async function HomePage() {
           <p className="text-[1.06rem] leading-relaxed text-paper/90 max-w-[50ch]">
             {HERO.sub}
           </p>
-          <p className="text-[1.06rem] leading-relaxed text-azalea-400 font-semibold md:whitespace-nowrap">
-            {HERO.subAccent}
-          </p>
 
-          <HeroSearch supportLine={HERO.support} />
+          <HeroCta />
+
+          <p className="mt-8 text-sm text-paper/70">{HERO.support}</p>
         </div>
       </section>
 
@@ -82,9 +84,7 @@ export default async function HomePage() {
               </h2>
               <p className="mt-3.5 max-w-[60ch] leading-relaxed text-forest/85">{GUIDE.lede}</p>
             </div>
-            <Link href="/dublin" className="btn-guide">
-              {GUIDE.cta}
-            </Link>
+            <GuideCtaLink href="/dublin" label={GUIDE.cta} city="dublin" placement="band" />
           </div>
 
           {preview.length > 0 && (
@@ -98,7 +98,7 @@ export default async function HomePage() {
       </section>
 
       {/* ---------------- The story ---------------- */}
-      <section className="band plate z-[3] bg-forest text-paper">
+      <section id="story" className="band plate z-[3] bg-forest text-paper scroll-mt-[78px]">
         <div className="mesh mesh-animate" aria-hidden="true">
           <span className="w-[60%] h-[80%] left-[-14%] top-[-12%] bg-[#0f7a52] opacity-50" />
           <span className="w-[38%] h-[56%] left-[64%] top-[-10%] bg-azalea-500 opacity-[0.26]" />
@@ -141,7 +141,7 @@ export default async function HomePage() {
       </section>
 
       {/* ---------------- How Picky works: AI / human / you ---------------- */}
-      <section className="band plate plate-paper z-[4] bg-paper text-forest">
+      <section id="how" className="band plate plate-paper z-[4] bg-paper text-forest scroll-mt-[78px]">
         <div className="band-inner">
           <span className="eyebrow-pink">{PILLARS.eyebrow}</span>
           <h2 className="font-display text-[clamp(1.7rem,3.3vw,2.35rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[24ch]">

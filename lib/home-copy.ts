@@ -9,10 +9,24 @@ export const HERO = {
   headline: {
     before: 'See all ',
     accent: 'veggie dishes',
-    after: ' at any restaurant, instantly.',
+    after: " in Dublin's best restaurants, instantly.",
   },
-  sub: "No more showing up in places that only offer mushroom risotto.",
-  subAccent: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
+  sub: 'No more showing up in places that only offer mushroom risotto.',
+  /**
+   * Primary CTA. Worded differently from GUIDE.cta, which repeats lower down
+   * the page — so the `placement` breakdown in PostHog means something.
+   */
+  guideCta: 'Explore the Dublin guide →',
+  /** Secondary CTA — reveals the URL bar in place. */
+  searchTrigger: 'Search a restaurant',
+  /**
+   * Shown inside the revealed panel. This used to sit under the headline as
+   * `subAccent`, but it sells the *secondary* action — as a full-width pink
+   * line under a guide-led headline it contradicted the hierarchy.
+   */
+  searchHint: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
+  /** Collapses the panel again. Only offered while the search is idle. */
+  searchCancel: 'Cancel',
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 

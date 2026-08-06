@@ -190,6 +190,31 @@
     filter: blur(6px);
   }
 
+  /* Hero secondary action — "Search a restaurant", sitting next to .btn-guide.
+     Recessive by treatment, but still a real button rather than a text link.
+
+     The dark scrim is baked in rather than inherited from the ground, and that
+     is the whole reason this isn't just .glass plus padding: the hero mesh puts
+     a bright #0f7a52 blob directly behind this row, and paper on plain glass
+     over that blob measures 4.2:1 — which only clears WCAG via the large-text
+     exemption, with nothing spare. With the scrim it is 8.5:1 on the blob and
+     12:1 elsewhere. As with .btn-cta, don't shrink the label below text-xl. */
+  .btn-ghost-glass {
+    background: rgba(11, 36, 27, 0.55);
+    backdrop-filter: blur(18px) saturate(1.5);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    /* Border is deliberately faint. At white/30 the two hero CTAs read as
+       twins — a filled green pill next to an equally crisp outlined one — and
+       the primary stopped leading. The label stays full-strength paper; it is
+       the *edge* that recedes, not the text. */
+    @apply relative inline-flex items-center gap-2.5 rounded-full font-display
+           text-paper/90 px-7 py-4 text-lg leading-none whitespace-nowrap
+           border border-white/[0.14] transition-colors duration-150
+           hover:bg-white/[0.14] hover:text-paper
+           focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-paper/40;
+  }
+
   .paste-field {
     @apply w-full rounded-full bg-white border-0
            px-7 py-4 text-[1.04rem] text-forest placeholder-forest/55

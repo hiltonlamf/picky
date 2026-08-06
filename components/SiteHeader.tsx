@@ -25,6 +25,22 @@ export default function SiteHeader() {
         )}
 
         <nav className="flex items-center gap-1 shrink-0">
+          {/* Anchor into the homepage's "Why this exists" / "Behind the results"
+              sections. Href always points at "/#..." rather than a bare "#..."
+              so it works the same from any page, not just when already home —
+              this header is global (rendered from app/layout.tsx). */}
+          <Link
+            href="/#story"
+            className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
+          >
+            Story
+          </Link>
+          <Link
+            href="/#how"
+            className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
+          >
+            How
+          </Link>
           <Link
             href="/dublin"
             className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
