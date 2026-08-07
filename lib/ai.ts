@@ -112,6 +112,16 @@ function calcCost(model: string, tokensIn: number, tokensOut: number): number {
   return (tokensIn * p.input + tokensOut * p.output) / 1_000_000;
 }
 
+// The Anthropic SDK's own default is 10 minutes per call — far past Vercel's
+// 60s hard cap. lib/deadline.ts clamps every reader/fetch/upload timeout to
+// the request's remaining budget, but until now nothing clamped the model
+// call itself: one slow generation could silently run the function straight
+// into the platform's kill with no graceful continue/checkpoint, exactly
+// reproducing the "connection dropped" bug this file's callers exist to fix.
+// Outside a withDeadline context (scripts, admin reparse) clampTimeout
+// returns this value unchanged, so a single call still can't hang forever.
+const DEFAULT_CALL_TIMEOUT_MS = 55_000;
+
 /**
  * The single path every Anthropic call goes through.
  *
@@ -120,6 +130,13 @@ function calcCost(model: string, tokensIn: number, tokensOut: number): number {
  * was ~8× under the Console because failure paths dropped their usage on the
  * floor). Adding a new AI call means calling this, so a new call can't silently
  * go unbilled.
+ *
+ * A timeout here throws before any response arrives, so (like any other failed
+ * call) it carries no usage to record — the same shape as a network error. If
+ * Anthropic billed for work already done server-side before the abort, that
+ * spend is invisible to us either way; clamping doesn't create a new blind
+ * spot, it only stops the *whole request* from dying with zero chance to
+ * checkpoint what earlier candidates already found.
  *
  * Returns the raw message; callers parse it as before.
  */
@@ -131,7 +148,10 @@ export async function callClaude(
   // to reach for the raw client to get one.
   options?: { headers?: Record<string, string> }
 ): Promise<Anthropic.Message> {
-  const message = await anthropic().messages.create(params, options);
+  const message = await anthropic().messages.create(params, {
+    ...options,
+    timeout: clampTimeout(DEFAULT_CALL_TIMEOUT_MS),
+  });
 
   // Cache tokens are priced differently from fresh input: writes at 1.25× and
   // reads at 0.1×. The pipeline doesn't use prompt caching today, so these are

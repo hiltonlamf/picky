@@ -266,8 +266,10 @@ export async function POST(request: NextRequest) {
 
         // Strong-model audit of the veg/vegan labels users filter by — the
         // guardrail that makes cheap Haiku extraction safe. Never throws.
+        // Same `deadline` as the extraction loop above: this call still counts
+        // against the request's real remaining budget, not a fresh allowance.
         send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
-        const verified = await verifyVegClassifications(merged, payload.title);
+        const verified = await withDeadline(deadline, () => verifyVegClassifications(merged, payload.title));
         const menu = verified.menu;
         state.usage = sumUsage(state.usage ?? undefined, verified.usage);
         if (!menu.restaurantName && payload.title) menu.restaurantName = payload.title;
