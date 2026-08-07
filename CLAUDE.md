@@ -803,6 +803,28 @@ prefer a targeted check over waiting: invoke the route handler function
 directly in a one-off script, or write a direct DB assertion test, rather
 than trying to force a full local dev/build cycle.
 
+**The hang isn't limited to `next build`/`dev`/`lint` — treat ANY local
+command as suspect if it goes quiet.** Confirmed 2026-08-07 on the PR #27
+timeout fix: `tsc --noEmit` sat at near-zero CPU for 25+ minutes, and a
+`vitest run` right after it was still spinning up workers 15 minutes in —
+both commands CLAUDE.md previously called "reasonably reliable locally".
+There's no reliable signal for *which* command will wedge this session; the
+only sane response is a time-box (a couple of minutes of real CPU activity,
+checked via `ps`, not just elapsed wall time), then kill it and push.
+
+**Fastest path when local verification is stuck: ask the founder to test the
+Vercel preview himself.** He has a working browser and Vercel dashboard
+access that the sandbox doesn't always have (SSO-protected preview URLs
+need a bypass token or a temporary protection toggle to hit from a script —
+see the RLS/Supabase gotchas below for the general pattern). Rather than
+fighting the sandbox for a local repro, push the branch and ask him to open
+the preview URL and try the specific flow — for a UI/behavior change this is
+often both faster AND a more realistic test than anything scripted, since he
+IS the real user the deployment is for. Save scripted end-to-end
+verification (driving the API directly) for cases that need many repeated
+or precisely-controlled runs, like proving a pipeline fix across several
+restaurants — not as the default first move when a local command hangs.
+
 **Vercel env vars.** `vercel env pull` returns BLANK for *every* value in
 this sandbox (even non-sensitive ones), so you CANNOT verify a value by
 reading it back — confirm env changes by behaviour (deploy + test), not by
