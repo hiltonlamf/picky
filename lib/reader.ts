@@ -391,14 +391,17 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
   const provider = selectProvider();
   if (provider === 'off') return null;
 
-  // Firecrawl: dedicated screenshot scrape.
-  if (provider === 'firecrawl' && process.env.FIRECRAWL_API_KEY) {
+  // Firecrawl: dedicated screenshot scrape. Runs under 'auto' too (not just an
+  // explicit READER_PROVIDER=firecrawl) — this is the last-resort vision
+  // fallback, so it should use whatever reader is actually configured, the
+  // same as every other read in this file.
+  if (provider !== 'jina' && process.env.FIRECRAWL_API_KEY) {
     try {
       const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, formats: ['screenshot@fullPage'] }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(clampTimeout(30000)),
       });
       if (res.ok) {
         const json = (await res.json()) as { data?: { screenshot?: string } };
@@ -409,7 +412,13 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
     }
   }
 
-  // Jina pageshot (keyless): returns a hosted full-page screenshot URL.
+  // No key, or the circuit is open (a prior call this process already found
+  // Jina unfunded/invalid) — skip the guaranteed-fail round-trip. Same guard
+  // readWithJina uses; this call was missing it, so a resumed analysis could
+  // burn up to 40s hitting a key already known dead this process.
+  if (!process.env.JINA_API_KEY || jinaDisabledReason) return null;
+
+  // Jina pageshot: returns a hosted full-page screenshot URL.
   try {
     const headers: Record<string, string> = {
       'User-Agent': BROWSER_UA,
@@ -419,9 +428,14 @@ export async function fetchScreenshot(url: string): Promise<string | null> {
     if (process.env.JINA_API_KEY) headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
     const res = await fetch(`https://r.jina.ai/${url}`, {
       headers,
-      signal: AbortSignal.timeout(40000),
+      signal: AbortSignal.timeout(clampTimeout(40000)),
       redirect: 'follow',
     });
+    if (JINA_FATAL_STATUSES.has(res.status)) {
+      jinaDisabledReason = `HTTP ${res.status} — screenshot call rejected`;
+      console.error(`[reader] Jina disabled for this process: ${jinaDisabledReason}`);
+      return null;
+    }
     if (!res.ok) return null;
     const json = (await res.json()) as { data?: { pageshotUrl?: string; screenshotUrl?: string } };
     return json.data?.pageshotUrl || json.data?.screenshotUrl || null;
