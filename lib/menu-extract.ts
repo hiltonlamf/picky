@@ -10,10 +10,14 @@ import {
   countFoodItems,
   isBillingError,
   verifyVegClassifications,
+  VERIFY_VEG_ENABLED,
   ESCALATION_MODEL,
 } from './ai';
 import { scrapeRestaurant } from './scraper';
 import { fetchScreenshot } from './reader';
+// Reused rather than re-implemented: the same price-density heuristic discovery
+// already uses to tell a menu from a cookie banner. Pure and free (no AI).
+import { textLooksLikeMenu } from './menu-discovery';
 
 export const MIN_FOOD_ITEMS = 7;
 
@@ -44,6 +48,23 @@ export interface ExtractContext {
   /** Live status callback — long analyses stream these to the user so a slow
    *  extraction doesn't look like a frozen app. */
   onProgress?: (message: string) => void;
+  /**
+   * Per-run memo for rungs whose input is SHARED across candidates (the same
+   * alternate PDF, the same page images, the same screenshot). Without it, N
+   * candidates that each fail their primary source each pay full price to
+   * re-read byte-identical content — up to 6× the same call on a 6-candidate
+   * site. Holds the in-flight promise, not just the settled value, so
+   * concurrent candidates under Promise.all join the first call.
+   */
+  sharedAttempts?: Map<string, Promise<Attempt>>;
+  /**
+   * Sonnet escalations left for this whole run, shared by reference across
+   * candidates. An object rather than a number so decrements are visible to
+   * sibling candidates running concurrently.
+   */
+  escalationBudget?: { remaining: number };
+  /** Set once any candidate produces a valid menu — see shouldEscalate use. */
+  anyCandidateValid?: { value: boolean };
 }
 
 type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
@@ -93,6 +114,64 @@ export function looksLikeHeaderItems(menu: ClassifiedMenu): boolean {
 function isValid(extraction: Extraction): boolean {
   if (!extraction) return false;
   return countFoodItems(extraction.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(extraction.menu);
+}
+
+/**
+ * `gated` (default) applies shouldEscalate; `always` restores the pre-2026-08-08
+ * behaviour of escalating every exhausted ladder; `off` is an emergency brake.
+ * An env switch so either can be done without a deploy.
+ */
+export const MENU_ESCALATION_MODE = (process.env.MENU_ESCALATION_MODE ?? 'gated') as
+  | 'gated'
+  | 'always'
+  | 'off';
+
+/** Sonnet escalations allowed per extraction run, across ALL candidates. */
+export const DEFAULT_ESCALATION_BUDGET = 2;
+
+/** What the earlier rungs proved about this candidate. */
+export interface EscalationEvidence {
+  /** A source existed but refused us (403, Drive view-only, robots block). */
+  blocked: boolean;
+  /** At least one rung actually reached the API and was billed. */
+  anyBilled: boolean;
+  /** A billed rung came back malformed (invalid JSON / truncated), not empty. */
+  anyMalfunction: boolean;
+  /** A PDF / image / screenshot rung was billed — real visual content was read. */
+  visualBilled: boolean;
+  /** Most food items any rung found so far. */
+  bestItems: number;
+  /** The primary source is text that reads like a real menu (price density). */
+  menuLikeInput: boolean;
+}
+
+/**
+ * Should we pay for the strongest model to re-read this candidate?
+ *
+ * Escalation re-runs the SAME source on Sonnet, so it can only help when there
+ * was something to read. Measured over 2026-07-25..08-08: the rung was 46% of
+ * all spend and 75% of its calls returned <100 output tokens — an empty
+ * `{"sections":[]}` produced by re-reading a page that had no menu text on it
+ * (menu behind a popup/JS, or the site refused us). Those cases are structural
+ * dead ends: a pricier model cannot read text that never loaded.
+ *
+ * It genuinely does rescue the opposite case — De Kas, Chez Max, Vintage
+ * Kitchen, Kicky's: multilingual or multi-menu pages where the text WAS there
+ * and Haiku parsed it badly. So the gate keeps every rung where content was
+ * demonstrably retrieved, and skips only where nothing was.
+ */
+export function shouldEscalate(ev: EscalationEvidence): boolean {
+  if (MENU_ESCALATION_MODE === 'off') return false;
+  if (MENU_ESCALATION_MODE === 'always') return true;
+  // Refused access, or nothing ever reached a model: the escalation would send
+  // the same absent bytes to a pricier model. Provably lossless to skip.
+  if (ev.blocked || !ev.anyBilled) return false;
+  return (
+    ev.bestItems >= 1 || // thin parse — the classic rescue
+    ev.anyMalfunction || // broken output — a stronger model may recover it
+    ev.menuLikeInput || // price-dense menu text that Haiku still read as empty
+    ev.visualBilled // a PDF/photo was actually read; Sonnet vision beats Haiku
+  );
 }
 
 export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage {
@@ -150,7 +229,10 @@ async function extractSubpage(
     // Nothing usable — but this sub-page may have burned several calls getting
     // there. Surface the spend instead of returning a bare null that loses it.
     if (usage && usage.costUsd > 0) {
-      throw new AICallError(`No menu found on ${url}`, usage);
+      // empty=true: every source on this sub-page was read and none held a
+      // menu. Reporting it as a malfunction instead would wrongly signal
+      // "the model broke, try a stronger one" to the escalation gate.
+      throw new AICallError(`No menu found on ${url}`, usage, false, true);
     }
     return null;
   } catch (err) {
@@ -194,12 +276,26 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * surface as such; retrying other sources just burns more calls and ends in a
  * misleading "couldn't read the menu".
  */
-type Attempt = { result: Extraction; usage?: AIUsage; blocked?: boolean };
+export type Attempt = {
+  result: Extraction;
+  usage?: AIUsage;
+  blocked?: boolean;
+  /** This rung actually reached the API and was billed. */
+  billed?: boolean;
+  /** A billed rung read the source and reported no menu in it (not a fault). */
+  empty?: boolean;
+  /** A billed rung came back malformed — invalid JSON or truncated output. */
+  malfunction?: boolean;
+};
 
 async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
   try {
     const result = await fn();
-    return { result, usage: result?.usage };
+    // The text path reports "nothing here" by returning {sections: []}
+    // SUCCESSFULLY rather than throwing, so emptiness has to be detected on
+    // the happy path too — not just in the catch below.
+    const empty = result != null && countFoodItems(result.menu) === 0;
+    return { result, usage: result?.usage, billed: result?.usage != null, empty };
   } catch (err) {
     if (isBillingError(err)) {
       // Keep the underlying cause in server logs; users get the generic line.
@@ -212,7 +308,17 @@ async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
     // that made three of six restaurants report "$0.0000 spent" in run #33.
     if (err instanceof AICallError) {
       console.error('[extract] unusable AI response:', err.message);
-      return { result: null, usage: err.usage };
+      // `empty` = the model read it and found no menu; anything else that
+      // reached the API (invalid JSON, truncation) is a malfunction, which a
+      // stronger model can plausibly recover from. That split is what decides
+      // escalation — see shouldEscalate.
+      return {
+        result: null,
+        usage: err.usage,
+        billed: err.usage != null,
+        empty: err.empty,
+        malfunction: err.usage != null && !err.empty,
+      };
     }
     if (err instanceof MenuAccessBlockedError) {
       console.error('[extract] menu exists but access was refused:', err.detail);
@@ -238,39 +344,96 @@ function startMessage(candidate: MenuCandidate): string {
 
 /** The ordered retry chain for one candidate. Static so extraction can be
  *  resumed from any attempt index in a later request (serverless time caps). */
-function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): Array<{ note: string; run: () => Promise<Extraction> }> {
-  const plan: Array<{ note: string; run: () => Promise<Extraction> }> = [
-    { note: startMessage(candidate), run: () => runPrimary(candidate, ctx) },
+type PlanRung = {
+  note: string;
+  run: () => Promise<Extraction>;
+  /** Source class — drives `visualBilled` evidence and the share key. */
+  kind: 'text' | 'doc' | 'image' | 'shot' | 'subpage';
+  /** Rungs sharing a key across candidates are the same call; pay once. */
+  shareKey?: string;
+  /** The final strongest-model rung, gated by shouldEscalate. */
+  escalation?: boolean;
+};
+
+function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): PlanRung[] {
+  const primaryKind: PlanRung['kind'] =
+    candidate.type === 'pdf'
+      ? 'doc'
+      : candidate.type === 'image'
+        ? 'image'
+        : candidate.type === 'subpage'
+          ? 'subpage'
+          : 'text';
+  const plan: PlanRung[] = [
+    { note: startMessage(candidate), run: () => runPrimary(candidate, ctx), kind: primaryKind },
   ];
   const altPdfUrls = (ctx.pdfUrls ?? []).filter((u) => !ctx.excludePdfUrls?.includes(u));
   if (candidate.type !== 'pdf' && altPdfUrls.length) {
     plan.push({
       note: 'That source was unclear — reading the menu PDF instead...',
       run: () => classifyMenuFromPdf(altPdfUrls[0], ctx.title),
+      kind: 'doc',
+      shareKey: `pdf:${altPdfUrls[0]}`,
     });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
+    const images = ctx.imageUrls.slice(0, 6);
     plan.push({
       note: 'Scanning the menu images for dishes...',
-      run: () => classifyMenuFromImages(ctx.imageUrls!.slice(0, 6), ctx.title),
+      run: () => classifyMenuFromImages(images, ctx.title),
+      kind: 'image',
+      shareKey: `images:${images.join('|')}`,
     });
   }
   // Universal vision fallback: read a full-page screenshot (existing one, or
   // rendered on demand). Catches image-only and JS/canvas menus.
+  const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
   plan.push({
     note: 'Taking a snapshot of the page to read it visually...',
     run: async () => {
-      const shotUrl = candidate.type === 'subpage' && candidate.ref ? candidate.ref : ctx.pageUrl;
       const shot = ctx.screenshotUrl ?? (shotUrl ? await fetchScreenshot(shotUrl).catch(() => null) : null);
       return shot ? classifyMenuFromScreenshot(shot, ctx.title) : null;
     },
+    kind: 'shot',
+    // Key on the effective image so two candidates pointing at the same page
+    // share one screenshot read (fetchScreenshot is itself a paid call in some
+    // reader configurations). A subpage keys on its own ref, so a genuinely
+    // different page still gets its own.
+    shareKey: ctx.screenshotUrl ? `shot:${ctx.screenshotUrl}` : shotUrl ? `shot:${shotUrl}` : undefined,
   });
   // Last resort: escalate the original source to the strongest model.
   plan.push({
     note: 'Double-checking with our strongest AI model...',
     run: () => runPrimary(candidate, ctx, ESCALATION_MODEL),
+    kind: primaryKind,
+    escalation: true,
   });
   return plan;
+}
+
+/**
+ * Run one rung, joining an identical in-flight/settled call from a sibling
+ * candidate when the rung's input is shared.
+ *
+ * The replay is handed a usage-STRIPPED copy on purpose: only one call was
+ * made, so only the first consumer may book its cost. This is the single place
+ * where CLAUDE.md's "never drop usage" rule inverts into "never double-count
+ * usage" — counting it per consumer would inflate the ledger we make spend
+ * decisions from.
+ */
+async function runRung(rung: PlanRung, ctx: ExtractContext): Promise<Attempt> {
+  if (!rung.shareKey || !ctx.sharedAttempts) return attemptOrNull(rung.run);
+  const inFlight = ctx.sharedAttempts.get(rung.shareKey);
+  if (inFlight) {
+    const first = await inFlight;
+    console.error(`[extract] shared-rung reuse (no second call): ${rung.shareKey}`);
+    return { ...first, usage: undefined, billed: false };
+  }
+  // Registered synchronously (attemptOrNull returns its promise before any
+  // await resolves), so a concurrent sibling sees it rather than racing.
+  const started = attemptOrNull(rung.run);
+  ctx.sharedAttempts.set(rung.shareKey, started);
+  return started;
 }
 
 export interface ResumableResult {
@@ -280,6 +443,13 @@ export interface ResumableResult {
   nextIndex: number | null;
   /** A source existed but refused us — see ExtractionError.blocked. */
   blocked?: boolean;
+  /**
+   * What the rungs run so far proved. MUST be persisted and passed back on a
+   * resumed request: a candidate that resumes straight onto the escalation rung
+   * with a blank record would look like "nothing was ever billed" and get
+   * skipped for the wrong reason.
+   */
+  evidence?: EscalationEvidence;
 }
 
 /**
@@ -293,27 +463,98 @@ export async function extractMenuResumable(
   startIndex = 0,
   deadline = Number.POSITIVE_INFINITY,
   carried: Extraction = null,
-  carriedUsage?: AIUsage
+  carriedUsage?: AIUsage,
+  carriedEvidence?: EscalationEvidence
 ): Promise<ResumableResult> {
   const progress = ctx.onProgress ?? (() => {});
   const plan = attemptPlan(candidate, ctx);
   let best: Extraction = carried;
   let usage: AIUsage | undefined = carriedUsage ?? carried?.usage;
-  let blocked = false;
+  let blocked = carriedEvidence?.blocked ?? false;
+
+  const evidence: EscalationEvidence = carriedEvidence ?? {
+    blocked: false,
+    anyBilled: false,
+    anyMalfunction: false,
+    visualBilled: false,
+    bestItems: carried ? countFoodItems(carried.menu) : 0,
+    // The page's own text, judged once. Reused for every candidate type: a
+    // subpage sitting on a price-dense page is worth escalating even if this
+    // candidate's own rungs came back empty.
+    menuLikeInput: textLooksLikeMenu(ctx.inlineText ?? ''),
+  };
 
   for (let i = startIndex; i < plan.length; i++) {
     if (isValid(best)) break;
     if (Date.now() >= deadline) {
-      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i, blocked };
+      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i, blocked, evidence };
     }
-    progress(plan[i].note);
-    const { result, usage: spent, blocked: refused } = await attemptOrNull(plan[i].run);
-    usage = sumUsage(usage, spent);
-    if (refused) blocked = true;
-    if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
+    const rung = plan[i];
+
+    if (rung.escalation) {
+      const budget = ctx.escalationBudget;
+      // A sibling already produced a valid menu and this candidate found
+      // nothing: an empty candidate contributes nothing to mergeMenus, so
+      // paying Sonnet to confirm its emptiness cannot change what users see.
+      // A thin-but-nonzero sibling still escalates (multi-menu restaurants).
+      const siblingCovered = ctx.anyCandidateValid?.value === true && evidence.bestItems === 0;
+      const budgetSpent = budget != null && budget.remaining <= 0;
+      const allowed = shouldEscalate(evidence) && !siblingCovered && !budgetSpent;
+      if (!allowed) {
+        const reason = evidence.blocked
+          ? 'blocked'
+          : !evidence.anyBilled
+            ? 'nothing-billed'
+            : budgetSpent
+              ? 'budget-exhausted'
+              : siblingCovered
+                ? 'sibling-already-valid'
+                : 'read-and-empty';
+        console.error(
+          `[escalate] candidate=${candidate.type} decision=skip reason=${reason} bestItems=${evidence.bestItems}`
+        );
+        continue;
+      }
+      if (budget) budget.remaining -= 1;
+      console.error(
+        `[escalate] candidate=${candidate.type} decision=run bestItems=${evidence.bestItems} ` +
+          `malfunction=${evidence.anyMalfunction} visual=${evidence.visualBilled} menuLike=${evidence.menuLikeInput}`
+      );
+    }
+
+    progress(rung.note);
+    const attempt = await runRung(rung, ctx);
+    usage = sumUsage(usage, attempt.usage);
+    if (attempt.blocked) {
+      blocked = true;
+      evidence.blocked = true;
+    }
+    if (attempt.billed) {
+      evidence.anyBilled = true;
+      if (attempt.malfunction) evidence.anyMalfunction = true;
+      // 'subpage' counts as visual on purpose. extractSubpage runs its own
+      // internal text→PDF→images→screenshot ladder, and from out here we can't
+      // see which of those it billed — and subpages are exactly where the
+      // multi-menu PDFs live (De Kas's /eng/menu: page 1 Lunch, page 2 Dinner).
+      // Treating it as "content was read" keeps founder error type 2 covered.
+      // This is the most generous clause in the gate; the [escalate] decision
+      // log exists so it can be tightened against real data instead of a guess.
+      if (rung.kind === 'doc' || rung.kind === 'image' || rung.kind === 'shot' || rung.kind === 'subpage') {
+        evidence.visualBilled = true;
+      }
+    }
+    if (attempt.result && (!best || countFoodItems(attempt.result.menu) > countFoodItems(best.menu))) {
+      best = attempt.result;
+    }
+    evidence.bestItems = best ? countFoodItems(best.menu) : 0;
+    if (isValid(best) && ctx.anyCandidateValid) ctx.anyCandidateValid.value = true;
+
+    if (rung.escalation) {
+      console.error(`[escalate] candidate=${candidate.type} outcome items=${evidence.bestItems}`);
+    }
   }
 
-  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null, blocked };
+  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null, blocked, evidence };
 }
 
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
@@ -431,6 +672,12 @@ export async function extractAndMerge(
   const scopedCtx: ExtractContext = {
     ...ctx,
     excludePdfUrls: Array.from(new Set([...(ctx.excludePdfUrls ?? []), ...independentPdfRefs])),
+    // Run-scoped, shared by reference across every candidate below so the
+    // Promise.all fan-out pays once for identical fallback sources and cannot
+    // buy one Sonnet escalation per candidate.
+    sharedAttempts: ctx.sharedAttempts ?? new Map(),
+    escalationBudget: ctx.escalationBudget ?? { remaining: DEFAULT_ESCALATION_BUDGET },
+    anyCandidateValid: ctx.anyCandidateValid ?? { value: false },
   };
   const results = await Promise.all(
     candidates.map(async (c) => {
@@ -474,9 +721,12 @@ export async function extractAndMerge(
 
   const merged = mergeMenus(selectSubstantialMenus(named));
 
-  // Strong-model audit of the veg/vegan labels users actually filter by —
-  // the guardrail that makes cheap Haiku extraction safe.
-  ctx.onProgress?.('Double-checking the vegetarian and vegan labels...');
+  // Strong-model audit of the veg/vegan labels. OFF by default since
+  // 2026-08-08 (see VERIFY_VEG_ENABLED in lib/ai.ts) — a no-op returning
+  // `merged` unless VERIFY_VEG=1, so don't announce it when it isn't running.
+  if (VERIFY_VEG_ENABLED) {
+    ctx.onProgress?.('Double-checking the vegetarian and vegan labels...');
+  }
   const verified = await verifyVegClassifications(merged, ctx.title);
   usage = sumUsage(usage, verified.usage);
 

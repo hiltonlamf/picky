@@ -2,8 +2,10 @@
 #
 # NON-BLOCKING by design: this suite has failure modes unrelated to code
 # correctness (API credits, restaurant sites changing/going down, reader rate
-# limits). It runs once per merge to main and on demand — no schedule, so spend
-# only happens when the code actually changed. Results are posted as signal:
+# limits). Cadence (2026-08-08): a merge to main that TOUCHES THE PIPELINE runs
+# the 3-case smoke set (~$0.11); the full core set (~$0.75) runs weekly on a
+# cron and on demand. Merges that don't touch pipeline paths cost nothing.
+# Results are posted as signal:
 #   - workflow_dispatch on a branch with an open PR → comments the summary on it
 #   - post-merge run failure → opens/updates a "Live pipeline QA failures" issue
 # The blocking merge gate is the deterministic `CI` workflow.
@@ -25,7 +27,21 @@ on:
         type: string
         default: ''
   push:
-    branches: [main] # i.e. every PR merge — ~$0.75/run at current model tiering
+    branches: [main]
+    # Only merges that can actually break the pipeline pay for it. A copy, UI or
+    # docs-only merge used to cost ~$0.75 to prove nothing (2026-08-08).
+    paths:
+      - 'lib/**'
+      - 'app/api/parse/**'
+      - 'scripts/run-pipeline-tests.ts'
+      - 'tests/pipeline-cases.json'
+      - 'package-lock.json'
+      - '.github/workflows/pipeline.yml'
+  schedule:
+    # Weekly full core sweep (~$0.75). Qualifying merges run the 3-case smoke
+    # set (~$0.11) instead, so per-merge regression signal costs ~1/5 as much
+    # while the whole set still runs on a fixed cadence. Mondays 06:00 UTC.
+    - cron: '0 6 * * 1'
 
 # Cost escape hatch: if the merge commit message contains [skip live-qa]
 # (e.g. the PR was already validated with a local live run), the post-merge
@@ -103,32 +119,35 @@ jobs:
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      # NB: this is a real billed call (~$0.00002 — 1 output token) made outside
-      # the app, so it is the one bit of spend ai_usage_log structurally cannot
-      # record. Kept because "is the key even valid?" is worth far more than
-      # two-thousandths of a cent, but noted so the ledger's gap is a known one.
-      - name: API key sanity check
+      # Answers the same question ("is the key valid?") as the inference call
+      # this replaced, but /v1/models is NOT billed. The old check was a real
+      # 1-output-token completion — tiny (~$0.00002) but made outside the app,
+      # so it was the one bit of spend ai_usage_log structurally could not
+      # record. Closing that gap is worth more than the fraction of a cent.
+      - name: API key sanity check (unbilled)
         if: inputs.mode != 'diagnose' && inputs.mode != 'verify-spend'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           echo "key length: ${#ANTHROPIC_API_KEY}"
           echo -n "API HTTP status: "
-          curl -s -o /tmp/api-check.json -w '%{http_code}\n' https://api.anthropic.com/v1/messages \
+          curl -s -o /tmp/api-check.json -w '%{http_code}\n' https://api.anthropic.com/v1/models \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
+            -H "anthropic-version: 2023-06-01"
           grep -o '"type":"[a-z_]*"' /tmp/api-check.json | head -2 || true
       # Supabase creds are here for ONE reason: ai_usage_log. QA runs spend real
       # money (~$0.45 for the six-site set) and without credentials every spend
       # row is silently dropped, so the ledger we budget from never sees it.
       # The runner writes nothing else to the DB — no restaurants, no menus.
+      # Suite size by trigger: a qualifying merge runs the 3-case smoke set
+      # (~$0.11); the weekly cron and manual dispatches run the full core set
+      # (~$0.75, blank arg). Dispatch can still narrow it with `filter`.
       - name: Run live pipeline suite
         if: inputs.mode != 'diagnose' && inputs.mode != 'verify-spend'
-        run: npx tsx scripts/run-pipeline-tests.ts ${{ inputs.filter }} 2>&1 | tee pipeline-log.txt
+        run: npx tsx scripts/run-pipeline-tests.ts $SUITE_ARG 2>&1 | tee pipeline-log.txt
         shell: bash
         env:
+          SUITE_ARG: ${{ github.event_name == 'push' && '--smoke' || inputs.filter }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
@@ -162,7 +181,9 @@ jobs:
           } > pr-comment.md
           gh pr comment "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md || echo "no open PR for this branch — skipping comment"
       - name: File issue on post-merge failure
-        if: failure() && github.event_name == 'push'
+        # Also on the weekly cron: that is now the run with full core coverage,
+        # so a regression it catches must open an issue like a merge run does.
+        if: failure() && (github.event_name == 'push' || github.event_name == 'schedule')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

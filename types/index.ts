@@ -1,4 +1,5 @@
 import type { AIUsage } from '@/lib/ai';
+import type { EscalationEvidence } from '@/lib/menu-extract';
 
 export type DietaryClassification = 'vegan' | 'vegetarian' | 'neither' | 'unknown';
 
@@ -122,6 +123,14 @@ export interface AnalysisState {
   bestSoFar?: { menu: ClassifiedMenu; usage: AIUsage } | null;
   /** Cost accumulated on the current candidate (incl. failed attempts). */
   candidateUsage?: AIUsage | null;
+  /** What the current candidate's finished rungs proved, for the escalation
+   *  gate. Persisted because a request that resumes straight onto the
+   *  escalation rung would otherwise see a blank record and read it as
+   *  "nothing was ever billed", skipping for the wrong reason. */
+  evidence?: EscalationEvidence | null;
+  /** Sonnet escalations already spent across this whole analysis. Persisted so
+   *  the per-run budget can't reset to full on every resumed request. */
+  escalationsUsed?: number;
   /** Finished menus awaiting the final merge. */
   done: Array<{ label: string; menu: ClassifiedMenu }>;
   /** A source existed but refused us (see NoMenuReason 'blocked'). Persisted

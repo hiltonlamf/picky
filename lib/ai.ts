@@ -28,6 +28,18 @@ export const EXTRACTION_MODEL = 'claude-haiku-4-5-20251001';
 export const ESCALATION_MODEL = 'claude-sonnet-4-6';
 export const VERIFICATION_MODEL = 'claude-sonnet-4-6';
 
+/**
+ * The Sonnet second-opinion pass on veg labels is OFF by default (2026-08-08).
+ * Founder's call: Haiku's vegan/vegetarian/non-veg classification is already
+ * accurate in practice, and every dish is human-reviewed before publishing, so
+ * a paid model re-check earns nothing. The measured spend it removes is small
+ * ($0.28/fortnight) but it also frees a Sonnet round-trip of deadline headroom
+ * in the serverless analyze path, where it competed with extraction for time.
+ * Set VERIFY_VEG=1 to restore it (e.g. to re-measure label accuracy) with no
+ * code change — the function itself is kept for exactly that.
+ */
+export const VERIFY_VEG_ENABLED = process.env.VERIFY_VEG === '1';
+
 export type AIUsage = {
   model: string;
   tokensIn: number;
@@ -60,11 +72,21 @@ export class AICallError extends Error {
   usage?: AIUsage;
   /** True when the model hit max_tokens — the output is cut off, not wrong. */
   truncated: boolean;
-  constructor(message: string, usage?: AIUsage, truncated = false) {
+  /**
+   * True when the model READ the source fine and reported no menu in it —
+   * as opposed to malfunctioning (invalid JSON, truncation) or never being
+   * reached at all. The distinction decides whether escalating to the
+   * stronger model can possibly help: re-reading the same empty page with a
+   * pricier model returns the same verdict, and 75% of escalation spend went
+   * exactly there. See `shouldEscalate` in lib/menu-extract.ts.
+   */
+  empty: boolean;
+  constructor(message: string, usage?: AIUsage, truncated = false, empty = false) {
     super(message);
     this.name = 'AICallError';
     this.usage = usage;
     this.truncated = truncated;
+    this.empty = empty;
   }
 }
 
@@ -544,7 +566,8 @@ export async function classifyMenuFromImageBuffers(
   // No dishes is a legitimate answer (the images weren't a menu), not a
   // failure — but it still cost money, so report it as a priced empty result.
   if (!menu.sections || menu.sections.length === 0) {
-    throw new AICallError('No menu text found in the images.', usage);
+    // empty=true: the model saw the images and found no menu — not a malfunction.
+    throw new AICallError('No menu text found in the images.', usage, false, true);
   }
 
   return { menu: stripDrinksAndHeaders(menu), usage };
@@ -649,34 +672,10 @@ export async function labelMenuCandidates(
   }
 }
 
-export async function analysePageForMenu(
-  pageText: string,
-  pageUrl: string
-): Promise<{ isMenu: boolean; suggestedLinks: string[] }> {
-  const message = await callClaude({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [
-      {
-        role: 'user',
-        content: `Does this webpage contain a restaurant menu with dish listings?
-
-Page URL: ${pageUrl}
-Content snippet: ${pageText.slice(0, 3000)}
-
-Reply with JSON only: {"isMenu": true/false, "suggestedLinks": ["url1", "url2"]}
-Include suggestedLinks only if isMenu is false and you can see links to menu pages in the content.`,
-      },
-    ],
-  });
-
-  const text = (message.content[0] as { type: string; text: string }).text.trim();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { isMenu: true, suggestedLinks: [] };
-  }
-}
+// Removed 2026-08-08: `analysePageForMenu` — an exported, billable Haiku call
+// with zero callers anywhere in the repo. Discovery answers "is this a menu
+// page?" via labelMenuCandidates. Deleted rather than left exported so nobody
+// wires a second paid call back into the pipeline by reaching for it.
 
 const DRINK_SECTION_NAMES = new Set([
   'drinks', 'beverages', 'wines', 'wine list', 'beer', 'beers', 'cocktails',
@@ -1117,7 +1116,8 @@ async function classifyMenuFromDocumentSource(
     }
 
     if (!menu.sections || menu.sections.length === 0) {
-      throw new AICallError('No menu found in the PDF.', usage);
+      // empty=true: the model read the PDF and found no menu — not a malfunction.
+      throw new AICallError('No menu found in the PDF.', usage, false, true);
     }
 
     return { menu: stripDrinksAndHeaders(menu), usage };
@@ -1172,6 +1172,10 @@ export async function verifyVegClassifications(
   menu: ClassifiedMenu,
   restaurantName?: string
 ): Promise<{ menu: ClassifiedMenu; usage?: AIUsage }> {
+  // Single early return covers all four call sites (analyze route, extractAndMerge,
+  // and both admin add-menu paths) without changing the returned shape.
+  if (!VERIFY_VEG_ENABLED) return { menu };
+
   const flagged: Array<{ s: number; d: number }> = [];
   menu.sections.forEach((sec, s) =>
     sec.dishes.forEach((dish, d) => {
