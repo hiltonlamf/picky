@@ -13,6 +13,11 @@ export interface DiscoveryResult {
 /** Max menu options shown in the picker — beyond this the list stops being a choice. */
 export const MAX_PICKER_CANDIDATES = 6;
 
+/** A URL path segment that's just a language marker (`/nl/`, `/eng/`, ...) —
+ *  shared by discoverMenus' language-variant-sibling check and
+ *  preferEnglishSiblings' same-menu-per-language dedup below. */
+const LANG_SEGMENT_RE = /\/(en|eng|english|nl|de|fr|es|it|pt|da|sv|no|fi|pl|zh|zh-hans|ja)(\/|$)/i;
+
 /** Stable, non-cryptographic id for a candidate (FNV-1a, 32-bit, hex). */
 function candidateId(type: MenuCandidateType, ref: string): string {
   const input = `${type}|${ref}`;
@@ -333,7 +338,25 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   for (const pdf of scrape.menuPdfUrls ?? []) {
     raw.push({ type: 'pdf', ref: pdf, hint: hintFor(pdf), source: 'homepage' });
   }
+  // A subpage that's just a language-variant SIBLING of the page discovery
+  // already used as its primary source (e.g. finalUrl is /nl/menu, and
+  // /eng/menu is a switcher link found ON that page) is the untested case
+  // `preferEnglishSiblings` below can't catch: it only compares candidates
+  // that are ALREADY in the raw list against each other, but this sibling
+  // was found ONE level deeper (during the dive into finalUrl itself) and
+  // never independently checked for its own PDF/content — restaurantdekas.com
+  // hit exactly this: /nl/menu became finalUrl, its own page links to
+  // /eng/menu, and /eng/menu survived into the picker as a confusing "Menu 2"
+  // option alongside the real PDF candidate, even though it's nothing more
+  // than the same page in another language. Skip it here rather than offer a
+  // candidate nobody asked for and that only duplicates what finalUrl already
+  // covers.
+  const isLanguageVariantOfPrimaryPage = (ref: string): boolean => {
+    if (!LANG_SEGMENT_RE.test(ref) || !LANG_SEGMENT_RE.test(finalUrl)) return false;
+    return ref.replace(LANG_SEGMENT_RE, '/*$2') === finalUrl.replace(LANG_SEGMENT_RE, '/*$2');
+  };
   for (const link of scrape.menuLinks ?? []) {
+    if (isLanguageVariantOfPrimaryPage(link)) continue;
     raw.push({ type: 'subpage', ref: link, hint: hintFor(link), source: 'subpage' });
   }
 
@@ -367,7 +390,6 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
    * English sibling when a pair differs only by its language segment.
    */
   const preferEnglishSiblings = (items: Raw[]): Raw[] => {
-    const LANG_SEGMENT_RE = /\/(en|eng|english|nl|de|fr|es|it|pt|da|sv|no|fi|pl|zh|zh-hans|ja)(\/|$)/i;
     const ENGLISH_SEGMENT_RE = /^(en|eng|english)$/i;
     const keyFor = (ref: string): string | null => {
       if (!LANG_SEGMENT_RE.test(ref)) return null;

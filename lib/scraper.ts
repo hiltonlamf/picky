@@ -1249,21 +1249,31 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
       const menuRes = await scrapeHtmlPage(link, depth + 1);
       const carriesSource = menuRes.text.length >= 200 || menuRes.menuPdfUrls.length > 0 || menuRes.menuImages.length > 0;
       if (carriesSource) {
-        // A sub-page whose own text isn't menu-shaped, but which contributed a
-        // PDF (already captured above in menuPdfUrls), is just a pointer to
-        // that PDF — not an independent menu source in its own right. Left in
-        // menuLinks, discoverMenus turns it into its OWN "subpage" candidate
-        // alongside the PDF candidate; since the discovery labeler never sees
-        // page content, it can't tell they're the same real menu, so both get
+        // A sub-page that itself contributed a PDF (already captured above in
+        // menuPdfUrls) is a pointer to that PDF — drop IT as an independent
+        // candidate, not the PDF. This used to be conditional on the
+        // sub-page's own text not "looking like a menu", but that heuristic
+        // is too easily fooled: restaurantdekas.com's /eng/menu page is just
+        // course-tier pricing text ("Menu 3 courses: € 55"...), which trips
+        // `looksLikeMenu`'s price-count check despite holding zero real
+        // dishes — so the redundant candidate survived and the picker showed
+        // the user two options for the same real menu ("Lunch" and "Menu"),
+        // which is nonsensical even before any AI extraction runs. Unconditional
+        // now: PDFs are already this app's preferred, more reliable format
+        // (see FORMAT_PREFERENCE — pdf beats subpage), so a sub-page that also
+        // has real dish text of its own loses nothing by not being offered
+        // separately — its PDF is strictly the better source, and stays
+        // available as its own candidate either way. Left in menuLinks,
+        // discoverMenus turns this sub-page into its OWN "subpage" candidate
+        // alongside the PDF one; since the discovery labeler never sees page
+        // content, it can't tell they're the same real menu, so both get
         // selected and independently sent through AI extraction — doubling AI
-        // spend and, when the source is a multi-page PDF (e.g. page 1 Lunch /
-        // page 2 Dinner), losing the model's own correct per-page menuLabel
-        // tagging once mergeMenus sees 2+ candidates (restaurantdekas.com:
-        // read the same 2-page PDF twice, surfaced as "Lunch" and "Menu"
-        // instead of one clean "Lunch"/"Dinner" pair — see PR history). Drop
-        // just this link from the propagated menuLinks; its PDFs still flow
-        // through menuPdfUrls as their own candidates.
-        const linkIsJustAPdfPointer = menuRes.menuPdfUrls.length > 0 && !looksLikeMenu(menuRes.text);
+        // spend and, when the source is a multi-page PDF (page 1 Lunch / page
+        // 2 Dinner), risking the model's own correct per-page menuLabel
+        // tagging once mergeMenus sees 2+ candidates. Drop just this link
+        // from the propagated menuLinks; its PDFs still flow through
+        // menuPdfUrls as their own candidates.
+        const linkIsJustAPdfPointer = menuRes.menuPdfUrls.length > 0;
         const mergedMenuLinks = dedupeStrings([...menuLinks, ...menuRes.menuLinks]);
         return {
           ...menuRes,
