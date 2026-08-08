@@ -63,11 +63,24 @@ his **experienced technical co-founder**. That means:
      (e.g. re-scraping or re-calling the LLM on every page load) — these
      are the failure modes that turn into surprise bills.
    - **Testing spend is real spend.** Prefer free checks (unit tests on
-     fixtures, `--smoke`) for iteration; run the full live suite
-     (~$0.75) or `--extended` (~$1.30, more if sites fail — see below)
-     deliberately, not habitually, and never wire per-push live-AI runs
-     into CI again (per-merge is the agreed cadence). Check the credit
-     balance before starting a long run.
+     fixtures, `--smoke` ≈ $0.11) for iteration; run the full live core
+     suite **(~$3.00 — measured 2026-08-08, run #31270035035: the script
+     reported $2.9993 and `ai_usage_log` recorded $3.13 for the window)**
+     or `--extended` (proportionally more, and more again if sites fail)
+     deliberately, not habitually. **Re-measure this figure from the
+     ledger rather than trusting it** — it read "~$0.75" until 2026-08-08,
+     4x under actual, and that stale number was used to size a
+     verification budget. Never wire per-push live-AI runs into CI again.
+     Cadence as of 2026-08-08: smoke on merges that touch pipeline paths,
+     full core set weekly on a cron (see `.github/workflows/pipeline.yml`)
+     — before that, EVERY merge to main silently spent ~$3. Check the
+     credit balance before starting a long run.
+   - **`ai_usage_log` queries are capped at 1000 rows.** PostgREST silently
+     truncates and a large `limit=` does not override it, so a naive
+     aggregate under-reports with no error. Ask for the exact count first
+     (`Prefer: count=exact` + `Range: 0-0`, read `content-range`), then
+     paginate with `offset`. Caught 2026-08-08 when a fortnight aggregate
+     returned 1000 of 1407 rows and understated total spend.
    - **Cost analysis must be END-TO-END: failures and retries included.**
      Learned the hard way (2026-07-03): a run "reported $1.27" while the
      Console balance dropped $3.51 — the difference was failed retry
