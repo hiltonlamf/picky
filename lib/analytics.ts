@@ -14,6 +14,14 @@ export type { ErrorCode };
  */
 export const EVENTS = {
   // --- core funnel ---
+  /**
+   * The hero's secondary CTA revealed the URL bar. Since the guide became the
+   * primary action the search is one click behind a trigger, so someone who
+   * never opened it is no longer the same as someone who opened it and never
+   * pasted — a distinction that did not exist while the field was always on
+   * screen, and the one that says whether hiding it went too far.
+   */
+  SEARCH_DISCLOSED: 'search_disclosed',
   SEARCH_SUBMITTED: 'search_submitted',
   MENU_CANDIDATES_SHOWN: 'menu_candidates_shown',
   MENUS_SELECTED: 'menus_selected',
@@ -24,6 +32,13 @@ export const EVENTS = {
   NO_MENU_RESULT: 'no_menu_result',
 
   // --- city guides ---
+  /**
+   * Click on a guide CTA, carrying `placement` so the hero button and the
+   * paper band can be compared. guide_viewed only fires on *arrival* at
+   * /dublin, so without this a click that never landed — bounce, back button,
+   * slow route — was indistinguishable from no click at all.
+   */
+  GUIDE_CTA_CLICKED: 'guide_cta_clicked',
   GUIDE_VIEWED: 'guide_viewed',
   GUIDE_RESTAURANT_CLICKED: 'guide_restaurant_clicked',
 

@@ -18,7 +18,21 @@ const TYPE_META: Record<MenuCandidate['type'], { Icon: typeof DocIcon; source: s
   subpage: { Icon: LinkIcon, source: 'Menu page' },
 };
 
-export default function HeroSearch({ supportLine }: { supportLine?: string }) {
+export default function HeroSearch({
+  autoFocusInput = false,
+  onCancel,
+  cancelLabel,
+}: {
+  /**
+   * Focus the URL field on mount. True only when a person opened the panel —
+   * never on page load, where it used to steal focus and pop the mobile
+   * keyboard before anyone had decided what they wanted.
+   */
+  autoFocusInput?: boolean;
+  /** Collapse the panel. Only ever offered in the 'idle' state. */
+  onCancel?: () => void;
+  cancelLabel?: string;
+}) {
   const router = useRouter();
   const [url, setUrl] = useState('');
   const [state, setState] = useState<AppState>('idle');
@@ -36,6 +50,12 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   // abandoned — which is what happened on the first real run and would have
   // made the metric read ~100% abandonment.
   const reachedTerminalRef = useRef(false);
+
+  // preventScroll keeps the headline in frame: without it, focusing a field
+  // near the fold jumps the page on mobile the instant the panel opens.
+  useEffect(() => {
+    if (autoFocusInput) inputRef.current?.focus({ preventScroll: true });
+  }, [autoFocusInput]);
 
   // Consume an SSE stream from a fetch Response. Resolves 'done' on a terminal
   // outcome (redirect / candidates / error), or the restaurantId to continue
@@ -366,7 +386,21 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
   // The white field against the dark hero is deliberate: a translucent input on
   // a dark ground reads as decoration, while a white box reads as "type here".
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-[760px] mt-7">
+    <form
+      onSubmit={handleSubmit}
+      // Escape lives on the form, not on window, so it can't fight the feedback
+      // modal or the NPS prompt — and because the parsing/selecting/error
+      // branches return above this JSX, it is structurally unreachable outside
+      // the idle state. Gated on an empty field: closing the panel discards the
+      // component, and Escape must never throw away a link someone just pasted.
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && onCancel && !url.trim()) {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+      className="w-full max-w-[760px] mt-5"
+    >
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1 min-w-0">
           <LinkIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -384,7 +418,6 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
             // A public restaurant URL is not personal data.
             className="paste-field pl-[46px] pr-11 text-base ph-no-mask"
             autoComplete="url"
-            autoFocus
             aria-label="Restaurant website link"
             aria-invalid={!!error}
             ref={inputRef}
@@ -413,7 +446,15 @@ export default function HeroSearch({ supportLine }: { supportLine?: string }) {
         </p>
       )}
 
-      {supportLine && <p className="mt-9 text-sm text-paper/70">{supportLine}</p>}
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-3 text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2"
+        >
+          {cancelLabel ?? 'Cancel'}
+        </button>
+      )}
     </form>
   );
 }
