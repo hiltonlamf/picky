@@ -211,7 +211,11 @@ export default async function CityGuidePage({ params }: { params: { city: string
           <p className="text-sm text-paper/85 mb-5 max-w-[46ch]">
             Paste any restaurant link and we&apos;ll read the menu for you, dish by dish.
           </p>
-          <Link href="/" className="btn-cta inline-block">
+          {/* ?search=1 opens the homepage hero's search panel straight away —
+              the guide is now the homepage's primary CTA, so a bare "/" would
+              land people on a page where the box this button promises is
+              hidden behind another click. */}
+          <Link href="/?search=1" className="btn-cta inline-block">
             🥦 Find my veggies →
           </Link>
         </div>
