@@ -30,6 +30,16 @@ export type SpendContext = {
   restaurantId?: string | null;
   url?: string | null;
   restaurantName?: string | null;
+  /**
+   * Who this spend is for. 'product' = the app serving a visitor, 'qa' = a live
+   * QA or spend-verification run. Both are real money and both belong in the
+   * ledger, but a total that cannot separate them can't answer "what does it
+   * cost to serve a user?" — and that is the number the budget rests on.
+   * Defaults to 'product', so a forgotten context is counted as real traffic
+   * (the conservative direction: it over-states the product's cost rather than
+   * hiding spend).
+   */
+  source?: 'product' | 'qa';
 };
 
 const store = new AsyncLocalStorage<SpendContext>();
@@ -74,7 +84,7 @@ export async function recordSpend(usage: AIUsage): Promise<void> {
     // Imported lazily: lib/db imports lib/ai, so a top-level import here would
     // close a require cycle.
     const { logUsage } = await import('./db');
-    await logUsage(ctx.restaurantId ?? null, ctx.url ?? null, usage, ctx.restaurantName ?? null);
+    await logUsage(ctx.restaurantId ?? null, ctx.url ?? null, usage, ctx.restaurantName ?? null, ctx.source ?? 'product');
   } catch {
     // Best effort by design.
   }

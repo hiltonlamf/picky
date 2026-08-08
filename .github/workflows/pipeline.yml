@@ -14,6 +14,16 @@ name: Live pipeline QA
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'diagnose = FREE scrape/discover dump (no AI). pipeline = the real, paid suite. verify-spend = prove every call reaches ai_usage_log (<$0.10).'
+        type: choice
+        options: [pipeline, diagnose, verify-spend]
+        default: pipeline
+      filter:
+        description: 'Case-name substrings (e.g. "newking,dekas"), OR a full https:// URL to probe directly in diagnose mode. Blank = the whole set.'
+        type: string
+        default: ''
   push:
     branches: [main] # i.e. every PR merge — ~$0.75/run at current model tiering
 
@@ -39,10 +49,66 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, not 20: @supabase/realtime-js needs a native WebSocket, which
+          # Node 20 lacks, and it throws at client construction — before any
+          # work happens. Harmless while this workflow had no DB credentials;
+          # the moment it got them (so QA spend could reach ai_usage_log) it
+          # would have killed every run, paid ones included. Found by run #46,
+          # which crashed at $0 spent.
+          node-version: 22
           cache: npm
       - run: npm ci
+      # Without a working reader, every JS-rendered restaurant looks like it has
+      # no menu — so make the reader's configuration impossible to miss.
+      # r.jina.ai now answers keyless requests with a Cloudflare challenge
+      # (verified 2026-08-05, run #29: HTTP 403 "Just a moment..."), so the
+      # keyless tier can no longer be relied on.
+      - name: Reader configuration
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          [ -n "$JINA_API_KEY" ] && echo "Jina: keyed (${#JINA_API_KEY} chars) — tried first" || echo "Jina: NO KEY — skipped entirely (keyless is a guaranteed Cloudflare 403)"
+          [ -n "$FIRECRAWL_API_KEY" ] && echo "Firecrawl: ENABLED (${#FIRECRAWL_API_KEY} chars)" || echo "Firecrawl: DISABLED — no FIRECRAWL_API_KEY repo secret"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && echo "Spend ledger: ai_usage_log will record this run" || echo "::warning::No Supabase credentials — this run's AI spend will NOT reach ai_usage_log."
+          if [ -z "$JINA_API_KEY" ] && [ -z "$FIRECRAWL_API_KEY" ]; then
+            echo "::warning::No reader is configured. JS-rendered sites cannot be read, and this run will report menus as missing for reasons unrelated to the code under test."
+          fi
+      # A full URL is probed directly (useful for a single stubborn asset, e.g.
+      # "can the reader read THIS pdf?"); anything else filters the case list.
+      - name: Diagnose (free — no AI calls, no DB writes)
+        if: inputs.mode == 'diagnose'
+        run: |
+          if [ "${FILTER#https://}" != "$FILTER" ] || [ "${FILTER#http://}" != "$FILTER" ]; then
+            npx tsx scripts/diagnose-site.ts "$FILTER" 2>&1 | tee pipeline-log.txt
+          else
+            npx tsx scripts/diagnose-site.ts --cases "$FILTER" 2>&1 | tee pipeline-log.txt
+          fi
+        shell: bash
+        env:
+          FILTER: ${{ inputs.filter }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+      # Answers "is our cost number real?" on demand. Makes a handful of calls
+      # INCLUDING a deliberate failure — the path that historically dropped its
+      # spend — then reconciles rows written against spend added. Under $0.10.
+      - name: Verify spend logging (~$0.05)
+        if: inputs.mode == 'verify-spend'
+        run: npx tsx scripts/verify-spend-logging.ts 2>&1 | tee pipeline-log.txt
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # NB: this is a real billed call (~$0.00002 — 1 output token) made outside
+      # the app, so it is the one bit of spend ai_usage_log structurally cannot
+      # record. Kept because "is the key even valid?" is worth far more than
+      # two-thousandths of a cent, but noted so the ledger's gap is a known one.
       - name: API key sanity check
+        if: inputs.mode != 'diagnose' && inputs.mode != 'verify-spend'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -54,12 +120,20 @@ jobs:
             -H "content-type: application/json" \
             -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
           grep -o '"type":"[a-z_]*"' /tmp/api-check.json | head -2 || true
+      # Supabase creds are here for ONE reason: ai_usage_log. QA runs spend real
+      # money (~$0.45 for the six-site set) and without credentials every spend
+      # row is silently dropped, so the ledger we budget from never sees it.
+      # The runner writes nothing else to the DB — no restaurants, no menus.
       - name: Run live pipeline suite
-        run: npm run test:pipeline 2>&1 | tee pipeline-log.txt
+        if: inputs.mode != 'diagnose' && inputs.mode != 'verify-spend'
+        run: npx tsx scripts/run-pipeline-tests.ts ${{ inputs.filter }} 2>&1 | tee pipeline-log.txt
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       - name: Summary
         if: always()
         run: |

@@ -762,15 +762,49 @@ ones in `.env.local`. Two consequences, both real time-sinks:
   `set -a; . ./.env.local; set +a`. Don't trust a rendered admin page until
   you've ruled this out.
 
-**Applying Supabase migrations.** The direct DB connection is BLOCKED here —
-`supabase db push` / `migration list` fail with a connect error
-(IPv6/pooler unreachable). Apply DDL via the **Management API** over plain
-HTTPS instead:
-`POST https://api.supabase.com/v1/projects/{ref}/database/query` with
-`Authorization: Bearer $SUPABASE_ACCESS_TOKEN` and body `{ "query": "..." }`.
-Make the SQL idempotent (`IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and
-also `INSERT ... INTO supabase_migrations.schema_migrations (version, name)`
-so a future `db push` skips it. Reconcile against the live schema after.
+**Applying Supabase migrations.** The *default, non-pooled* direct DB host
+(`db.{ref}.supabase.co:5432`) is IPv6-only and unreachable from this
+sandbox ("no route to host") — don't waste time retrying it. Two working
+routes, in order of preference:
+
+1. **`supabase db push --db-url`, pointed at the session pooler** (verified
+   working 2026-08-08 — this was previously mis-documented as fully
+   blocked). Needs only `SUPABASE_DB_PASSWORD` from `.env.local`, NOT
+   `SUPABASE_ACCESS_TOKEN` (so it still works even when that token has
+   expired — `supabase link`/`projects list` need the token, `--db-url`
+   does not):
+   ```
+   postgresql://postgres.{ref}:{url-encoded-password}@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
+   ```
+   - **Port 5432 (session mode), not 6543 (transaction mode)** — 6543
+     throws `prepared statement "..." already exists (SQLSTATE 42P05)` on
+     every attempt; Supavisor's transaction pooling doesn't support the
+     CLI's prepared-statement reuse.
+   - The pooler host/region can drift with the project's Supabase
+     infrastructure — this project resolved on `aws-1-eu-central-1`, not
+     the more common `aws-0-*` prefix (every `aws-0-*` region 404s with
+     "tenant/user not found"). If it stops working, re-discover with
+     `--dry-run` against a few `aws-0-`/`aws-1-` × region combinations.
+   - **The DB password contains literal `$` characters.** Read it straight
+     from the file (`grep '^SUPABASE_DB_PASSWORD=' .env.local`) rather than
+     `source`-ing it — bash/zsh expand `$Cc5` etc. as unset variables and
+     silently truncate it to a few characters, which looks exactly like an
+     empty/placeholder credential. Single-quote it in shell, percent-encode
+     `$` as `%24` inside the connection URL.
+   - Always `--dry-run` first. Docker warnings at the end (`failed to cache
+     migrations catalog`) are harmless — local-only, needs Docker Desktop
+     which isn't installed here.
+2. **The Management API**, when you need something `db push` can't do
+   (inspecting non-migration state, one-off queries) or the pooler route
+   above stops working: `POST
+   https://api.supabase.com/v1/projects/{ref}/database/query` with
+   `Authorization: Bearer $SUPABASE_ACCESS_TOKEN` and body
+   `{ "query": "..." }`. Needs a **valid, unexpired** access token — test
+   first with `GET /v1/organizations` (a 401 means the token itself is
+   dead, not a config problem). Make the SQL idempotent (`IF NOT EXISTS`,
+   `ADD COLUMN IF NOT EXISTS`) and also `INSERT ... INTO
+   supabase_migrations.schema_migrations (version, name)` so a future
+   `db push` skips it. Reconcile against the live schema after.
 
 **CI runs `next build`; our fast checks don't.** `npm run
 typecheck`/`lint`/`test` can all pass while `next build` fails in CI —
@@ -802,6 +836,28 @@ needs behavioral verification but local `dev`/`build` won't cooperate,
 prefer a targeted check over waiting: invoke the route handler function
 directly in a one-off script, or write a direct DB assertion test, rather
 than trying to force a full local dev/build cycle.
+
+**The hang isn't limited to `next build`/`dev`/`lint` — treat ANY local
+command as suspect if it goes quiet.** Confirmed 2026-08-07 on the PR #27
+timeout fix: `tsc --noEmit` sat at near-zero CPU for 25+ minutes, and a
+`vitest run` right after it was still spinning up workers 15 minutes in —
+both commands CLAUDE.md previously called "reasonably reliable locally".
+There's no reliable signal for *which* command will wedge this session; the
+only sane response is a time-box (a couple of minutes of real CPU activity,
+checked via `ps`, not just elapsed wall time), then kill it and push.
+
+**Fastest path when local verification is stuck: ask the founder to test the
+Vercel preview himself.** He has a working browser and Vercel dashboard
+access that the sandbox doesn't always have (SSO-protected preview URLs
+need a bypass token or a temporary protection toggle to hit from a script —
+see the RLS/Supabase gotchas below for the general pattern). Rather than
+fighting the sandbox for a local repro, push the branch and ask him to open
+the preview URL and try the specific flow — for a UI/behavior change this is
+often both faster AND a more realistic test than anything scripted, since he
+IS the real user the deployment is for. Save scripted end-to-end
+verification (driving the API directly) for cases that need many repeated
+or precisely-controlled runs, like proving a pipeline fix across several
+restaurants — not as the default first move when a local command hangs.
 
 **Vercel env vars.** `vercel env pull` returns BLANK for *every* value in
 this sandbox (even non-sensitive ones), so you CANNOT verify a value by

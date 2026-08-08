@@ -44,7 +44,11 @@ export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error' | 'no
  *  'not_listed'  — the site is up but publishes no readable menu online.
  *  'unavailable' — the site is down / not live yet (a definitive fetch failure).
  *  'closed'      — admin-set: the restaurant is permanently closed. */
-export type NoMenuReason = 'not_listed' | 'unavailable' | 'closed';
+// 'blocked': the menu exists and a person can open it, but the host refused
+// us (e.g. a Google Drive file whose owner disabled downloading). Kept
+// separate from 'not_listed' because the two need different user-facing copy
+// and should never be counted together when judging coverage.
+export type NoMenuReason = 'not_listed' | 'unavailable' | 'closed' | 'blocked';
 
 export interface Restaurant {
   id: string;
@@ -120,6 +124,10 @@ export interface AnalysisState {
   candidateUsage?: AIUsage | null;
   /** Finished menus awaiting the final merge. */
   done: Array<{ label: string; menu: ClassifiedMenu }>;
+  /** A source existed but refused us (see NoMenuReason 'blocked'). Persisted
+   *  because one analysis can span several resumable requests, and the final
+   *  message must know it was a refusal rather than an absence. */
+  blocked?: boolean;
   /** Cost accumulated across finished candidates. */
   usage?: AIUsage | null;
   /** Telemetry category of the analyzed selection (pdf/image/js/text/multi) —

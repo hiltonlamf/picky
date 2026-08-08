@@ -13,6 +13,11 @@ export interface DiscoveryResult {
 /** Max menu options shown in the picker — beyond this the list stops being a choice. */
 export const MAX_PICKER_CANDIDATES = 6;
 
+/** A URL path segment that's just a language marker (`/nl/`, `/eng/`, ...) —
+ *  shared by discoverMenus' language-variant-sibling check and
+ *  preferEnglishSiblings' same-menu-per-language dedup below. */
+const LANG_SEGMENT_RE = /\/(en|eng|english|nl|de|fr|es|it|pt|da|sv|no|fi|pl|zh|zh-hans|ja)(\/|$)/i;
+
 /** Stable, non-cryptographic id for a candidate (FNV-1a, 32-bit, hex). */
 function candidateId(type: MenuCandidateType, ref: string): string {
   const input = `${type}|${ref}`;
@@ -43,17 +48,34 @@ const MENU_WORD_RE =
 const BARE_DECIMAL_PRICE_RE =
   /\b(?<!\d{1,2}\.\d{2}[-–]\s{0,3})\d{1,3}\.\d{2}\b(?![^\d]{0,3}[-–]\s*\d{1,2}\.\d{2}\b)/g;
 
+function priceTokenCount(text: string): number {
+  const currencyTokens = (text.match(/(?:€|£|\$)\s?\d/g) ?? []).length;
+  const bareDecimalTokens = (text.match(BARE_DECIMAL_PRICE_RE) ?? []).length;
+  return currencyTokens + bareDecimalTokens;
+}
+
 /** Heuristic: does this text actually read like a menu (prices + food words)? */
 export function textLooksLikeMenu(text: string): boolean {
   if (!text || text.length < 100) return false;
-  const currencyTokens = (text.match(/(?:€|£|\$)\s?\d/g) ?? []).length;
-  const bareDecimalTokens = (text.match(BARE_DECIMAL_PRICE_RE) ?? []).length;
-  const priceTokens = currencyTokens + bareDecimalTokens;
+  const priceTokens = priceTokenCount(text);
   const hasMenuWords = MENU_WORD_RE.test(text);
   // Priceless menus (tasting menus) list many courses — a single menu word in
   // a long marketing page ("seasonal sharing plates…") is not a menu.
   const menuWordCount = (text.match(new RegExp(MENU_WORD_RE.source, 'gi')) ?? []).length;
   return (priceTokens >= 4 && hasMenuWords) || (priceTokens >= 8) || (menuWordCount >= 5 && text.length > 1500);
+}
+
+/**
+ * A menu we'd bet the whole discovery on. Deliberately stricter than
+ * `textLooksLikeMenu`: its priceless-menu clause (5+ menu words in a long page)
+ * is generous on purpose, and a restaurant-group landing page trips it easily —
+ * linastores.co.uk's "Our Locations / Delicatessen / … fresh pasta" blurb scored
+ * as a menu, which suppressed the deeper crawl and left the eight real location
+ * menus undiscovered. Real prices are the signal that a page IS the menu rather
+ * than merely talking about food.
+ */
+function textIsConfidentMenu(text: string): boolean {
+  return textLooksLikeMenu(text) && priceTokenCount(text) >= 4;
 }
 
 /**
@@ -70,7 +92,7 @@ export const DRINK_SOURCE_RE =
  * or city. Kept separate from DRINK_SOURCE_RE for clarity.
  */
 export const NON_FOOD_MENU_RE =
-  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu)\b/i;
+  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack)\b/i;
 
 /** True if a menu label / hint is a non-food menu that should never be captured. */
 export function isNonFoodMenu(text: string): boolean {
@@ -107,6 +129,46 @@ type Raw = {
 const DEEP_NAV_LINKS = 3;
 const DEEP_BUDGET_MS = 15000;
 
+/** Slugs that mark a page as "a list of branches", not a menu in itself. */
+const LOCATION_INDEX_RE = /\b(location|locations|venue|venues|restaurants|branches|find[-\s]?us|our[-\s]?places)\b/i;
+
+/** A link that looks like one specific branch of a chain (…/locations/soho). */
+function looksLikeBranchLink(url: string): boolean {
+  try {
+    const segments = new URL(url).pathname.split('/').filter(Boolean);
+    if (segments.length < 2) return false;
+    return segments.some((s) => LOCATION_INDEX_RE.test(s));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How many branches of a chain we read menus from.
+ *
+ * Founder's call (2026-08-05): a multi-location restaurant should present like
+ * a restaurant with several menus — the way lunch/dinner/tasting already do —
+ * rather than us picking one branch and hiding the rest. Capped at three so a
+ * twenty-site group can't turn one search into twenty crawls.
+ */
+const MAX_BRANCHES = 3;
+
+/** Human name for a branch, from its URL slug: ".../locations/greek-street" →
+ *  "greek street". Used as a menu label so the picker reads "Greek Street" the
+ *  same way it reads "Lunch". */
+function branchLabel(url: string): string {
+  const slug = hintFromUrl(url);
+  return slug && !isOpaqueHint(slug) ? slug : '';
+}
+
+/** Prefix a menu hint with its branch, so several locations' menus stay
+ *  tellable apart in the picker ("Greek Street — Dinner"). */
+function withBranch(label: string, hint: string): string {
+  if (!label) return hint;
+  if (!hint) return label;
+  return hint.toLowerCase().includes(label.toLowerCase()) ? hint : `${label} — ${hint}`;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]).catch(() => null);
 }
@@ -125,14 +187,31 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
   const subs = await Promise.all(targets.map((u) => withTimeout(scrapeRestaurant(u), DEEP_BUDGET_MS)));
 
   const raw: Raw[] = [];
+  /** Branch pages worth a second hop, if this first hop finds nothing. */
+  const branchLeads: string[] = [];
+
   for (let i = 0; i < subs.length; i++) {
     const sub = subs[i];
     if (!sub) continue;
+    const before = raw.length;
+    // When this hop IS a branch page, name everything it yields after the
+    // branch so two locations' menus don't both come back as "Menu".
+    const venue = looksLikeBranchLink(targets[i]) ? branchLabel(targets[i]) : '';
     for (const pdf of sub.menuPdfUrls ?? []) {
-      raw.push({ type: 'pdf', ref: pdf, hint: sub.linkLabels?.[pdf] || hintFromUrl(pdf), source: 'subpage' });
+      raw.push({
+        type: 'pdf',
+        ref: pdf,
+        hint: withBranch(venue, sub.linkLabels?.[pdf] || hintFromUrl(pdf)),
+        source: 'subpage',
+      });
     }
     for (const link of sub.menuLinks ?? []) {
-      raw.push({ type: 'subpage', ref: link, hint: sub.linkLabels?.[link] || hintFromUrl(link), source: 'subpage' });
+      raw.push({
+        type: 'subpage',
+        ref: link,
+        hint: withBranch(venue, sub.linkLabels?.[link] || hintFromUrl(link)),
+        source: 'subpage',
+      });
     }
     // The nav page itself reads like a menu → it's a menu subpage. We've
     // directly confirmed its own content, not just guessed from a link
@@ -146,6 +225,56 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
         source: 'subpage',
         contentValidated: true,
       });
+    }
+    // This hop was a dead end, but it looks like a chain's "Locations" index —
+    // remember its branch links for a possible second hop.
+    if (raw.length === before) {
+      const isIndex = LOCATION_INDEX_RE.test(targets[i]) || LOCATION_INDEX_RE.test(sub.title ?? '');
+      for (const link of sub.navLinks ?? []) {
+        if (looksLikeBranchLink(link)) branchLeads.push(link);
+      }
+      if (isIndex) {
+        for (const link of sub.navLinks ?? []) branchLeads.push(link);
+      }
+    }
+  }
+
+  // Second hop: a restaurant group's menus live on its branch pages (group
+  // homepage → Locations → King's Cross → menu), which a single hop can never
+  // reach. Each branch becomes its OWN named menu — the founder's model is that
+  // locations behave like lunch/dinner menus, not like one menu to choose from.
+  if (raw.length === 0 && branchLeads.length > 0) {
+    const chosen = Array.from(new Set(branchLeads)).slice(0, MAX_BRANCHES);
+    const branches = await Promise.all(chosen.map((u) => withTimeout(scrapeRestaurant(u), DEEP_BUDGET_MS)));
+    for (let b = 0; b < branches.length; b++) {
+      const branch = branches[b];
+      if (!branch) continue;
+      const venue = branchLabel(chosen[b]);
+      for (const pdf of branch.menuPdfUrls ?? []) {
+        raw.push({
+          type: 'pdf',
+          ref: pdf,
+          hint: withBranch(venue, branch.linkLabels?.[pdf] || hintFromUrl(pdf)),
+          source: 'subpage',
+        });
+      }
+      for (const link of branch.menuLinks ?? []) {
+        raw.push({
+          type: 'subpage',
+          ref: link,
+          hint: withBranch(venue, branch.linkLabels?.[link] || hintFromUrl(link)),
+          source: 'subpage',
+        });
+      }
+      if (textLooksLikeMenu(branch.menuText ?? '')) {
+        raw.push({
+          type: 'subpage',
+          ref: branch.canonicalUrl || chosen[b],
+          hint: venue || hintFromUrl(chosen[b]),
+          source: 'subpage',
+          contentValidated: true,
+        });
+      }
     }
   }
   return raw;
@@ -209,7 +338,25 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   for (const pdf of scrape.menuPdfUrls ?? []) {
     raw.push({ type: 'pdf', ref: pdf, hint: hintFor(pdf), source: 'homepage' });
   }
+  // A subpage that's just a language-variant SIBLING of the page discovery
+  // already used as its primary source (e.g. finalUrl is /nl/menu, and
+  // /eng/menu is a switcher link found ON that page) is the untested case
+  // `preferEnglishSiblings` below can't catch: it only compares candidates
+  // that are ALREADY in the raw list against each other, but this sibling
+  // was found ONE level deeper (during the dive into finalUrl itself) and
+  // never independently checked for its own PDF/content — restaurantdekas.com
+  // hit exactly this: /nl/menu became finalUrl, its own page links to
+  // /eng/menu, and /eng/menu survived into the picker as a confusing "Menu 2"
+  // option alongside the real PDF candidate, even though it's nothing more
+  // than the same page in another language. Skip it here rather than offer a
+  // candidate nobody asked for and that only duplicates what finalUrl already
+  // covers.
+  const isLanguageVariantOfPrimaryPage = (ref: string): boolean => {
+    if (!LANG_SEGMENT_RE.test(ref) || !LANG_SEGMENT_RE.test(finalUrl)) return false;
+    return ref.replace(LANG_SEGMENT_RE, '/*$2') === finalUrl.replace(LANG_SEGMENT_RE, '/*$2');
+  };
   for (const link of scrape.menuLinks ?? []) {
+    if (isLanguageVariantOfPrimaryPage(link)) continue;
     raw.push({ type: 'subpage', ref: link, hint: hintFor(link), source: 'subpage' });
   }
 
@@ -235,15 +382,47 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     });
   };
 
-  let deduped = dedupeRaw(raw);
+  /**
+   * On a multilingual site the same menu shows up once per language
+   * (restaurantdekas.com yields /nl/menu AND /eng/menu). Offering both makes
+   * the user pick between two copies of one menu and risks extracting the
+   * non-English one — which reads worse for our English-first prompts. Keep the
+   * English sibling when a pair differs only by its language segment.
+   */
+  const preferEnglishSiblings = (items: Raw[]): Raw[] => {
+    const ENGLISH_SEGMENT_RE = /^(en|eng|english)$/i;
+    const keyFor = (ref: string): string | null => {
+      if (!LANG_SEGMENT_RE.test(ref)) return null;
+      return ref.replace(LANG_SEGMENT_RE, '/*$2');
+    };
+    const englishByKey = new Set<string>();
+    for (const r of items) {
+      const key = keyFor(r.ref);
+      const seg = LANG_SEGMENT_RE.exec(r.ref)?.[1] ?? '';
+      if (key && ENGLISH_SEGMENT_RE.test(seg)) englishByKey.add(key);
+    }
+    return items.filter((r) => {
+      const key = keyFor(r.ref);
+      if (!key || !englishByKey.has(key)) return true;
+      const seg = LANG_SEGMENT_RE.exec(r.ref)?.[1] ?? '';
+      return ENGLISH_SEGMENT_RE.test(seg);
+    });
+  };
 
-  // Deep fallback: the landing page has no self-contained menu source (no menu
-  // text, no PDF) and at most one subpage lead — follow top nav links one hop
-  // (multi-venue sites where menus hide under "Restaurants", JS-heavy chains).
-  const hasStrongSource = deduped.some((r) => r.type === 'text' || r.type === 'pdf');
+  let deduped = preferEnglishSiblings(dedupeRaw(raw));
+
+  // Deep fallback: the landing page has no self-contained menu source (no
+  // priced menu text, no PDF) and at most one subpage lead — follow top nav
+  // links one hop (multi-venue sites where menus hide under "Restaurants",
+  // JS-heavy chains). A price-free text candidate does NOT count as strong:
+  // see textIsConfidentMenu — trusting one is how a chain's locations list
+  // became "the menu" and stopped us ever reaching the real ones.
+  const hasStrongSource = deduped.some(
+    (r) => r.type === 'pdf' || (r.type === 'text' && textIsConfidentMenu(inlineText))
+  );
   const subpageCount = deduped.filter((r) => r.type === 'subpage').length;
   if (!hasStrongSource && subpageCount <= 1 && (scrape.navLinks?.length ?? 0) > 0) {
-    deduped = dedupeRaw([...raw, ...(await deepDiscoverRaw(scrape.navLinks!))]);
+    deduped = preferEnglishSiblings(dedupeRaw([...raw, ...(await deepDiscoverRaw(scrape.navLinks!))]));
   }
 
   let finalCandidates: MenuCandidate[] = [];
@@ -285,13 +464,26 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     // text looks like a menu, not just a guess from a generic link label like
     // "Menus") get the same protection — the labeler has no page content to
     // judge distinctness from, so its "not distinct" guess is the weaker signal.
+    // A sub-page whose own URL or link text says "menu" is a menu source, and
+    // the labeler is guessing without ever seeing the page. neni-amsterdam.nl
+    // failed exactly here: /menus was discovered correctly, judged "not
+    // distinct", dropped, and the restaurant fell back to homepage nav text and
+    // came out with no dishes. Losing a real menu is worse than showing one
+    // option too many (founder's priority ①).
+    const namedLikeAMenu = (r: Raw): boolean =>
+      r.type === 'subpage' && /\bmenus?\b|menukaart|speisekarte|carte/i.test(`${r.hint} ${hintFromUrl(r.ref)}`);
+
     const kept = judged.filter(
       (j) =>
         !j.verdict.isDrinkOnly &&
         // Non-food menus are dropped even for text/pdf (checked against the AI's
         // label too, in case the raw hint was opaque) — overrides the survival rule.
         !isNonFoodMenu(`${j.verdict.label} ${j.raw.hint} ${hintFromUrl(j.raw.ref)}`) &&
-        (j.verdict.isDistinctMenu || j.raw.type === 'text' || j.raw.type === 'pdf' || j.raw.contentValidated)
+        (j.verdict.isDistinctMenu ||
+          j.raw.type === 'text' ||
+          j.raw.type === 'pdf' ||
+          j.raw.contentValidated ||
+          namedLikeAMenu(j.raw))
     );
 
     // Resolve duplicate groups (same menu in several formats) via duplicateOf

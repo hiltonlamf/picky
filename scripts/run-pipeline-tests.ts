@@ -3,6 +3,7 @@
  *
  *   npx tsx scripts/run-pipeline-tests.ts            # core cases (PR gate)
  *   npx tsx scripts/run-pipeline-tests.ts misters    # filter by substring
+ *   npx tsx scripts/run-pipeline-tests.ts tofu,lina  # or several, comma-separated
  *   npx tsx scripts/run-pipeline-tests.ts --smoke    # stable 3-site subset
  *   npx tsx scripts/run-pipeline-tests.ts --extended # core + extended Dublin QA set
  *
@@ -22,6 +23,7 @@ import { discoverMenus, DRINK_SOURCE_RE, MAX_PICKER_CANDIDATES } from '../lib/me
 import { extractAndMerge, ExtractionError, ExtractContext, looksLikeHeaderItems, MIN_FOOD_ITEMS } from '../lib/menu-extract';
 import { countFoodItems } from '../lib/ai';
 import { isReaderEnabled } from '../lib/reader';
+import { withSpendContext } from '../lib/ai-spend';
 import type { ClassifiedMenu } from '../types';
 
 type Category = 'text' | 'pdf' | 'image' | 'multilang' | 'js' | 'multi';
@@ -85,7 +87,21 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-async function runCase(c: Case): Promise<CaseResult> {
+/**
+ * QA spend is real spend, and it was invisible.
+ *
+ * Every call here goes through callClaude, which writes an ai_usage_log row —
+ * but only if Supabase is configured. In CI it wasn't, so a whole class of
+ * genuine spend (this PR alone: ~$1.25 across nine runs; CLAUDE.md records a
+ * two-day QA session that burned ~$12) never reached the ledger we make budget
+ * decisions from. Wrapping each case attributes its rows to the site under
+ * test, so a run can be read back per restaurant rather than as a lump.
+ */
+function runCase(c: Case): Promise<CaseResult> {
+  return withSpendContext({ url: c.url, restaurantName: `QA: ${c.name}`, source: 'qa' }, () => runCaseInner(c));
+}
+
+async function runCaseInner(c: Case): Promise<CaseResult> {
   cur = { pass: 0, fail: 0, skip: 0, row: '' };
   console.log(`\n=== ${c.name} [${c.category}] — ${c.url} ===`);
   try {
@@ -185,7 +201,15 @@ async function main() {
     : extended
       ? CASES
       : filter
-        ? CASES.filter((c) => c.name.toLowerCase().includes(filter) || c.url.includes(filter))
+        ? // Comma-separated substrings: "tofu,lina,kas" targets exactly those
+          // sites. Re-verifying one fix shouldn't mean paying for 15 cases.
+          CASES.filter((c) =>
+            filter
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)
+              .some((t) => c.name.toLowerCase().includes(t) || c.url.toLowerCase().includes(t))
+          )
         : CASES.filter((c) => !c.extended);
 
   console.log(`Reader enabled: ${isReaderEnabled()} | provider auto${smoke ? ' | SMOKE subset' : extended ? ' | EXTENDED set' : ''}`);

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext } from '@/lib/menu-extract';
+import { extractMenuResumable, mergeMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
@@ -9,6 +9,7 @@ import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/tel
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
+import { withDeadline } from '@/lib/deadline';
 
 // Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
 // and, if unfinished, persists its progress and asks the client to call back
@@ -167,6 +168,14 @@ export async function POST(request: NextRequest) {
           pdfUrls: payload.pdfUrls,
           imageUrls: payload.imageUrls,
           pageUrl: payload.finalUrl,
+          // A PDF that already has its own dedicated `pdf` candidate must never
+          // also be re-read via a different candidate's fallback (e.g. a
+          // `subpage` candidate that links to the exact same PDF) — that's a
+          // second full-price AI call over an identical document, and it can
+          // clobber the PDF candidate's own correct multi-menu labelling once
+          // mergeMenus sees 2 "named" results instead of 1. See
+          // ExtractContext.excludePdfUrls.
+          excludePdfUrls: payload.candidates.filter((c) => c.type === 'pdf').map((c) => c.ref),
           // Stream live extraction status so long analyses don't look frozen.
           onProgress: (message) => send({ type: 'progress', step: message, stepNumber: 1, totalSteps: 2 }),
         };
@@ -188,13 +197,20 @@ export async function POST(request: NextRequest) {
               continue;
             }
 
-            const r = await extractMenuResumable(
-              candidate,
-              ctx,
-              state.attemptIndex ?? 0,
-              deadline,
-              state.bestSoFar ?? null,
-              state.candidateUsage ?? undefined
+            // withDeadline, not just the `deadline` argument: that argument is
+            // only consulted BETWEEN attempts, so one slow fetch/read/upload
+            // inside an attempt could still outlive the function and drop the
+            // connection. The context clamps every outbound call to the time
+            // actually left.
+            const r = await withDeadline(deadline, () =>
+              extractMenuResumable(
+                candidate,
+                ctx,
+                state.attemptIndex ?? 0,
+                deadline,
+                state.bestSoFar ?? null,
+                state.candidateUsage ?? undefined
+              )
             );
 
             if (r.nextIndex !== null) {
@@ -213,6 +229,9 @@ export async function POST(request: NextRequest) {
             if (r.best && r.best.menu.sections.length > 0) {
               state.done.push({ label: candidate.label, menu: r.best.menu });
             }
+            // Remember a refusal across the resumable requests this analysis
+            // may be split into, so the final message can be the honest one.
+            if (r.blocked) state.blocked = true;
             state.usage = sumUsage(state.usage ?? undefined, r.usage);
             state.currentId = null;
             state.attemptIndex = 0;
@@ -238,19 +257,27 @@ export async function POST(request: NextRequest) {
           // no_menu so the results page shows the friendly, actionable screen
           // and future searches don't re-pay to re-read a menu-less site.
           // (spend already recorded by callClaude when the API call returned)
-          await markRestaurantNoMenu(restaurantId, 'not_listed', NO_MENU_MSG);
-          await logAttempt(false, NO_MENU_MSG, undefined, 'no_menu');
-          await emitAnalysisCompleted(false, 0, NO_MENU_MSG);
+          // "We were refused" is not "there is no menu". Record it as its own
+          // reason so the admin queue and the eval dashboard can tell the two
+          // apart, and show the user copy that asks for a hand instead of
+          // telling them the restaurant doesn't publish a menu.
+          const blockedRun = state.blocked === true;
+          const failureMsg = blockedRun ? BLOCKED_MENU_MESSAGE : NO_MENU_MSG;
+          await markRestaurantNoMenu(restaurantId, blockedRun ? 'blocked' : 'not_listed', failureMsg);
+          await logAttempt(false, failureMsg, undefined, 'no_menu');
+          await emitAnalysisCompleted(false, 0, failureMsg);
           send({ type: 'no_menu', restaurantId });
           return close();
         }
 
-        const merged = mergeMenus(state.done);
+        const merged = mergeMenus(selectSubstantialMenus(state.done));
 
         // Strong-model audit of the veg/vegan labels users filter by — the
         // guardrail that makes cheap Haiku extraction safe. Never throws.
+        // Same `deadline` as the extraction loop above: this call still counts
+        // against the request's real remaining budget, not a fresh allowance.
         send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
-        const verified = await verifyVegClassifications(merged, payload.title);
+        const verified = await withDeadline(deadline, () => verifyVegClassifications(merged, payload.title));
         const menu = verified.menu;
         state.usage = sumUsage(state.usage ?? undefined, verified.usage);
         if (!menu.restaurantName && payload.title) menu.restaurantName = payload.title;

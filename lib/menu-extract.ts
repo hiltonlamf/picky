@@ -1,6 +1,8 @@
 import type { ClassifiedMenu, MenuCandidate, RawSection } from '@/types';
 import {
+  AICallError,
   AIUsage,
+  MenuAccessBlockedError,
   classifyMenuWithAI,
   classifyMenuFromPdf,
   classifyMenuFromImages,
@@ -23,6 +25,22 @@ export interface ExtractContext {
   pdfUrls?: string[];
   imageUrls?: string[];
   pageUrl?: string; // the menu page URL — used to fetch a screenshot as last resort
+  /**
+   * PDFs already covered by their OWN independent `pdf`-type candidate in this
+   * selection. A `subpage` candidate that turns out to have no real inline
+   * text of its own (e.g. a page that just states lunch/dinner price tiers
+   * and links a downloadable PDF) falls back to classifying that same PDF —
+   * redundant, full-price work when the PDF is already being read on its own
+   * merits as a separate candidate. Restaurant de Kas's PDF (page 1 = Lunch,
+   * page 2 = Dinner) was read twice this way: once as its own `pdf`
+   * candidate, once via the `/eng/menu` subpage's fallback — two independent
+   * completions of the same document, which also meant the subpage's result
+   * outscored the pdf candidate's own correct internal Lunch/Dinner
+   * `menuLabel` tagging once mergeMenus saw 2 "named" menus instead of 1.
+   * Both `attemptPlan`'s alternate-PDF rung and `extractSubpage`'s own
+   * PDF fallback consult this list and skip anything already on it.
+   */
+  excludePdfUrls?: string[];
   /** Live status callback — long analyses stream these to the user so a slow
    *  extraction doesn't look like a frozen app. */
   onProgress?: (message: string) => void;
@@ -38,12 +56,26 @@ type Extraction = { menu: ClassifiedMenu; usage: AIUsage } | null;
  */
 export class ExtractionError extends Error {
   usage?: AIUsage;
-  constructor(message: string, usage?: AIUsage) {
+  /** The menu exists but we were refused access — a limitation of ours, not a
+   *  fact about the restaurant. Drives different, honest user-facing copy. */
+  blocked: boolean;
+  constructor(message: string, usage?: AIUsage, blocked = false) {
     super(message);
     this.name = 'ExtractionError';
     this.usage = usage;
+    this.blocked = blocked;
   }
 }
+
+/**
+ * Shown when a menu is there and a person could open it, but we could not.
+ * Founder's wording (2026-08-05): be straight about the limitation being ours
+ * and ask for a hand, rather than implying the restaurant has no menu.
+ */
+export const BLOCKED_MENU_MESSAGE =
+  'Some things on the web are off-limits to AI agents: either we cannot read them, or we are not ' +
+  "permitted to. Can you give us a hand by uploading the menu, or pasting a direct link? We'll " +
+  'read it right away.';
 
 const HEADER_ITEM_RE =
   /\b(menu|selection|set\s*menu|set\s*lunch|set\s*dinner|tasting|à la carte|a la carte|platter|board|sample)\b/i;
@@ -79,7 +111,12 @@ export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsag
  * available source in order and keeps the best — a nav-heavy page whose TEXT
  * is just venue blurb must still fall through to its PDF/images/screenshot.
  */
-async function extractSubpage(url: string, title?: string, model?: string): Promise<Extraction> {
+async function extractSubpage(
+  url: string,
+  title?: string,
+  model?: string,
+  excludePdfUrls?: string[]
+): Promise<Extraction> {
   try {
     const sub = await scrapeRestaurant(url);
     const t = title ?? sub.title;
@@ -88,8 +125,11 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
     if (sub.menuText && sub.menuText.length >= 100) {
       attempts.push(() => classifyMenuWithAI(sub.menuText, t, model));
     }
-    if (sub.menuPdfUrls && sub.menuPdfUrls.length > 0) {
-      attempts.push(() => classifyMenuFromPdf(sub.menuPdfUrls![0], t, model));
+    // Skip a PDF this sub-page merely links to when that exact PDF already has
+    // its own independent candidate — see ExtractContext.excludePdfUrls.
+    const subPdfUrls = (sub.menuPdfUrls ?? []).filter((u) => !excludePdfUrls?.includes(u));
+    if (subPdfUrls.length > 0) {
+      attempts.push(() => classifyMenuFromPdf(subPdfUrls[0], t, model));
     }
     if (sub.menuImages && sub.menuImages.length > 0) {
       attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 6), t, model));
@@ -101,14 +141,21 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
     let best: Extraction = null;
     let usage: AIUsage | undefined;
     for (const attempt of attempts) {
-      const res = await attemptOrNull(attempt);
-      usage = sumUsage(usage, res?.usage);
-      if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
-      if (isValid(res)) break;
+      const { result, usage: spent } = await attemptOrNull(attempt);
+      usage = sumUsage(usage, spent);
+      if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
+      if (isValid(result)) break;
     }
-    return best ? { menu: best.menu, usage: usage! } : null;
+    if (best) return { menu: best.menu, usage: usage! };
+    // Nothing usable — but this sub-page may have burned several calls getting
+    // there. Surface the spend instead of returning a bare null that loses it.
+    if (usage && usage.costUsd > 0) {
+      throw new AICallError(`No menu found on ${url}`, usage);
+    }
+    return null;
   } catch (err) {
     if (isBillingError(err)) throw err;
+    if (err instanceof AICallError) throw err;
     return null;
   }
 }
@@ -130,7 +177,7 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
         model
       );
     case 'subpage':
-      return extractSubpage(candidate.ref, title, model);
+      return extractSubpage(candidate.ref, title, model, ctx.excludePdfUrls);
     default:
       return null;
   }
@@ -147,16 +194,31 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
  * surface as such; retrying other sources just burns more calls and ends in a
  * misleading "couldn't read the menu".
  */
-async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Extraction> {
+type Attempt = { result: Extraction; usage?: AIUsage; blocked?: boolean };
+
+async function attemptOrNull(fn: () => Promise<Extraction>): Promise<Attempt> {
   try {
-    return await fn();
+    const result = await fn();
+    return { result, usage: result?.usage };
   } catch (err) {
     if (isBillingError(err)) {
       // Keep the underlying cause in server logs; users get the generic line.
       console.error('[extract] API access error:', err instanceof Error ? err.message : err);
       throw new Error('Our AI service is temporarily unavailable. Please try again later.');
     }
-    return null;
+    // A call that reached Anthropic was billed even though we can't use its
+    // output. Carrying its usage out is the difference between a rung of the
+    // retry ladder costing $0.02 and appearing to cost nothing — the undercount
+    // that made three of six restaurants report "$0.0000 spent" in run #33.
+    if (err instanceof AICallError) {
+      console.error('[extract] unusable AI response:', err.message);
+      return { result: null, usage: err.usage };
+    }
+    if (err instanceof MenuAccessBlockedError) {
+      console.error('[extract] menu exists but access was refused:', err.detail);
+      return { result: null, blocked: true };
+    }
+    return { result: null };
   }
 }
 
@@ -180,10 +242,11 @@ function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): Array<{ not
   const plan: Array<{ note: string; run: () => Promise<Extraction> }> = [
     { note: startMessage(candidate), run: () => runPrimary(candidate, ctx) },
   ];
-  if (candidate.type !== 'pdf' && ctx.pdfUrls?.length) {
+  const altPdfUrls = (ctx.pdfUrls ?? []).filter((u) => !ctx.excludePdfUrls?.includes(u));
+  if (candidate.type !== 'pdf' && altPdfUrls.length) {
     plan.push({
       note: 'That source was unclear — reading the menu PDF instead...',
-      run: () => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title),
+      run: () => classifyMenuFromPdf(altPdfUrls[0], ctx.title),
     });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
@@ -215,6 +278,8 @@ export interface ResumableResult {
   usage?: AIUsage;
   /** Attempt index to resume from, or null when the chain is finished. */
   nextIndex: number | null;
+  /** A source existed but refused us — see ExtractionError.blocked. */
+  blocked?: boolean;
 }
 
 /**
@@ -234,19 +299,21 @@ export async function extractMenuResumable(
   const plan = attemptPlan(candidate, ctx);
   let best: Extraction = carried;
   let usage: AIUsage | undefined = carriedUsage ?? carried?.usage;
+  let blocked = false;
 
   for (let i = startIndex; i < plan.length; i++) {
     if (isValid(best)) break;
     if (Date.now() >= deadline) {
-      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i };
+      return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: i, blocked };
     }
     progress(plan[i].note);
-    const res = await attemptOrNull(plan[i].run);
-    usage = sumUsage(usage, res?.usage);
-    if (res && (!best || countFoodItems(res.menu) > countFoodItems(best.menu))) best = res;
+    const { result, usage: spent, blocked: refused } = await attemptOrNull(plan[i].run);
+    usage = sumUsage(usage, spent);
+    if (refused) blocked = true;
+    if (result && (!best || countFoodItems(result.menu) > countFoodItems(best.menu))) best = result;
   }
 
-  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null };
+  return { best: best ? { menu: best.menu, usage: usage! } : null, usage, nextIndex: null, blocked };
 }
 
 export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext): Promise<Extraction> {
@@ -327,13 +394,56 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   return { restaurantName, language, cuisine, sections };
 }
 
+/**
+ * Real, substantial menus among several candidates about to be merged —
+ * drops thin/junk results (e.g. a page's course-tier pricing blurb misread
+ * as a handful of fake "dishes": "Menu 5 courses €86") ONLY when at least
+ * one OTHER candidate already clears MIN_FOOD_ITEMS on its own; a restaurant
+ * whose one true source is genuinely small must still be shown, not
+ * reported as "no menu found".
+ *
+ * Without this, a junk second candidate (sections.length > 0, but far below
+ * MIN_FOOD_ITEMS) was enough to make mergeMenus treat the merge as
+ * multi-candidate and overwrite a GOOD candidate's own correct internal
+ * menuLabel tagging with meaningless outer candidate labels — found on
+ * restaurantdekas.com: the homepage's course-tier price text ("Menu 3
+ * courses", "Menu 4 courses"...) qualified as a second "menu" purely by
+ * having sections, and that alone corrupted the real PDF candidate's
+ * correct Lunch/Dinner split into a flat, wrongly-labeled "Dishes" section.
+ */
+export function selectSubstantialMenus(
+  named: Array<{ label: string; menu: ClassifiedMenu }>
+): Array<{ label: string; menu: ClassifiedMenu }> {
+  const strong = named.filter(
+    (n) => countFoodItems(n.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(n.menu)
+  );
+  return strong.length > 0 ? strong : named;
+}
+
 /** Extract every selected candidate (bounded) and merge into a single menu. */
 export async function extractAndMerge(
   candidates: MenuCandidate[],
   ctx: ExtractContext
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> {
+  // Candidates with their own dedicated `pdf` candidate must never also be
+  // re-read via another candidate's fallback (see ExtractContext.excludePdfUrls).
+  const independentPdfRefs = candidates.filter((c) => c.type === 'pdf').map((c) => c.ref);
+  const scopedCtx: ExtractContext = {
+    ...ctx,
+    excludePdfUrls: Array.from(new Set([...(ctx.excludePdfUrls ?? []), ...independentPdfRefs])),
+  };
   const results = await Promise.all(
-    candidates.map(async (c) => ({ label: c.label, res: await extractMenu(c, ctx) }))
+    candidates.map(async (c) => {
+      const r = await extractMenuResumable(c, scopedCtx);
+      // Take `r.usage`, not `r.best.usage`: when every rung of the ladder fails,
+      // `best` is null — a shape that cannot carry usage — and reading spend off
+      // it discards calls Anthropic already billed. That is precisely the
+      // structural undercount CLAUDE.md records from 2026-07-25, and it was
+      // still live here: run #40 spent three real calls on Tofu Vegan and
+      // reported "$0.0000". `r.usage` is the accumulated total across every
+      // attempt, so it is also the more complete number on success.
+      return { label: c.label, res: r.best, usage: r.usage, blocked: r.blocked === true };
+    })
   );
 
   const named = results
@@ -343,20 +453,26 @@ export async function extractAndMerge(
   if (named.length > 1) ctx.onProgress?.('Combining the menus and classifying every dish...');
 
   let usage: AIUsage | undefined;
-  for (const r of results) usage = sumUsage(usage, r.res?.usage);
+  for (const r of results) usage = sumUsage(usage, r.usage);
 
   if (named.length === 0) {
     // Every source (text, PDF, images, screenshot, escalation) came back with
     // nothing — either the menu is unreadable or the site doesn't really have
     // one. Be honest about both possibilities — and carry the cost of all
     // those failed attempts so it lands in the spend accounting.
+    // A menu we were REFUSED is not a restaurant without a menu. Saying the
+    // latter would be false, and it would put the blame in the wrong place.
+    const wasBlocked = results.some((r) => r.blocked);
     throw new ExtractionError(
-      "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.",
-      usage
+      wasBlocked
+        ? BLOCKED_MENU_MESSAGE
+        : "We couldn't read a food menu on this website — it may not publish one online. If it does, paste a direct link to the menu page and we'll try again.",
+      usage,
+      wasBlocked
     );
   }
 
-  const merged = mergeMenus(named);
+  const merged = mergeMenus(selectSubstantialMenus(named));
 
   // Strong-model audit of the veg/vegan labels users actually filter by —
   // the guardrail that makes cheap Haiku extraction safe.

@@ -382,3 +382,140 @@ describe('recorded fixtures (skipped when not recorded)', () => {
     expect(imageCandidates.length).toBeLessThanOrEqual(1);
   });
 });
+
+describe('the 2026-08-05 "no menu listed on this site" cluster', () => {
+  it('a price-free landing blurb does NOT suppress the deeper crawl (linastores.co.uk)', async () => {
+    // Lina Stores' homepage lists its eight branches with enough food words
+    // ("Delicatessen", "pasta", "lunch"…) to trip textLooksLikeMenu's
+    // priceless-menu clause. That counted as a strong source, deep discovery
+    // never ran, and the eight real location menus were never found — the user
+    // saw "No menu listed on this site" for a chain with a menu on every page.
+    const locationsBlurb =
+      'Our Locations. Brewer Street Delicatessen, Soho London. Greek Street Restaurant. ' +
+      'Stable Street Restaurant and Delicatessen. Fresh pasta made daily, served for lunch and dinner. ' +
+      'Sharing plates and seasonal salad. Book a table for brunch or dinner at any of our restaurants. '.repeat(6);
+    const scrape = makeScrape({
+      menuText: locationsBlurb,
+      navLinks: ['https://www.linastores.co.uk/locations/stable-street-restaurant-delicatessen'],
+    });
+    mockScrape.mockResolvedValue(
+      makeScrape({
+        canonicalUrl: 'https://www.linastores.co.uk/locations/stable-street-restaurant-delicatessen',
+        menuLinks: ['https://www.linastores.co.uk/locations/stable-street-restaurant-delicatessen?menu=menu'],
+        linkLabels: {
+          'https://www.linastores.co.uk/locations/stable-street-restaurant-delicatessen?menu=menu': 'View Menus',
+        },
+      })
+    );
+
+    const res = await discoverMenus(scrape);
+    expect(mockScrape).toHaveBeenCalled(); // deep discovery ran at all
+    expect(res.candidates.some((c) => c.ref.includes('?menu=menu'))).toBe(true);
+  });
+
+  it('a priced menu on the landing page still short-circuits the crawl (no extra fetches)', async () => {
+    const res = await discoverMenus(makeScrape({ menuText: MENU_LIKE_TEXT, navLinks: ['https://x.ie/dining'] }));
+    expect(mockScrape).not.toHaveBeenCalled();
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
+  });
+
+  it('keeps the English menu and drops its Dutch twin (restaurantdekas.com)', async () => {
+    const scrape = makeScrape({
+      menuLinks: ['https://restaurantdekas.com/nl/menu', 'https://restaurantdekas.com/eng/menu'],
+    });
+    const res = await discoverMenus(scrape);
+    const refs = res.candidates.map((c) => c.ref);
+    expect(refs).toContain('https://restaurantdekas.com/eng/menu');
+    expect(refs).not.toContain('https://restaurantdekas.com/nl/menu');
+  });
+
+  it('keeps both when they are genuinely different menus, not language twins', async () => {
+    const scrape = makeScrape({
+      menuLinks: ['https://example.com/eng/lunch', 'https://example.com/eng/dinner'],
+    });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates).toHaveLength(2);
+  });
+
+  it('follows a chain homepage into one branch when the locations page is a dead end', async () => {
+    // Group homepage → /locations (no menu of its own) → a branch page that has
+    // the menu. One hop can never reach it; the second hop is bounded to a
+    // single branch on purpose.
+    const scrape = makeScrape({ navLinks: ['https://chain.com/locations'] });
+    mockScrape.mockImplementation(async (url: string) => {
+      if (url === 'https://chain.com/locations') {
+        return makeScrape({
+          canonicalUrl: url,
+          title: 'Our Locations',
+          navLinks: ['https://chain.com/locations/soho'],
+        });
+      }
+      return makeScrape({
+        canonicalUrl: 'https://chain.com/locations/soho',
+        menuPdfUrls: ['https://chain.com/menus/soho-dinner.pdf'],
+      });
+    });
+
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.ref === 'https://chain.com/menus/soho-dinner.pdf')).toBe(true);
+  });
+});
+
+describe('a subpage named "menu" survives a wrong labeler verdict (neni-amsterdam.nl)', () => {
+  it('keeps /menus even when the labeler says it is not distinct', async () => {
+    // NENI's /menus page was found correctly, then judged "not distinct" and
+    // dropped, leaving only homepage nav text — the restaurant came back with
+    // no dishes. The labeler never sees page content, so its guess is the
+    // weaker signal against a URL that literally says "menus".
+    mockLabeler.mockImplementation(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Menu',
+        isDistinctMenu: false,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }))
+    );
+    const scrape = makeScrape({ menuLinks: ['https://neni-amsterdam.nl/menus'] });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.ref === 'https://neni-amsterdam.nl/menus')).toBe(true);
+  });
+
+  it('still drops a non-menu subpage the labeler rejects', async () => {
+    mockLabeler.mockImplementation(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Page',
+        isDistinctMenu: false,
+        isDrinkOnly: false,
+        duplicateOf: null,
+      }))
+    );
+    const scrape = makeScrape({ menuLinks: ['https://example.com/order-takeaway'] });
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.ref.includes('order-takeaway'))).toBe(false);
+  });
+});
+
+describe('each branch of a chain becomes its own named menu (founder, 2026-08-05)', () => {
+  it('labels menus by location and keeps several branches', async () => {
+    const scrape = makeScrape({ navLinks: ['https://chain.com/locations'] });
+    mockScrape.mockImplementation(async (url: string) => {
+      if (url === 'https://chain.com/locations') {
+        return makeScrape({
+          canonicalUrl: url,
+          title: 'Our Locations',
+          navLinks: ['https://chain.com/locations/soho', 'https://chain.com/locations/kings-cross'],
+        });
+      }
+      const slug = url.split('/').pop();
+      return makeScrape({ canonicalUrl: url, menuPdfUrls: [`https://chain.com/menus/${slug}.pdf`] });
+    });
+
+    const res = await discoverMenus(scrape);
+    const labels = res.candidates.map((c) => c.label.toLowerCase()).join(' | ');
+    expect(res.candidates.length).toBeGreaterThanOrEqual(2);
+    expect(labels).toContain('soho');
+    expect(labels).toContain('kings cross');
+  });
+});
