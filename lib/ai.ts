@@ -874,7 +874,21 @@ function accessDeniedReason(status: number, visibleText: string): string | null 
  */
 export function driveConfirmUrl(html: string): string | null {
   const action = /<form[^>]+action="([^"]+)"/i.exec(html)?.[1];
-  if (!action || !/google\.com/.test(action)) return null;
+  if (!action) return null;
+  // Real hostname check, not a substring match: `action` is text lifted from a
+  // fetched page, and the page itself can be from ANY restaurant site a user
+  // submits — a substring test like /google\.com/.test(action) is satisfied by
+  // e.g. `http://169.254.169.254/?x=google.com`, so a malicious site could use
+  // this "Drive confirm" path to redirect our server-side fetch anywhere,
+  // including cloud metadata endpoints. Only follow it when the action's actual
+  // host is Google's.
+  let host: string;
+  try {
+    host = new URL(action.replace(/&amp;/g, '&')).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (host !== 'drive.google.com' && host !== 'docs.google.com' && !host.endsWith('.google.com')) return null;
   const params = new URLSearchParams();
   const inputRe = /<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"/gi;
   let m: RegExpExecArray | null;

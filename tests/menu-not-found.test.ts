@@ -366,6 +366,16 @@ describe('Google Drive confirm form (waterkantamsterdam.nl, round 3)', () => {
     expect(driveConfirmUrl('<form action="https://evil.example/steal"><input type="hidden" name="id" value="x"></form>')).toBeNull();
   });
 
+  it('rejects an action whose host merely CONTAINS "google.com" (SSRF guard)', () => {
+    // A malicious restaurant site could serve this instead of a real PDF and
+    // redirect our server-side fetch anywhere — a substring check on the raw
+    // action string would wrongly treat all of these as Google's own domain.
+    const idInput = '<input type="hidden" name="id" value="x">';
+    expect(driveConfirmUrl(`<form action="http://169.254.169.254/?x=google.com">${idInput}</form>`)).toBeNull();
+    expect(driveConfirmUrl(`<form action="http://evil.com/google.com/steal">${idInput}</form>`)).toBeNull();
+    expect(driveConfirmUrl(`<form action="http://google.com.evil.com/steal">${idInput}</form>`)).toBeNull();
+  });
+
   it('returns null when the form carries no file id', () => {
     expect(driveConfirmUrl('<form action="https://drive.google.com/x"><input type="hidden" name="uuid" value="q"></form>')).toBeNull();
   });
