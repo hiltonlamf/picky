@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { extractMenuResumable, mergeMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE } from '@/lib/menu-extract';
+import { extractMenuResumable, mergeMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
@@ -270,7 +270,7 @@ export async function POST(request: NextRequest) {
           return close();
         }
 
-        const merged = mergeMenus(state.done);
+        const merged = mergeMenus(selectSubstantialMenus(state.done));
 
         // Strong-model audit of the veg/vegan labels users filter by — the
         // guardrail that makes cheap Haiku extraction safe. Never throws.

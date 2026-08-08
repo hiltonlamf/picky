@@ -394,6 +394,32 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   return { restaurantName, language, cuisine, sections };
 }
 
+/**
+ * Real, substantial menus among several candidates about to be merged —
+ * drops thin/junk results (e.g. a page's course-tier pricing blurb misread
+ * as a handful of fake "dishes": "Menu 5 courses €86") ONLY when at least
+ * one OTHER candidate already clears MIN_FOOD_ITEMS on its own; a restaurant
+ * whose one true source is genuinely small must still be shown, not
+ * reported as "no menu found".
+ *
+ * Without this, a junk second candidate (sections.length > 0, but far below
+ * MIN_FOOD_ITEMS) was enough to make mergeMenus treat the merge as
+ * multi-candidate and overwrite a GOOD candidate's own correct internal
+ * menuLabel tagging with meaningless outer candidate labels — found on
+ * restaurantdekas.com: the homepage's course-tier price text ("Menu 3
+ * courses", "Menu 4 courses"...) qualified as a second "menu" purely by
+ * having sections, and that alone corrupted the real PDF candidate's
+ * correct Lunch/Dinner split into a flat, wrongly-labeled "Dishes" section.
+ */
+export function selectSubstantialMenus(
+  named: Array<{ label: string; menu: ClassifiedMenu }>
+): Array<{ label: string; menu: ClassifiedMenu }> {
+  const strong = named.filter(
+    (n) => countFoodItems(n.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(n.menu)
+  );
+  return strong.length > 0 ? strong : named;
+}
+
 /** Extract every selected candidate (bounded) and merge into a single menu. */
 export async function extractAndMerge(
   candidates: MenuCandidate[],
@@ -446,7 +472,7 @@ export async function extractAndMerge(
     );
   }
 
-  const merged = mergeMenus(named);
+  const merged = mergeMenus(selectSubstantialMenus(named));
 
   // Strong-model audit of the veg/vegan labels users actually filter by —
   // the guardrail that makes cheap Haiku extraction safe.
