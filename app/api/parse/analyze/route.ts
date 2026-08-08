@@ -168,6 +168,14 @@ export async function POST(request: NextRequest) {
           pdfUrls: payload.pdfUrls,
           imageUrls: payload.imageUrls,
           pageUrl: payload.finalUrl,
+          // A PDF that already has its own dedicated `pdf` candidate must never
+          // also be re-read via a different candidate's fallback (e.g. a
+          // `subpage` candidate that links to the exact same PDF) — that's a
+          // second full-price AI call over an identical document, and it can
+          // clobber the PDF candidate's own correct multi-menu labelling once
+          // mergeMenus sees 2 "named" results instead of 1. See
+          // ExtractContext.excludePdfUrls.
+          excludePdfUrls: payload.candidates.filter((c) => c.type === 'pdf').map((c) => c.ref),
           // Stream live extraction status so long analyses don't look frozen.
           onProgress: (message) => send({ type: 'progress', step: message, stepNumber: 1, totalSteps: 2 }),
         };

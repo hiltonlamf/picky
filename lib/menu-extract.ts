@@ -25,6 +25,22 @@ export interface ExtractContext {
   pdfUrls?: string[];
   imageUrls?: string[];
   pageUrl?: string; // the menu page URL — used to fetch a screenshot as last resort
+  /**
+   * PDFs already covered by their OWN independent `pdf`-type candidate in this
+   * selection. A `subpage` candidate that turns out to have no real inline
+   * text of its own (e.g. a page that just states lunch/dinner price tiers
+   * and links a downloadable PDF) falls back to classifying that same PDF —
+   * redundant, full-price work when the PDF is already being read on its own
+   * merits as a separate candidate. Restaurant de Kas's PDF (page 1 = Lunch,
+   * page 2 = Dinner) was read twice this way: once as its own `pdf`
+   * candidate, once via the `/eng/menu` subpage's fallback — two independent
+   * completions of the same document, which also meant the subpage's result
+   * outscored the pdf candidate's own correct internal Lunch/Dinner
+   * `menuLabel` tagging once mergeMenus saw 2 "named" menus instead of 1.
+   * Both `attemptPlan`'s alternate-PDF rung and `extractSubpage`'s own
+   * PDF fallback consult this list and skip anything already on it.
+   */
+  excludePdfUrls?: string[];
   /** Live status callback — long analyses stream these to the user so a slow
    *  extraction doesn't look like a frozen app. */
   onProgress?: (message: string) => void;
@@ -95,7 +111,12 @@ export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsag
  * available source in order and keeps the best — a nav-heavy page whose TEXT
  * is just venue blurb must still fall through to its PDF/images/screenshot.
  */
-async function extractSubpage(url: string, title?: string, model?: string): Promise<Extraction> {
+async function extractSubpage(
+  url: string,
+  title?: string,
+  model?: string,
+  excludePdfUrls?: string[]
+): Promise<Extraction> {
   try {
     const sub = await scrapeRestaurant(url);
     const t = title ?? sub.title;
@@ -104,8 +125,11 @@ async function extractSubpage(url: string, title?: string, model?: string): Prom
     if (sub.menuText && sub.menuText.length >= 100) {
       attempts.push(() => classifyMenuWithAI(sub.menuText, t, model));
     }
-    if (sub.menuPdfUrls && sub.menuPdfUrls.length > 0) {
-      attempts.push(() => classifyMenuFromPdf(sub.menuPdfUrls![0], t, model));
+    // Skip a PDF this sub-page merely links to when that exact PDF already has
+    // its own independent candidate — see ExtractContext.excludePdfUrls.
+    const subPdfUrls = (sub.menuPdfUrls ?? []).filter((u) => !excludePdfUrls?.includes(u));
+    if (subPdfUrls.length > 0) {
+      attempts.push(() => classifyMenuFromPdf(subPdfUrls[0], t, model));
     }
     if (sub.menuImages && sub.menuImages.length > 0) {
       attempts.push(() => classifyMenuFromImages(sub.menuImages!.slice(0, 6), t, model));
@@ -153,7 +177,7 @@ async function runPrimary(candidate: MenuCandidate, ctx: ExtractContext, model?:
         model
       );
     case 'subpage':
-      return extractSubpage(candidate.ref, title, model);
+      return extractSubpage(candidate.ref, title, model, ctx.excludePdfUrls);
     default:
       return null;
   }
@@ -218,10 +242,11 @@ function attemptPlan(candidate: MenuCandidate, ctx: ExtractContext): Array<{ not
   const plan: Array<{ note: string; run: () => Promise<Extraction> }> = [
     { note: startMessage(candidate), run: () => runPrimary(candidate, ctx) },
   ];
-  if (candidate.type !== 'pdf' && ctx.pdfUrls?.length) {
+  const altPdfUrls = (ctx.pdfUrls ?? []).filter((u) => !ctx.excludePdfUrls?.includes(u));
+  if (candidate.type !== 'pdf' && altPdfUrls.length) {
     plan.push({
       note: 'That source was unclear — reading the menu PDF instead...',
-      run: () => classifyMenuFromPdf(ctx.pdfUrls![0], ctx.title),
+      run: () => classifyMenuFromPdf(altPdfUrls[0], ctx.title),
     });
   }
   if (candidate.type !== 'image' && ctx.imageUrls?.length) {
@@ -374,9 +399,16 @@ export async function extractAndMerge(
   candidates: MenuCandidate[],
   ctx: ExtractContext
 ): Promise<{ menu: ClassifiedMenu; usage: AIUsage }> {
+  // Candidates with their own dedicated `pdf` candidate must never also be
+  // re-read via another candidate's fallback (see ExtractContext.excludePdfUrls).
+  const independentPdfRefs = candidates.filter((c) => c.type === 'pdf').map((c) => c.ref);
+  const scopedCtx: ExtractContext = {
+    ...ctx,
+    excludePdfUrls: Array.from(new Set([...(ctx.excludePdfUrls ?? []), ...independentPdfRefs])),
+  };
   const results = await Promise.all(
     candidates.map(async (c) => {
-      const r = await extractMenuResumable(c, ctx);
+      const r = await extractMenuResumable(c, scopedCtx);
       // Take `r.usage`, not `r.best.usage`: when every rung of the ladder fails,
       // `best` is null — a shape that cannot carry usage — and reading spend off
       // it discards calls Anthropic already billed. That is precisely the

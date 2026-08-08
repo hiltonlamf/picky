@@ -206,11 +206,12 @@ CRITICAL — MULTI-LANGUAGE / BILINGUAL MENUS:
 - Do not let a translated duplicate inflate the dish count.
 - If a dish is written ONLY in a non-English language (the menu offers no English version of it), KEEP the original-language dish name in "name" and ADD a concise English translation of the dish — and its key ingredients — to the "description", so an English-speaking reader understands it. Do NOT translate the "name" itself, and do not drop the original description; append the English translation to it. This applies to any language (Dutch, French, German, etc.).
 
-CRITICAL — MULTIPLE DISTINCT NAMED MENUS ON ONE PAGE:
-- Some pages present several completely separate, independently-named menus back to back — e.g. "À La Carte Menu", "Tasting Menu", "Set Lunch Menu", "Group Menu" — each with its own set of sections/courses. This is different from one menu with several sections (Starters/Mains/Desserts).
-- When this happens, set "menuLabel" on EVERY section to that section's specific named menu (e.g. "À La Carte", "Tasting Menu"), using the menu's own name from the page, shortened naturally.
+CRITICAL — MULTIPLE DISTINCT NAMED MENUS ON ONE PAGE OR IN ONE DOCUMENT:
+- Some pages, or some multi-page PDFs/documents, present several completely separate, independently-named menus — e.g. "À La Carte Menu", "Tasting Menu", "Set Lunch Menu", "Group Menu" — each with its own set of sections/courses. This applies whether the separate menus appear as headings back to back on one page, OR as separate physical pages within one PDF (e.g. page 1 headed "LUNCH", page 2 headed "DINNER") — a page break does not exempt you from this rule. This is different from one menu with several sections (Starters/Mains/Desserts).
+- When this happens, set "menuLabel" on EVERY section to that section's specific named menu (e.g. "À La Carte", "Tasting Menu", "Lunch", "Dinner"), using the menu's own name from the page, shortened naturally.
 - Keep the section's own "name" clean — do NOT prefix or repeat the menu name inside it (e.g. "Starters", never "À La Carte - Starters"). "menuLabel" is where the menu name belongs.
 - If the page describes just ONE menu (by far the most common case), omit "menuLabel" or set it to null for every section.
+- A dish that genuinely appears on MORE THAN ONE of these named menus (e.g. a dessert offered at both lunch and dinner, printed on both pages) must be listed separately under EACH menu it appears on — do not drop it as a duplicate. This is different from the bilingual-duplicate rule above, which is about the SAME dish printed twice in two languages within one listing; a dish intentionally repeated across two distinct named menus is not a duplicate to remove.
 
 Classification rules:
 - "vegan": dish contains only plant-based ingredients with no animal products whatsoever

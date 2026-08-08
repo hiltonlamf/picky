@@ -1249,6 +1249,22 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
       const menuRes = await scrapeHtmlPage(link, depth + 1);
       const carriesSource = menuRes.text.length >= 200 || menuRes.menuPdfUrls.length > 0 || menuRes.menuImages.length > 0;
       if (carriesSource) {
+        // A sub-page whose own text isn't menu-shaped, but which contributed a
+        // PDF (already captured above in menuPdfUrls), is just a pointer to
+        // that PDF — not an independent menu source in its own right. Left in
+        // menuLinks, discoverMenus turns it into its OWN "subpage" candidate
+        // alongside the PDF candidate; since the discovery labeler never sees
+        // page content, it can't tell they're the same real menu, so both get
+        // selected and independently sent through AI extraction — doubling AI
+        // spend and, when the source is a multi-page PDF (e.g. page 1 Lunch /
+        // page 2 Dinner), losing the model's own correct per-page menuLabel
+        // tagging once mergeMenus sees 2+ candidates (restaurantdekas.com:
+        // read the same 2-page PDF twice, surfaced as "Lunch" and "Menu"
+        // instead of one clean "Lunch"/"Dinner" pair — see PR history). Drop
+        // just this link from the propagated menuLinks; its PDFs still flow
+        // through menuPdfUrls as their own candidates.
+        const linkIsJustAPdfPointer = menuRes.menuPdfUrls.length > 0 && !looksLikeMenu(menuRes.text);
+        const mergedMenuLinks = dedupeStrings([...menuLinks, ...menuRes.menuLinks]);
         return {
           ...menuRes,
           menuUrl: link,
@@ -1258,7 +1274,9 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
           // and picking one silently halved the menu.
           menuImages: dedupeStrings([...menuRes.menuImages, ...menuImages]).slice(0, 6),
           menuPdfUrls: dedupeStrings([...menuRes.menuPdfUrls, ...menuPdfUrls]),
-          menuLinks: dedupeStrings([...menuLinks, ...menuRes.menuLinks]),
+          menuLinks: linkIsJustAPdfPointer
+            ? mergedMenuLinks.filter((l) => !isSamePage(l, link))
+            : mergedMenuLinks,
           navLinks,
           linkLabels: { ...menuRes.linkLabels, ...linkLabels },
           screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
