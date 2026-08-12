@@ -75,6 +75,14 @@ his **experienced technical co-founder**. That means:
      full core set weekly on a cron (see `.github/workflows/pipeline.yml`)
      — before that, EVERY merge to main silently spent ~$3. Check the
      credit balance before starting a long run.
+   - **No automatic full-suite run exists, and that is deliberate.** A weekly
+     cron sweep was proposed and rejected by the founder (2026-08-09): ~$3/run
+     on a schedule is ~$6/fortnight of recurring spend — about half the current
+     total — to guard against restaurant sites drifting, which is a
+     mature-product concern. While real bugs are still being fixed, regressions
+     come from merges, and merges run the 7-case smoke set. Run the full 20 on
+     demand (`workflow_dispatch`, blank filter) when a sweep is actually
+     wanted. Do not re-add a schedule without asking.
    - **`ai_usage_log` queries are capped at 1000 rows.** PostgREST silently
      truncates and a large `limit=` does not override it, so a naive
      aggregate under-reports with no error. Ask for the exact count first
