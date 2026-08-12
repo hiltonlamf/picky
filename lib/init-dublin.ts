@@ -126,7 +126,7 @@ export async function initDublinRestaurants(): Promise<void> {
       restaurantId = existing.id;
     } else {
       try {
-        restaurantId = await createRestaurantRecord(url);
+        restaurantId = await createRestaurantRecord(url, 'dublin');
         await supabase.from('restaurants').update({ name }).eq('id', restaurantId);
       } catch {
         continue;

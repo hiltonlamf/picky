@@ -100,7 +100,7 @@ async function main() {
           await parseAndSave(id, name, url);
         }
       } else {
-        id = await createRestaurantRecord(url);
+        id = await createRestaurantRecord(url, 'dublin');
         await supabase.from('restaurants').update({ name }).eq('id', id);
         await parseAndSave(id, name, url);
       }

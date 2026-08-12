@@ -431,7 +431,10 @@ export function matchVerifiedDishes(
   });
 }
 
-export async function createRestaurantRecord(url: string, city = 'dublin'): Promise<string> {
+// A generic URL submission has no trustworthy city context. Callers that add
+// a restaurant to a city guide must pass that guide's slug explicitly; leaving
+// the record unassigned is safer than silently publishing it under Dublin.
+export async function createRestaurantRecord(url: string, city = 'unassigned'): Promise<string> {
   // Store the clean root URL as the identity (subpages stripped for dedicated
   // domains, kept as-is for shared platforms) and stamp the dedup key so the
   // unique index enforces one-row-per-restaurant at write time.
