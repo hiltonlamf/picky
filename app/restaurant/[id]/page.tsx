@@ -441,6 +441,9 @@ export default function RestaurantPage() {
         {restaurant.cuisine && (
           <p className="text-xs font-mono uppercase tracking-[0.08em] text-evergreen/50 mt-1">{restaurant.cuisine}</p>
         )}
+        {restaurant.address && (
+          <p className="text-sm text-forest/70 mt-2">{restaurant.address}</p>
+        )}
         {/* Links out: the restaurant's own site, and the specific menu page when
             we have one (some sites publish no direct menu link — then it's hidden). */}
         <div className="mt-1 flex items-center gap-3 flex-wrap">

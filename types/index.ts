@@ -51,6 +51,13 @@ export type RestaurantStatus = 'pending' | 'processing' | 'done' | 'error' | 'no
 // and should never be counted together when judging coverage.
 export type NoMenuReason = 'not_listed' | 'unavailable' | 'closed' | 'blocked';
 
+export type LocationConfidence = 'high' | 'medium' | 'low';
+export type RestaurantLocationSource =
+  | 'website_jsonld'
+  | 'website_address_element'
+  | 'website_map_link'
+  | 'website_contact_page';
+
 export interface Restaurant {
   id: string;
   url: string;
@@ -68,6 +75,17 @@ export interface Restaurant {
   noMenuConfirmedAt?: string | null;
   /** One- or two-word cuisine type (e.g. "Italian", "Indian"); shown on guide cards. */
   cuisine?: string | null;
+  /** Full first-party postal address, shown on the restaurant detail page. */
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  /** A data-driven city area; it is used for guide filters, not an AI guess. */
+  neighbourhood?: string | null;
+  neighbourhoodId?: string | null;
+  locationSource?: RestaurantLocationSource | null;
+  locationSourceUrl?: string | null;
+  locationConfidence?: LocationConfidence | null;
+  locationCheckedAt?: string | null;
   /** AI-detected primary language the menu was read in (e.g. "English", "Dutch").
    *  Populated when a non-English menu is extracted. Admin-facing signal. */
   menuLanguage?: string | null;

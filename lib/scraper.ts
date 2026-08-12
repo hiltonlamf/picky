@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import { readPage } from './reader';
 import { callClaude } from './ai';
+import { extractLocationFromHtml, type LocationCandidate } from './location';
 
 export interface ScrapeResult {
   url: string;
@@ -14,6 +15,8 @@ export interface ScrapeResult {
   navLinks?: string[]; // scored same-domain nav links — deep-discovery fallback when no menu link exists
   linkLabels?: Record<string, string>; // anchor text per menu link/PDF URL (human hints for labeling)
   screenshotUrl?: string; // hosted full-page screenshot from the reader, if any
+  /** First-party location evidence found while fetching the restaurant site. */
+  location?: LocationCandidate;
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
 }
@@ -1071,6 +1074,7 @@ type HtmlPageResult = {
   navLinks: string[];
   linkLabels: Record<string, string>;
   screenshotUrl?: string;
+  location?: LocationCandidate;
 };
 
 function dedupeStrings(arr: string[]): string[] {
@@ -1137,7 +1141,12 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
 
   // Use the reader's rawHtml for DOM extraction when present (Firecrawl),
   // otherwise the static HTML still carries anchor tags for link discovery.
-  const $ = cheerio.load(reader?.html && reader.html.length > staticHtml.length ? reader.html : staticHtml);
+  const domHtml = reader?.html && reader.html.length > staticHtml.length ? reader.html : staticHtml;
+  const $ = cheerio.load(domHtml);
+  // This runs against HTML we already fetched for menu discovery. It must not
+  // call a reader or a model: location enrichment cannot make the normal
+  // scrape spend additional provider or AI quota.
+  const location = extractLocationFromHtml(domHtml, finalUrl);
 
   // English-first: if this page declares itself non-English but offers an
   // English version, read the English one instead (whole pipeline, so menu +
@@ -1248,6 +1257,7 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
       navLinks,
       linkLabels,
       screenshotUrl: reader?.screenshotUrl,
+      location: location ?? undefined,
     };
   }
 
@@ -1302,6 +1312,9 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
           navLinks,
           linkLabels: { ...menuRes.linkLabels, ...linkLabels },
           screenshotUrl: menuRes.screenshotUrl ?? reader?.screenshotUrl,
+          // Prefer address evidence on the submitted restaurant homepage over
+          // a menu sub-page, while retaining a sub-page result if necessary.
+          location: location ?? menuRes.location ?? undefined,
         };
       }
     } catch {
@@ -1320,6 +1333,7 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     navLinks,
     linkLabels,
     screenshotUrl: reader?.screenshotUrl,
+    location: location ?? undefined,
   };
 }
 
@@ -1345,6 +1359,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         navLinks: result.navLinks,
         linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
+        location: result.location,
         urlType: 'html',
       };
     }
@@ -1380,6 +1395,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         navLinks: result.navLinks,
         linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
+        location: result.location,
         urlType: 'html',
       };
     }
@@ -1426,6 +1442,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
             menuPdfUrls: result.menuPdfUrls,
             menuLinks: result.menuLinks,
             screenshotUrl: result.screenshotUrl,
+            location: result.location,
             urlType: 'html',
           };
         }
@@ -1436,7 +1453,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, linkLabels, screenshotUrl } =
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, linkLabels, screenshotUrl, location } =
     await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
@@ -1454,6 +1471,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         navLinks,
         linkLabels,
         screenshotUrl,
+        location,
         urlType: 'pdf',
       };
     }
@@ -1470,6 +1488,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         navLinks,
         linkLabels,
         screenshotUrl,
+        location,
         urlType: 'html',
       };
     }
@@ -1486,6 +1505,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         navLinks,
         linkLabels,
         screenshotUrl,
+        location,
         urlType: 'html',
       };
     }
@@ -1506,6 +1526,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     navLinks,
     linkLabels,
     screenshotUrl,
+    location,
     urlType: 'html',
   };
 }

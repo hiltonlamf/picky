@@ -19,6 +19,8 @@ import type {
   RestaurantStatus,
   NoMenuReason,
   CityGuide,
+  LocationConfidence,
+  RestaurantLocationSource,
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
@@ -33,6 +35,7 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
+import { pointInGeoJson, type LocationCandidate } from './location';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 
 let _client: ReturnType<typeof createClient> | null = null;
@@ -262,6 +265,16 @@ export async function fetchRestaurantWithDishes(
   const { data: r } = await db().from('restaurants').select('*').eq('id', id).single();
   if (!r) return null;
 
+  let neighbourhood: string | null = null;
+  if (r.neighbourhood_id) {
+    const { data } = await db()
+      .from('city_neighbourhoods')
+      .select('display_name, group_name')
+      .eq('id', r.neighbourhood_id)
+      .maybeSingle();
+    neighbourhood = data?.group_name ?? data?.display_name ?? null;
+  }
+
   const { data: rawSections } = await db()
     .from('menu_sections')
     .select('*')
@@ -303,11 +316,75 @@ export async function fetchRestaurantWithDishes(
     noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
     noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
+    address: r.address ?? null,
+    latitude: r.latitude ?? null,
+    longitude: r.longitude ?? null,
+    neighbourhood,
+    neighbourhoodId: r.neighbourhood_id ?? null,
+    locationSource: (r.location_source as RestaurantLocationSource | null) ?? null,
+    locationSourceUrl: r.location_source_url ?? null,
+    locationConfidence: (r.location_confidence as LocationConfidence | null) ?? null,
+    locationCheckedAt: r.location_checked_at ?? null,
     menuLanguage: r.menu_language ?? null,
     guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
     createdAt: r.created_at,
   };
+}
+
+const CONFIDENCE_RANK: Record<LocationConfidence, number> = { low: 1, medium: 2, high: 3 };
+
+/**
+ * Persist evidence published by the restaurant itself. Lower-confidence data
+ * never replaces a stronger existing result; no address is manufactured from
+ * coordinates, and no Google response is stored.
+ */
+export async function saveRestaurantLocation(restaurantId: string, candidate: LocationCandidate): Promise<void> {
+  const { data: restaurant } = await db()
+    .from('restaurants')
+    .select('city, location_confidence')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  if (!restaurant) return;
+  const city = restaurant.city as string;
+  const existing = restaurant.location_confidence as LocationConfidence | null;
+  if (existing && CONFIDENCE_RANK[existing] > CONFIDENCE_RANK[candidate.confidence]) return;
+
+  const location = {
+    ...(candidate.address ? { address: candidate.address } : {}),
+    ...(candidate.latitude !== undefined ? { latitude: candidate.latitude } : {}),
+    ...(candidate.longitude !== undefined ? { longitude: candidate.longitude } : {}),
+    location_source: candidate.source,
+    location_source_url: candidate.sourceUrl,
+    location_confidence: candidate.confidence,
+    location_checked_at: new Date().toISOString(),
+  };
+  const { error } = await db().from('restaurants').update(location).eq('id', restaurantId);
+  if (error) throw new Error(`Failed to save restaurant location: ${error.message}`);
+
+  if (candidate.latitude !== undefined && candidate.longitude !== undefined) {
+    await assignRestaurantNeighbourhood(restaurantId, city, {
+      latitude: candidate.latitude,
+      longitude: candidate.longitude,
+    });
+  }
+}
+
+/** Assign a neighbourhood locally from imported GeoJSON; there is no reverse-geocoding API call. */
+export async function assignRestaurantNeighbourhood(
+  restaurantId: string,
+  city: string,
+  point: { latitude: number; longitude: number }
+): Promise<void> {
+  const { data } = await db()
+    .from('city_neighbourhoods')
+    .select('id, geometry')
+    .ilike('city', city)
+    .eq('active', true);
+  const match = ((data ?? []) as Array<{ id: string; geometry: unknown }>).find((area) => pointInGeoJson(point, area.geometry));
+  if (!match) return;
+  const { error } = await db().from('restaurants').update({ neighbourhood_id: match.id }).eq('id', restaurantId);
+  if (error) throw new Error(`Failed to assign restaurant neighbourhood: ${error.message}`);
 }
 
 function mapDish(d: DbRow): Dish {

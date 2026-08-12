@@ -57,6 +57,9 @@ export default function RestaurantCard({ restaurant }: Props) {
             </span>
           )}
         </div>
+        {restaurant.neighbourhood && (
+          <p className="-mt-1 text-xs text-forest/65">{restaurant.neighbourhood}</p>
+        )}
 
         {/* Dietary counts stay green with their emoji — pink never carries
             dietary meaning. The capsule is glass, the numbers are not.

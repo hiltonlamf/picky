@@ -9,6 +9,7 @@ import {
   saveClassifiedMenu,
   markRestaurantError,
   markRestaurantNoMenu,
+  saveRestaurantLocation,
 } from '@/lib/db';
 
 // Admin-triggered re-run of the full pipeline for one restaurant already in
@@ -32,6 +33,7 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
   let scrapeResult;
   try {
     scrapeResult = await scrapeRestaurant(url);
+    if (scrapeResult.location) await saveRestaurantLocation(restaurant.id, scrapeResult.location).catch(() => undefined);
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : 'Could not fetch this page';
     await markRestaurantNoMenu(restaurant.id, 'unavailable', rawMsg);
