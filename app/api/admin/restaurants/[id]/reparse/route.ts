@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { scrapeRestaurant } from '@/lib/scraper';
 import { discoverMenus } from '@/lib/menu-discovery';
-import { extractAndMerge, ExtractionError, ExtractContext } from '@/lib/menu-extract';
+import { extractAndMerge, ExtractionError, ExtractContext, sumUsage } from '@/lib/menu-extract';
 import {
   getRestaurantMeta,
   resetRestaurantForReparse,
@@ -99,7 +99,11 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
       await markRestaurantNoMenu(restaurant.id, reason, userMsg);
       // Report the failed ladder's spend too — failures are the expensive path,
       // so the batch analyzer's running cost must count them, not just successes.
-      return NextResponse.json({ outcome: 'no_menu', message: userMsg, costUsd: err.usage?.costUsd });
+      return NextResponse.json({
+        outcome: 'no_menu',
+        message: userMsg,
+        costUsd: sumUsage(err.usage, discovery.usage).costUsd,
+      });
     }
     await markRestaurantError(restaurant.id, msg);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -107,8 +111,11 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
 
   if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
 
-  await saveClassifiedMenu(restaurant.id, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
+  // Discovery's labelling call is billed too — fold it in so the row we save
+  // and the cost the batch analyzer sums both match ai_usage_log.
+  const total = sumUsage(usage, discovery.usage);
+  await saveClassifiedMenu(restaurant.id, discovery.finalUrl, scrapeResult.menuUrl, menu, total);
 
   const dishCount = menu.sections.reduce((n, s) => n + s.dishes.length, 0);
-  return NextResponse.json({ outcome: 'done', dishCount, costUsd: usage.costUsd });
+  return NextResponse.json({ outcome: 'done', dishCount, costUsd: total.costUsd });
 }

@@ -35,6 +35,14 @@ interface Case {
   smoke?: boolean;
   /** Extra QA-only sites — run with --extended (or a filter), not on the PR gate. */
   extended?: boolean;
+  /**
+   * The menu is knowably unreadable to us (e.g. a view-only Google Drive file),
+   * so "reported as blocked" IS the pass condition. Turns a permanently-red
+   * case into a regression guard for the blocked-reporting path — and stops it
+   * buying a paid retry on every run. If the site ever unblocks, this fails
+   * loudly with "expected blocked, got a menu", which is the signal we want.
+   */
+  expectBlocked?: boolean;
 }
 
 const CASES: Case[] = (
@@ -63,6 +71,13 @@ function dupCount(menu: ClassifiedMenu): number {
 
 let totalCostUsd = 0;
 
+/**
+ * Infrastructure flakiness — the only class of failure a paid re-run can fix.
+ * An assertion failure (item count, duplicates, drink leak) is deterministic
+ * given the same page: re-running it just pays twice for the same red.
+ */
+const TRANSIENT_RE = /timed out after|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|\b(429|503|502|504)\b/i;
+
 /** Per-attempt result — lets main() retry a flaky case and keep the better run. */
 type CaseResult = {
   pass: number;
@@ -71,6 +86,8 @@ type CaseResult = {
   row: string;
   /** Full retry ladder ran and found no menu — deterministic, don't re-run it. */
   noMenu?: boolean;
+  /** Failure looked like infrastructure flakiness, so a re-run may differ. */
+  transient?: boolean;
 };
 let cur: CaseResult = { pass: 0, fail: 0, skip: 0, row: '' };
 
@@ -104,9 +121,17 @@ function runCase(c: Case): Promise<CaseResult> {
 async function runCaseInner(c: Case): Promise<CaseResult> {
   cur = { pass: 0, fail: 0, skip: 0, row: '' };
   console.log(`\n=== ${c.name} [${c.category}] — ${c.url} ===`);
+  // Declared outside the try so the catch paths below can include it too: a
+  // case that fails during extraction still paid for discovery.
+  let discoveryCost = 0;
   try {
     const scrape = await withTimeout(scrapeRestaurant(c.url), 60000, 'scrape');
     const discovery = await withTimeout(discoverMenus(scrape), 90000, 'discover');
+    // Discovery's candidate-labelling call is billed. Counting only extraction
+    // is why this script printed $0.3601 for run #49 while ai_usage_log — the
+    // authoritative ledger — recorded $0.3692 for the same seven cases.
+    discoveryCost = discovery.usage?.costUsd ?? 0;
+    totalCostUsd += discoveryCost;
     console.log(
       `    candidates: ${discovery.candidates.map((x) => `${x.type}:${x.label}`).join(' | ') || '(none)'}`
     );
@@ -156,7 +181,7 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
     const { menu, usage } = await withTimeout(extractAndMerge(discovery.candidates, ctx), 300000, 'extract');
     totalCostUsd += usage.costUsd;
     const count = countFoodItems(menu);
-    console.log(`    food items: ${count} | cost: $${usage.costUsd.toFixed(4)}`);
+    console.log(`    food items: ${count} | cost: $${(usage.costUsd + discoveryCost).toFixed(4)}`);
 
     check(`>=${MIN_FOOD_ITEMS} food items (got ${count})`, count >= MIN_FOOD_ITEMS);
     check('not header-like', !looksLikeHeaderItems(menu));
@@ -171,21 +196,44 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
     // Note: a PDF site succeeding via HTML/screenshot is still a success — the
     // metric that matters is item count, asserted above.
 
-    cur.row = `${c.name.padEnd(20)} ${count} items  $${usage.costUsd.toFixed(4)}`;
+    cur.row = `${c.name.padEnd(20)} ${count} items  $${(usage.costUsd + discoveryCost).toFixed(4)}`;
   } catch (err) {
-    cur.fail++;
     const msg = err instanceof Error ? err.message : String(err);
-    // Failed retry ladders are the most expensive path — count their spend
-    // too, or the cost total silently undercounts the worst sites.
-    if (err instanceof ExtractionError && err.usage) {
-      totalCostUsd += err.usage.costUsd;
+
+    // A site we're documented as unable to read (Waterkant's Drive file is
+    // view-only) is a PASS when it reports itself as blocked: that's the
+    // blocked-reporting path working, which is the behaviour worth guarding.
+    // Previously it was a permanent red that ALSO bought a paid re-run.
+    if (c.expectBlocked && err instanceof ExtractionError && err.blocked) {
+      if (err.usage) totalCostUsd += err.usage.costUsd;
+      cur.noMenu = true;
+      check('reported as blocked, not as "no menu"', true);
+      cur.row = `${c.name.padEnd(20)} blocked as expected`;
+      return cur;
+    }
+
+    cur.fail++;
+    // `noMenu` must NOT depend on `err.usage`. A blocked site throws before any
+    // billed call, so it has no usage — and the old `&& err.usage` guard let it
+    // fall through to the retry below, buying a second full scrape+ladder for
+    // the identical deterministic answer. Deciding "don't re-run" and "book the
+    // spend" are separate questions.
+    if (err instanceof ExtractionError) {
       cur.noMenu = true; // full ladder already ran — a re-run won't change this
-      console.error(`    ✗ ERROR: ${msg}`);
-      console.error(`      (failed attempts still cost $${err.usage.costUsd.toFixed(4)})`);
-      cur.row = `${c.name.padEnd(20)} ERROR ($${err.usage.costUsd.toFixed(4)} spent): ${msg}`;
+      if (err.usage) {
+        totalCostUsd += err.usage.costUsd;
+        console.error(`    ✗ ERROR: ${msg}`);
+        console.error(`      (failed attempts still cost $${err.usage.costUsd.toFixed(4)})`);
+        cur.row = `${c.name.padEnd(20)} ERROR ($${(err.usage.costUsd + discoveryCost).toFixed(4)} spent): ${msg}`;
+      } else {
+        console.error(`    ✗ ERROR: ${msg}`);
+        cur.row = `${c.name.padEnd(20)} ERROR (no billed calls): ${msg}`;
+      }
     } else {
       console.error(`    ✗ ERROR: ${msg}`);
       cur.row = `${c.name.padEnd(20)} ERROR: ${msg}`;
+      // Only infrastructure flakiness is worth a paid second attempt.
+      cur.transient = TRANSIENT_RE.test(msg);
     }
   }
   return cur;
@@ -224,20 +272,25 @@ async function main() {
   for (const c of cases) {
     let result = await runCase(c); // sequential — friendlier to reader rate limits
 
-    // Live sites + keyless reader tiers are flaky: one retry after a cooldown
-    // absorbs transient 429s/site hiccups so only PERSISTENT failures gate a
-    // merge. Real spend on both attempts is still counted in the cost total.
-    // EXCEPTION: "no menu found" after the full retry ladder is deterministic
-    // and the priciest failure there is — re-running it doubles the bill for
-    // the same answer, so don't.
-    if (result.fail > 0 && !result.noMenu) {
-      console.log(`    ↻ retrying ${c.name} after a 60s cooldown (transient site/reader flakiness?)...`);
+    // Live sites + keyless reader tiers are flaky, so one cooldown retry
+    // absorbs transient 429s/site hiccups and only PERSISTENT failures gate a
+    // merge. But a retry is a SECOND full paid run of the case, so it must be
+    // reserved for failures a re-run could actually change:
+    //  - `noMenu`: the full ladder already ran (or the site refused us). Same
+    //    answer, doubled bill.
+    //  - assertion failures (item count, duplicates, drink leak): deterministic
+    //    given the same page. Re-running pays twice for the same red.
+    // Only infrastructure errors — timeouts, resets, 429/503 — get a retry.
+    if (result.fail > 0 && !result.noMenu && result.transient) {
+      console.log(`    ↻ retrying ${c.name} after a 60s cooldown (transient site/reader flakiness)...`);
       await new Promise((r) => setTimeout(r, 60000));
       const second = await runCase(c);
       if (second.fail < result.fail) {
         result = second;
         flaky.push(c.name);
       }
+    } else if (result.fail > 0) {
+      console.log(`    (not retried — deterministic failure, a re-run would cost the same and fail the same)`);
     }
 
     pass += result.pass;

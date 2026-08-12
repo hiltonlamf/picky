@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { scrapeRestaurant } from '@/lib/scraper';
 import { discoverMenus } from '@/lib/menu-discovery';
-import { extractAndMerge, ExtractionError, ExtractContext } from '@/lib/menu-extract';
+import { extractAndMerge, ExtractionError, ExtractContext, sumUsage } from '@/lib/menu-extract';
 import {
   findExistingRestaurant,
   resetRestaurantForReparse,
@@ -329,7 +329,14 @@ export async function POST(request: NextRequest) {
 
         if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
 
-        await saveClassifiedMenu(restaurantId, discovery.finalUrl, scrapeResult.menuUrl, menu, usage);
+        await saveClassifiedMenu(
+          restaurantId,
+          discovery.finalUrl,
+          scrapeResult.menuUrl,
+          menu,
+          // Include discovery's billed labelling call, not just extraction.
+          sumUsage(usage, discovery.usage)
+        );
         await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
         send({ type: 'result', restaurantId });

@@ -18,11 +18,23 @@ import { labelMenuCandidates } from '@/lib/ai';
 import { scrapeRestaurant } from '@/lib/scraper';
 
 const mockLabeler = vi.mocked(labelMenuCandidates);
+
+/**
+ * labelMenuCandidates now resolves to `{ candidates, usage }` rather than a bare
+ * array — the call is billed, and the old shape could not carry its cost out
+ * (see the note on the function). These tests care only about the labels, so
+ * this shim keeps every mock body below expressed as "map hints to labels".
+ */
+function mockLabels(
+  fn: (candidates: Parameters<typeof labelMenuCandidates>[0]) => Promise<LabeledCandidate[]>
+): void {
+  mockLabeler.mockImplementation(async (candidates) => ({ candidates: await fn(candidates) }));
+}
 const mockScrape = vi.mocked(scrapeRestaurant);
 
 /** Default labeler mock: echo hints back as labels, all distinct food menus. */
 function labelerEcho(): void {
-  mockLabeler.mockImplementation(async (candidates) =>
+  mockLabels(async (candidates) =>
     candidates.map((c) => ({
       ref: c.ref,
       label: c.hint || 'Menu',
@@ -95,7 +107,7 @@ describe('drink-only menus are never offered (wine-list bug)', () => {
   });
 
   it('drops candidates the labeler marks isDrinkOnly', async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c, i) => ({
         ref: c.ref,
         label: i === 1 ? 'Cocktails' : 'Dinner',
@@ -134,7 +146,7 @@ describe('drink-only menus are never offered (wine-list bug)', () => {
 
 describe('coherent picker lists (jaru.ie bug)', () => {
   it('collapses duplicateOf groups keeping the preferred format (pdf > subpage)', async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c, i) => ({
         ref: c.ref,
         label: i === 0 ? 'Dinner' : i === 1 ? 'Dinner (web)' : 'Lunch',
@@ -154,7 +166,7 @@ describe('coherent picker lists (jaru.ie bug)', () => {
   });
 
   it('keeps distinct sources with colliding labels, disambiguated with suffixes', async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
         label: 'Menu', // labeler failed to distinguish (e.g. hash-named PDFs)
@@ -178,7 +190,7 @@ describe('coherent picker lists (jaru.ie bug)', () => {
 
   it('uses anchor text as the hint for opaque PDF filenames', async () => {
     const captured: Array<{ hint: string }> = [];
-    mockLabeler.mockImplementation(async (candidates) => {
+    mockLabels(async (candidates) => {
       captured.push(...candidates.map((c) => ({ hint: c.hint })));
       return candidates.map((c) => ({
         ref: c.ref,
@@ -199,7 +211,7 @@ describe('coherent picker lists (jaru.ie bug)', () => {
   });
 
   it(`caps the picker at ${MAX_PICKER_CANDIDATES} options`, async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c, i) => ({
         ref: c.ref,
         label: `Menu ${i}`,
@@ -216,7 +228,7 @@ describe('coherent picker lists (jaru.ie bug)', () => {
   });
 
   it('drops non-distinct subpage links (nav/about/gallery)', async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
         label: c.hint || 'Menu',
@@ -324,7 +336,7 @@ describe('content-validated subpage survives a generic label (kickys.ie bug)', (
     // The labeler only ever sees a generic anchor hint ("Menus") and the URL —
     // no page content — so it can plausibly (and, per the real bug, actually
     // did) guess this isn't a distinct menu.
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
         label: c.hint || 'Menu',
@@ -467,7 +479,7 @@ describe('a subpage named "menu" survives a wrong labeler verdict (neni-amsterda
     // dropped, leaving only homepage nav text — the restaurant came back with
     // no dishes. The labeler never sees page content, so its guess is the
     // weaker signal against a URL that literally says "menus".
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
         label: c.hint || 'Menu',
@@ -482,7 +494,7 @@ describe('a subpage named "menu" survives a wrong labeler verdict (neni-amsterda
   });
 
   it('still drops a non-menu subpage the labeler rejects', async () => {
-    mockLabeler.mockImplementation(async (candidates) =>
+    mockLabels(async (candidates) =>
       candidates.map((c) => ({
         ref: c.ref,
         label: c.hint || 'Page',
@@ -517,5 +529,38 @@ describe('each branch of a chain becomes its own named menu (founder, 2026-08-05
     expect(res.candidates.length).toBeGreaterThanOrEqual(2);
     expect(labels).toContain('soho');
     expect(labels).toContain('kings cross');
+  });
+});
+
+/**
+ * Discovery's labelling call is BILLED, and for a long time no caller could see
+ * its cost: `labelMenuCandidates` was typed `Promise<LabeledCandidate[]>`, a
+ * shape that cannot carry usage. `ai_usage_log` stayed correct (callClaude
+ * records at the API boundary) but every *derived* total — the `restaurants`
+ * cost columns, the reparse route's `costUsd`, the QA suite's printed total —
+ * silently omitted one call per analysis. Measured on QA run #49: ledger
+ * $0.3692 vs suite-reported $0.3601.
+ *
+ * These pin the plumbing, so the shape cannot quietly regress to a bare array.
+ */
+describe('discovery carries its billed cost out (cost-accounting regression)', () => {
+  it('surfaces the labeler usage on DiscoveryResult', async () => {
+    mockLabeler.mockImplementation(async (candidates) => ({
+      candidates: candidates.map((c) => ({
+        ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null,
+      })),
+      usage: { model: 'claude-haiku-4-5-20251001', tokensIn: 632, tokensOut: 140, costUsd: 0.0013 },
+    }));
+    const res = await discoverMenus(
+      makeScrape({ menuPdfUrls: ['https://example-restaurant.ie/food-menu.pdf'] })
+    );
+    expect(res.usage?.costUsd).toBe(0.0013);
+  });
+
+  it('leaves usage undefined when discovery makes no AI call', async () => {
+    // No candidates → labelMenuCandidates is never invoked → nothing was billed.
+    const res = await discoverMenus(makeScrape({ menuPdfUrls: [], menuText: '', menuImages: [] }));
+    expect(res.candidates).toHaveLength(0);
+    expect(res.usage).toBeUndefined();
   });
 });

@@ -1,14 +1,14 @@
 import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { extractMenuResumable, mergeMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE } from '@/lib/menu-extract';
+import { extractMenuResumable, mergeMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE, DEFAULT_ESCALATION_BUDGET } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import type { AnalysisState, ParseEvent } from '@/types';
-import { verifyVegClassifications, type AIUsage } from '@/lib/ai';
+import { verifyVegClassifications, VERIFY_VEG_ENABLED, type AIUsage } from '@/lib/ai';
 import { withDeadline } from '@/lib/deadline';
 
 // Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
@@ -178,6 +178,16 @@ export async function POST(request: NextRequest) {
           excludePdfUrls: payload.candidates.filter((c) => c.type === 'pdf').map((c) => c.ref),
           // Stream live extraction status so long analyses don't look frozen.
           onProgress: (message) => send({ type: 'progress', step: message, stepNumber: 1, totalSteps: 2 }),
+          // Shared across the candidates this request works through, so two
+          // candidates never pay twice for the same fallback PDF/images/shot.
+          sharedAttempts: new Map(),
+          // Seeded from what earlier requests already spent — a fresh budget
+          // per resumed request would let a slow site buy an escalation every
+          // time the client called back.
+          escalationBudget: {
+            remaining: Math.max(0, DEFAULT_ESCALATION_BUDGET - (state.escalationsUsed ?? 0)),
+          },
+          anyCandidateValid: { value: state.done.length > 0 },
         };
 
         const byId = new Map(payload.candidates.map((c) => [c.id, c]));
@@ -190,6 +200,8 @@ export async function POST(request: NextRequest) {
               state.attemptIndex = 0;
               state.bestSoFar = null;
               state.candidateUsage = null;
+              // Evidence is per-candidate — a new candidate starts with none.
+              state.evidence = null;
             }
             const candidate = byId.get(state.currentId);
             if (!candidate) {
@@ -209,15 +221,22 @@ export async function POST(request: NextRequest) {
                 state.attemptIndex ?? 0,
                 deadline,
                 state.bestSoFar ?? null,
-                state.candidateUsage ?? undefined
+                state.candidateUsage ?? undefined,
+                state.evidence ?? undefined
               )
             );
+
+            // Book escalations spent this request so the next one resumes with
+            // the reduced budget rather than a fresh allowance.
+            state.escalationsUsed =
+              DEFAULT_ESCALATION_BUDGET - (ctx.escalationBudget?.remaining ?? DEFAULT_ESCALATION_BUDGET);
 
             if (r.nextIndex !== null) {
               // Time budget reached mid-chain — persist and hand back to the client.
               state.attemptIndex = r.nextIndex;
               state.bestSoFar = r.best;
               state.candidateUsage = r.usage ?? null;
+              state.evidence = r.evidence ?? null;
               payload.analysis = state;
               await saveMenuCandidates(restaurantId, payload);
               send({ type: 'progress', step: 'Still reading the menu — continuing...', stepNumber: 1, totalSteps: 2 });
@@ -237,6 +256,7 @@ export async function POST(request: NextRequest) {
             state.attemptIndex = 0;
             state.bestSoFar = null;
             state.candidateUsage = null;
+            state.evidence = null;
           }
         } catch (err) {
           Sentry.captureException(err);
@@ -272,11 +292,14 @@ export async function POST(request: NextRequest) {
 
         const merged = mergeMenus(selectSubstantialMenus(state.done));
 
-        // Strong-model audit of the veg/vegan labels users filter by — the
-        // guardrail that makes cheap Haiku extraction safe. Never throws.
-        // Same `deadline` as the extraction loop above: this call still counts
-        // against the request's real remaining budget, not a fresh allowance.
-        send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
+        // Strong-model audit of the veg/vegan labels. OFF by default since
+        // 2026-08-08 (see VERIFY_VEG_ENABLED) — a no-op returning `merged`
+        // unless VERIFY_VEG=1, so the progress step is gated too rather than
+        // announcing work that isn't happening. Never throws. When enabled it
+        // shares the extraction loop's `deadline`, not a fresh allowance.
+        if (VERIFY_VEG_ENABLED) {
+          send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
+        }
         const verified = await withDeadline(deadline, () => verifyVegClassifications(merged, payload.title));
         const menu = verified.menu;
         state.usage = sumUsage(state.usage ?? undefined, verified.usage);
