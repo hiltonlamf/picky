@@ -7,7 +7,7 @@
 // requests: its homepage and, only when needed, one same-domain Contact page.
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
-import { findLocationOnWebsite } from '../lib/location';
+import { findLocationOnWebsite, isCandidateInCity } from '../lib/location';
 import { saveRestaurantLocation } from '../lib/db';
 
 const cityIndex = process.argv.indexOf('--city');
@@ -30,21 +30,32 @@ async function main() {
 
   console.log(`${apply ? 'APPLY' : 'DRY RUN'} — first-party location enrichment for ${city} (${data?.length ?? 0} restaurants)`);
   let found = 0;
+  let rejected = 0;
+  let failed = 0;
   for (const restaurant of data ?? []) {
     const url = (restaurant.canonical_url as string | null) ?? (restaurant.url as string);
-    const candidate = await findLocationOnWebsite(url);
     const name = (restaurant.name as string | null) ?? url;
-    if (!candidate) {
-      console.log(`  no location: ${name}`);
-    } else {
-      found++;
-      console.log(`  ${apply ? 'saved' : 'would save'}: ${name} — ${candidate.address || 'coordinates only'} (${candidate.source}, ${candidate.confidence})`);
-      if (apply) await saveRestaurantLocation(restaurant.id as string, candidate);
+    try {
+      const candidate = await findLocationOnWebsite(url);
+      if (!candidate) {
+        console.log(`  no location: ${name}`);
+      } else if (!candidate.address || !isCandidateInCity(candidate, city)) {
+        rejected++;
+        console.log(`  rejected outside ${city}: ${name} — ${candidate.address || 'coordinates only'}`);
+      } else {
+        found++;
+        console.log(`  ${apply ? 'saved' : 'would save'}: ${name} — ${candidate.address || 'coordinates only'} (${candidate.source}, ${candidate.confidence})`);
+        if (apply) await saveRestaurantLocation(restaurant.id as string, candidate);
+      }
+    } catch (error) {
+      failed++;
+      const message = error instanceof Error ? error.message : 'unknown error';
+      console.log(`  skipped: ${name} — ${message}`);
     }
     // Be a considerate website visitor. This is intentionally slow and bounded.
     await sleep(500);
   }
-  console.log(`\n${found} location candidate(s) ${apply ? 'saved' : 'found'}; no paid APIs were called.`);
+  console.log(`\n${found} location candidate(s) ${apply ? 'saved' : 'found'}; ${rejected} candidate(s) rejected outside ${city}; ${failed} restaurant(s) skipped; no paid APIs were called.`);
   if (!apply) console.log('Review the output, then re-run with --apply to persist these values.');
 }
 
