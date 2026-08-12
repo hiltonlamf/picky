@@ -182,6 +182,8 @@ export function sumUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsag
     tokensIn: base.tokensIn + b.tokensIn,
     tokensOut: base.tokensOut + b.tokensOut,
     costUsd: base.costUsd + b.costUsd,
+    cacheWriteTokens: (base.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0),
+    cacheReadTokens: (base.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0),
   };
 }
 

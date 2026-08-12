@@ -151,6 +151,12 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
   -- spend-verification runs. Both are real money, but a total that can't
   -- separate them cannot answer "what does it cost to serve a user?".
   source          TEXT NOT NULL DEFAULT 'product',
+  -- Prompt-cache split of tokens_in (which holds the full prompt). Writes bill
+  -- at 1.25x, reads at 0.1x. Zero is meaningful: Anthropic's minimum cacheable
+  -- prefix is 4096 tokens on Haiku 4.5, which our ~1.8k-token system prompt
+  -- does not reach, so the Haiku path legitimately never caches.
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
