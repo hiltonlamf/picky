@@ -82,8 +82,20 @@ const PHOTO_IMAGE_KEYWORDS = ['gallery', 'hero', 'slide', 'carousel', 'photo', '
 export function findMenuImages($: cheerio.CheerioAPI, baseUrl: string): string[] {
   const candidates: Array<{ url: string; score: number }> = [];
 
-  $('img[src], img[data-src]').each((_, el) => {
-    const src = $(el).attr('src') ?? $(el).attr('data-src') ?? '';
+  $('img[src], img[data-src], img[data-lazy-src], img[data-original]').each((_, el) => {
+    // Lazy-loading attributes win over `src`. On a lazy-loaded page `src` is a
+    // shared placeholder (a blank spacer, a low-res blur) and the real image
+    // lives in data-src — so reading `src` first collapses EVERY image on the
+    // page to the same useless URL, and the vision call is handed a blank.
+    // That is what made Good World unreadable: every img on its menu page
+    // pointed at .../images/imgbg.png, and the model correctly reported "no
+    // menu text found in the images".
+    const src =
+      $(el).attr('data-src') ??
+      $(el).attr('data-lazy-src') ??
+      $(el).attr('data-original') ??
+      $(el).attr('src') ??
+      '';
     const alt = ($(el).attr('alt') ?? '').toLowerCase();
     const resolved = resolveUrl(src, baseUrl);
     if (!resolved?.startsWith('http')) return;

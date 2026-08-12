@@ -63,7 +63,9 @@ his **experienced technical co-founder**. That means:
      (e.g. re-scraping or re-calling the LLM on every page load) — these
      are the failure modes that turn into surprise bills.
    - **Testing spend is real spend.** Prefer free checks (unit tests on
-     fixtures, `--smoke` ≈ $0.11) for iteration; run the full live core
+     fixtures, `--smoke` ≈ **$0.26 — measured 2026-08-12 from `ai_usage_log`;
+     it read "≈$0.11" until then, 2.4x under, because the smoke set grew to
+     7 cases**) for iteration; run the full live core
      suite **(~$3.00 — measured 2026-08-08, run #31270035035: the script
      reported $2.9993 and `ai_usage_log` recorded $3.13 for the window)**
      or `--extended` (proportionally more, and more again if sites fail)

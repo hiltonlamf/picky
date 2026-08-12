@@ -45,6 +45,12 @@ export type AIUsage = {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** Prompt-cache tokens, split out of `tokensIn` so hit rate is answerable
+   *  from the ledger. `tokensIn` still holds the full prompt (uncached +
+   *  write + read), so nothing downstream changes if these are ignored.
+   *  Optional because test fixtures fabricate usage objects by hand. */
+  cacheWriteTokens?: number;
+  cacheReadTokens?: number;
 };
 
 // Browser-shaped UA for fetching linked assets (PDFs, images). Some hosts
@@ -106,6 +112,8 @@ export function usageOf(message: Anthropic.Message): AIUsage {
     costUsd:
       calcCost(model, u.input_tokens, u.output_tokens) +
       calcCost(model, Math.round(cacheWrite * 1.25 + cacheRead * 0.1), 0),
+    cacheWriteTokens: cacheWrite,
+    cacheReadTokens: cacheRead,
   };
 }
 
@@ -176,9 +184,9 @@ export async function callClaude(
   });
 
   // Cache tokens are priced differently from fresh input: writes at 1.25× and
-  // reads at 0.1×. The pipeline doesn't use prompt caching today, so these are
-  // zero — accounting for them anyway means switching caching on later can't
-  // quietly reintroduce an undercount.
+  // reads at 0.1×. The extraction calls now mark a cache breakpoint (see
+  // SYSTEM_PROMPT), so these are real numbers on the Sonnet path and zero on
+  // the Haiku path, whose 4096-token minimum our prefix doesn't reach.
   //
   // The installed SDK (0.27.x) doesn't declare these two fields even though the
   // API returns them, so widen the type rather than drop the handling.
@@ -197,7 +205,14 @@ export async function callClaude(
     calcCost(model, u.input_tokens, tokensOut) +
     calcCost(model, Math.round(cacheWrite * 1.25 + cacheRead * 0.1), 0);
 
-  await recordSpend({ model, tokensIn, tokensOut, costUsd });
+  await recordSpend({
+    model,
+    tokensIn,
+    tokensOut,
+    costUsd,
+    cacheWriteTokens: cacheWrite,
+    cacheReadTokens: cacheRead,
+  });
   return message;
 }
 
@@ -290,6 +305,44 @@ Return ONLY valid JSON in this exact structure:
   ]
 }`;
 
+/**
+ * SYSTEM_PROMPT as a cached prefix, shared by all three extraction call sites.
+ *
+ * The prompt is a frozen constant — byte-identical on every call, with nothing
+ * dynamic interpolated — which makes it the ideal thing to cache: it is re-sent
+ * on each of the ~11 AI calls a restaurant costs. Cache reads bill at 0.1× and
+ * writes at 1.25×, so within a single analysis this is a clear win.
+ *
+ * BUT: Anthropic enforces a *minimum cacheable prefix* that differs per model —
+ * 4096 tokens on Haiku 4.5, 1024 on Sonnet 4.6. This prompt is ~1.8k tokens, so
+ * on the Haiku path (DISCOVERY_MODEL/EXTRACTION_MODEL, i.e. nearly all our
+ * spend) the marker below is a SILENT NO-OP: no error, just
+ * cache_creation_input_tokens: 0 forever. It starts paying only when a chunk
+ * escalates to Sonnet.
+ *
+ * That is deliberate, not dead code. Leaving the breakpoint in place means the
+ * escalation path — our most expensive one — caches today, and that Haiku
+ * caching switches on automatically if the shared prefix ever grows past 4096
+ * tokens. Growing it is the real prize (worth roughly 15-20% of pipeline
+ * spend), but it means editing the classification prompt, which needs a quality
+ * re-verification run. Use `npx tsx scripts/count-prompt-tokens.ts` (free) to
+ * check where the prompt currently sits against each model's minimum.
+ *
+ * Default 5-minute TTL, not 1h: the 1h TTL doubles the write cost (2× vs
+ * 1.25×) and only pays across long idle gaps, whereas our calls cluster inside
+ * one analysis.
+ *
+ * The type widening mirrors the `usage` widening in callClaude — SDK 0.27.x
+ * doesn't declare cache_control on TextBlockParam even though the API is GA.
+ */
+const CACHED_SYSTEM = [
+  {
+    type: 'text' as const,
+    text: SYSTEM_PROMPT,
+    cache_control: { type: 'ephemeral' as const },
+  },
+] as unknown as Anthropic.TextBlockParam[];
+
 function buildPrompt(menuText: string, restaurantName?: string): string {
   const nameHint = restaurantName ? `Restaurant: ${restaurantName}\n\n` : '';
   return `${nameHint}Analyse this restaurant menu and classify all dishes. Return ONLY JSON.\n\nMenu content:\n\n${menuText.slice(0, 30000)}`;
@@ -341,7 +394,7 @@ async function classifyMenuChunk(
   const message = await callClaude({
     model,
     max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
-    system: SYSTEM_PROMPT,
+    system: CACHED_SYSTEM,
     messages: [{ role: 'user', content: buildPrompt(menuText, restaurantName) }],
   });
   const usage = usageOf(message);
@@ -427,6 +480,8 @@ function addUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage | und
     tokensIn: a.tokensIn + b.tokensIn,
     tokensOut: a.tokensOut + b.tokensOut,
     costUsd: a.costUsd + b.costUsd,
+    cacheWriteTokens: (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0),
+    cacheReadTokens: (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0),
   };
 }
 
@@ -521,7 +576,7 @@ export async function classifyMenuFromImageBuffers(
   const message = await callClaude({
     model,
     max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
-    system: SYSTEM_PROMPT,
+    system: CACHED_SYSTEM,
     messages: [
       {
         role: 'user',
@@ -1107,7 +1162,7 @@ async function classifyMenuFromDocumentSource(
       {
         model,
         max_tokens: 8192, // large menus (50+ dishes) overflow 4096 and truncate the JSON
-        system: SYSTEM_PROMPT,
+        system: CACHED_SYSTEM,
         messages: [{ role: 'user', content: pdfContent }],
       },
       betas?.length ? { headers: { 'anthropic-beta': betas.join(',') } } : undefined

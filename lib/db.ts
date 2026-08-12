@@ -395,17 +395,31 @@ export async function logUsage(
     tokens_out: usage.tokensOut,
     cost_usd: usage.costUsd,
   };
+  // Columns arrive in migrations, and code deploys before migrations run.
+  // Rather than lose spend rows in that window — the one thing this table
+  // exists to prevent — degrade one column group at a time, widest first, and
+  // only ever drop the labels. The row itself always lands.
+  const attempts = [
+    {
+      ...row,
+      source,
+      cache_write_tokens: usage.cacheWriteTokens ?? 0,
+      cache_read_tokens: usage.cacheReadTokens ?? 0,
+    },
+    { ...row, source },
+    row,
+  ];
   try {
-    const { error } = await db().from('ai_usage_log').insert({ ...row, source });
-    // The `source` column arrives in a migration, and code deploys before
-    // migrations run. Rather than lose spend rows in that window — the one
-    // thing this table exists to prevent — fall back to the old shape and
-    // record the row without the label.
-    if (error) {
-      console.error('[db] ai_usage_log insert with source failed, retrying without:', error.message);
-      const { error: retry } = await db().from('ai_usage_log').insert(row);
-      if (retry) throw new Error(retry.message);
+    let lastError = '';
+    for (let i = 0; i < attempts.length; i++) {
+      const { error } = await db().from('ai_usage_log').insert(attempts[i]);
+      if (!error) return;
+      lastError = error.message;
+      if (i < attempts.length - 1) {
+        console.error(`[db] ai_usage_log insert failed, retrying with fewer columns:`, error.message);
+      }
     }
+    throw new Error(lastError);
   } catch (err) {
     console.error('[db] ai_usage_log insert failed (non-fatal):', err instanceof Error ? err.message : err);
   }
