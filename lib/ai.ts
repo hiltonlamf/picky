@@ -626,13 +626,25 @@ Return ONLY a JSON array, one object per candidate index, in order:
  * de-duplicated menu labels and flags which are genuinely distinct FOOD menus.
  * Used by the discovery phase to drive the multi-menu picker.
  */
+/**
+ * Returns `{ candidates, usage }` rather than a bare array, because this call is
+ * BILLED and every parse failure below returns the fallback labels.
+ *
+ * `Promise<LabeledCandidate[]>` is a shape that *cannot carry usage* — the exact
+ * structural fault CLAUDE.md records as the cause of the 8× July-2026
+ * undercount. `ai_usage_log` was never wrong (callClaude records at the API
+ * boundary), but no caller could see this call's cost, so every *derived* total
+ * — the `restaurants` cost columns, the reparse route's `costUsd`, the QA
+ * suite's printed total — silently omitted one discovery call per analysis.
+ * Measured on QA run #49: the ledger said $0.3692, the suite printed $0.3601.
+ */
 export async function labelMenuCandidates(
   candidates: Array<{ ref: string; hint: string; type: string; url?: string }>,
   restaurantName?: string
-): Promise<LabeledCandidate[]> {
-  if (candidates.length === 0) return [];
+): Promise<{ candidates: LabeledCandidate[]; usage?: AIUsage }> {
+  if (candidates.length === 0) return { candidates: [] };
 
-  const fallback = (): LabeledCandidate[] =>
+  const plain = (): LabeledCandidate[] =>
     candidates.map((c) => ({ ref: c.ref, label: c.hint || 'Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null }));
 
   const message = await callClaude({
@@ -640,6 +652,9 @@ export async function labelMenuCandidates(
     max_tokens: 1024,
     messages: [{ role: 'user', content: buildLabelPrompt(candidates, restaurantName) }],
   });
+  // Captured before any parsing, so no return path below can drop it.
+  const usage = usageOf(message);
+  const fallback = () => ({ candidates: plain(), usage });
 
   const content = message.content[0];
   if (content.type !== 'text') return fallback();
@@ -656,7 +671,7 @@ export async function labelMenuCandidates(
       isDrinkOnly?: boolean;
       duplicateOf?: number | null;
     }>;
-    return candidates.map((c, i) => {
+    const labeled = candidates.map((c, i) => {
       const match = parsed.find((p) => p.index === i);
       return {
         ref: c.ref,
@@ -667,6 +682,7 @@ export async function labelMenuCandidates(
         duplicateOf: typeof match?.duplicateOf === 'number' && match.duplicateOf >= 0 && match.duplicateOf < i ? match.duplicateOf : null,
       };
     });
+    return { candidates: labeled, usage };
   } catch {
     return fallback();
   }

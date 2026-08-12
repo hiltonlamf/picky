@@ -6,7 +6,7 @@
 
 import { scrapeRestaurant } from './scraper';
 import { discoverMenus } from './menu-discovery';
-import { extractAndMerge, ExtractContext } from './menu-extract';
+import { extractAndMerge, ExtractContext, sumUsage } from './menu-extract';
 import {
   createRestaurantRecord,
   saveClassifiedMenu,
@@ -80,7 +80,9 @@ export async function parseAndSave(restaurantId: string, name: string, url: stri
     };
     const result = await extractAndMerge(discovery.candidates, ctx);
     menu = result.menu;
-    aiUsage = result.usage;
+    // Discovery's labelling call is billed — count it, or seeding a city
+    // under-reports its cost by one call per restaurant.
+    aiUsage = sumUsage(result.usage, discovery.usage);
   } catch (err) {
     await markRestaurantError(restaurantId, err instanceof Error ? err.message : 'No menu content could be extracted');
     return;

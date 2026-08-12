@@ -121,9 +121,17 @@ function runCase(c: Case): Promise<CaseResult> {
 async function runCaseInner(c: Case): Promise<CaseResult> {
   cur = { pass: 0, fail: 0, skip: 0, row: '' };
   console.log(`\n=== ${c.name} [${c.category}] — ${c.url} ===`);
+  // Declared outside the try so the catch paths below can include it too: a
+  // case that fails during extraction still paid for discovery.
+  let discoveryCost = 0;
   try {
     const scrape = await withTimeout(scrapeRestaurant(c.url), 60000, 'scrape');
     const discovery = await withTimeout(discoverMenus(scrape), 90000, 'discover');
+    // Discovery's candidate-labelling call is billed. Counting only extraction
+    // is why this script printed $0.3601 for run #49 while ai_usage_log — the
+    // authoritative ledger — recorded $0.3692 for the same seven cases.
+    discoveryCost = discovery.usage?.costUsd ?? 0;
+    totalCostUsd += discoveryCost;
     console.log(
       `    candidates: ${discovery.candidates.map((x) => `${x.type}:${x.label}`).join(' | ') || '(none)'}`
     );
@@ -173,7 +181,7 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
     const { menu, usage } = await withTimeout(extractAndMerge(discovery.candidates, ctx), 300000, 'extract');
     totalCostUsd += usage.costUsd;
     const count = countFoodItems(menu);
-    console.log(`    food items: ${count} | cost: $${usage.costUsd.toFixed(4)}`);
+    console.log(`    food items: ${count} | cost: $${(usage.costUsd + discoveryCost).toFixed(4)}`);
 
     check(`>=${MIN_FOOD_ITEMS} food items (got ${count})`, count >= MIN_FOOD_ITEMS);
     check('not header-like', !looksLikeHeaderItems(menu));
@@ -188,7 +196,7 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
     // Note: a PDF site succeeding via HTML/screenshot is still a success — the
     // metric that matters is item count, asserted above.
 
-    cur.row = `${c.name.padEnd(20)} ${count} items  $${usage.costUsd.toFixed(4)}`;
+    cur.row = `${c.name.padEnd(20)} ${count} items  $${(usage.costUsd + discoveryCost).toFixed(4)}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
 
@@ -216,7 +224,7 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
         totalCostUsd += err.usage.costUsd;
         console.error(`    ✗ ERROR: ${msg}`);
         console.error(`      (failed attempts still cost $${err.usage.costUsd.toFixed(4)})`);
-        cur.row = `${c.name.padEnd(20)} ERROR ($${err.usage.costUsd.toFixed(4)} spent): ${msg}`;
+        cur.row = `${c.name.padEnd(20)} ERROR ($${(err.usage.costUsd + discoveryCost).toFixed(4)} spent): ${msg}`;
       } else {
         console.error(`    ✗ ERROR: ${msg}`);
         cur.row = `${c.name.padEnd(20)} ERROR (no billed calls): ${msg}`;

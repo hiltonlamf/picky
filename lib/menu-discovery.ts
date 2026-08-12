@@ -1,6 +1,6 @@
 import type { MenuCandidate, MenuCandidateType } from '@/types';
 import { scrapeRestaurant, type ScrapeResult } from './scraper';
-import { labelMenuCandidates, LabeledCandidate } from './ai';
+import { labelMenuCandidates, LabeledCandidate, type AIUsage } from './ai';
 
 export interface DiscoveryResult {
   candidates: MenuCandidate[];
@@ -8,6 +8,10 @@ export interface DiscoveryResult {
   restaurantTitle: string;
   finalUrl: string;
   screenshotUrl?: string;
+  /** Cost of the candidate-labelling call. Undefined when discovery made no AI
+   *  call at all (no candidates, or the call threw). Callers must add this to
+   *  whatever total they book, or they under-report by one call per analysis. */
+  usage?: AIUsage;
 }
 
 /** Max menu options shown in the picker — beyond this the list stops being a choice. */
@@ -426,16 +430,21 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   }
 
   let finalCandidates: MenuCandidate[] = [];
+  let labelUsage: AIUsage | undefined;
 
   if (deduped.length > 0) {
     // Label + distinctness/drink/duplicate detection via Haiku.
     // Failures degrade to keeping everything.
     let labeled: LabeledCandidate[];
     try {
-      labeled = await labelMenuCandidates(
+      const result = await labelMenuCandidates(
         deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, hint: r.hint, type: r.type, url: r.ref || undefined })),
         scrape.title
       );
+      labeled = result.candidates;
+      // This call is billed. Carry its cost out so callers' totals include it —
+      // see the note on labelMenuCandidates.
+      labelUsage = result.usage;
     } catch {
       labeled = deduped.map((r) => ({
         ref: `${r.type}|${r.ref}`,
@@ -554,5 +563,6 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     restaurantTitle: scrape.title,
     finalUrl,
     screenshotUrl: scrape.screenshotUrl,
+    usage: labelUsage,
   };
 }
