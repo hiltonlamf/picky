@@ -73,4 +73,27 @@ describe('findMenuImages scoring', () => {
     expect(images).toHaveLength(1);
     expect(images[0]).toContain('menu-board');
   });
+
+  // Regression: Good World (goodworld.ie). Every img on its menu page shared
+  // one placeholder in `src` with the real image in `data-src`. Reading `src`
+  // first collapsed the whole page to a single blank spacer, so the vision
+  // call was handed an empty image and correctly reported "no menu text".
+  it('prefers lazy-load attributes over a shared placeholder src', () => {
+    const $ = cheerio.load(`
+      <img src="/images/imgbg.png" data-src="/comdata/dim-sum-menu.png">
+      <img src="/images/imgbg.png" data-lazy-src="/comdata/second-page.jpg">
+      <img src="/images/imgbg.png" data-original="/comdata/third-page.jpg">
+    `);
+    const images = findMenuImages($, BASE);
+    expect(images).toHaveLength(3);
+    expect(images.some((u) => u.includes('imgbg'))).toBe(false);
+    expect(images.some((u) => u.includes('dim-sum-menu'))).toBe(true);
+    expect(images.some((u) => u.includes('second-page'))).toBe(true);
+    expect(images.some((u) => u.includes('third-page'))).toBe(true);
+  });
+
+  it('still uses src when there is no lazy-load attribute', () => {
+    const $ = cheerio.load(`<img src="/uploads/menu-board.jpg">`);
+    expect(findMenuImages($, BASE)[0]).toContain('menu-board');
+  });
 });
