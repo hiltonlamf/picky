@@ -48,6 +48,11 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
   const filtersChanged =
     draftNeighbourhoods.join('|') !== selectedNeighbourhoods.join('|') ||
     draftCuisines.join('|') !== selectedCuisines.join('|');
+  const filterPrompt = neighbourhoods.length > 0 && cuisines.length > 0
+    ? 'Choose one or more neighbourhoods and cuisines, then apply your filters.'
+    : neighbourhoods.length > 0
+      ? 'Choose one or more neighbourhoods, then apply your filters.'
+      : 'Choose one or more cuisines, then apply your filters.';
   useEffect(() => {
     setDraftNeighbourhoods(selectedNeighbourhoods);
     setDraftCuisines(selectedCuisines);
@@ -67,7 +72,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
     <section aria-label="Restaurant filters" className="mb-6">
       {(neighbourhoods.length > 0 || cuisines.length > 0) && (
         <div className="card p-4 mb-5">
-          <p className="text-sm text-forest/75 mb-4">Choose one or more neighbourhoods and cuisines, then apply your filters.</p>
+          <p className="text-sm text-forest/75 mb-4">{filterPrompt}</p>
           <div className="grid sm:grid-cols-2 gap-5">
           {neighbourhoods.length > 0 && (
             <fieldset>
