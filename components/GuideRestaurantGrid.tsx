@@ -143,7 +143,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
   return (
     <section aria-label="Restaurant filters" className="mb-6">
       {(areas.length > 0 || cuisines.length > 0) && (
-        <div className="card p-4 mb-5">
+        <div className="mb-5">
           <p className="text-sm text-forest/75 mb-4">{filterPrompt}</p>
           <div className="flex flex-wrap items-center gap-3">
             {areas.length > 0 && (
