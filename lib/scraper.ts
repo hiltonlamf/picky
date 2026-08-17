@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { readPage } from './reader';
 import { callClaude } from './ai';
-import { extractLocationFromHtml, type LocationCandidate } from './location';
+import { extractLocationFromHtml, findLocationOnContactPage, type LocationCandidate } from './location';
 
 export interface ScrapeResult {
   url: string;
@@ -1146,7 +1146,13 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
   // This runs against HTML we already fetched for menu discovery. It must not
   // call a reader or a model: location enrichment cannot make the normal
   // scrape spend additional provider or AI quota.
-  const location = extractLocationFromHtml(domHtml, finalUrl);
+  let location = extractLocationFromHtml(domHtml, finalUrl);
+  // If the existing page only exposes map coordinates (or no location at all),
+  // make one ordinary same-domain Contact-page request. It is intentionally
+  // bounded and never invokes Firecrawl/Jina or an LLM.
+  if (depth === 0 && !location?.address) {
+    location = (await findLocationOnContactPage(domHtml, finalUrl)) ?? location;
+  }
 
   // English-first: if this page declares itself non-English but offers an
   // English version, read the English one instead (whole pipeline, so menu +
