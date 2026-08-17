@@ -82,6 +82,9 @@ export interface Restaurant {
   /** A data-driven city area; it is used for guide filters, not an AI guess. */
   neighbourhood?: string | null;
   neighbourhoodId?: string | null;
+  /** Broad, data-backed area (for Dublin, derived from the Eircode prefix). */
+  area?: string | null;
+  areaCode?: string | null;
   locationSource?: RestaurantLocationSource | null;
   locationSourceUrl?: string | null;
   locationConfidence?: LocationConfidence | null;

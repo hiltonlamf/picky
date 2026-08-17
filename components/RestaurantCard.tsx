@@ -57,8 +57,8 @@ export default function RestaurantCard({ restaurant }: Props) {
             </span>
           )}
         </div>
-        {restaurant.neighbourhood && (
-          <p className="-mt-1 text-xs text-forest/65">{restaurant.neighbourhood}</p>
+        {restaurant.area && (
+          <p className="-mt-1 text-xs text-forest/65">{restaurant.areaCode ?? restaurant.area}</p>
         )}
 
         {/* Dietary counts stay green with their emoji — pink never carries
