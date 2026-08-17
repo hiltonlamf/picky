@@ -57,6 +57,65 @@ describe('computeReviewFlags', () => {
   });
 });
 
+/**
+ * MIN_GUIDE_DISHES is a per-RESTAURANT total, so a restaurant can clear it
+ * while carrying a broken menu inside it. Found live in production:
+ * Chapter One (13 dishes) had a "Dinner Menu" of 2, and Featherblade a whole
+ * menu called "Burgers" holding only "The Best Burger in Dublin".
+ */
+describe('per-menu thin tripwire', () => {
+  const labelled = (menus: Array<{ label: string; count: number }>): Restaurant =>
+    restaurant([], {
+      sections: menus.map((m, i) => ({
+        id: `s${i}`,
+        name: 'Mains',
+        displayOrder: i,
+        menuLabel: m.label,
+        dishes: Array.from({ length: m.count }, (_, j) => dish(`${m.label} dish ${j}`)),
+      })),
+    });
+
+  it('flags a restaurant whose individual menu is too thin (Chapter One)', () => {
+    const flags = computeReviewFlags(
+      labelled([{ label: 'Lunch Menu', count: 5 }, { label: 'Dinner Menu', count: 2 }, { label: 'Tasting Menu', count: 6 }])
+    );
+    expect(flags.some((f) => f.code === 'thin_menu')).toBe(true);
+    expect(flags.find((f) => f.code === 'thin_menu')?.label).toContain('Dinner Menu');
+  });
+
+  it('flags a one-dish menu even when the restaurant total is healthy (Featherblade)', () => {
+    const flags = computeReviewFlags(labelled([{ label: 'Menu', count: 20 }, { label: 'Burgers', count: 1 }]));
+    expect(flags.some((f) => f.code === 'thin_menu')).toBe(true);
+  });
+
+  it('withholds such a restaurant from the public guide', () => {
+    expect(isPubliclyVisible(labelled([{ label: 'Menu', count: 20 }, { label: 'Burgers', count: 1 }]))).toBe(false);
+  });
+
+  /**
+   * The false positive that an earlier version of this rule produced: it would
+   * have pulled Pickle (4 desserts) and Drury Buildings (3) off the live guide
+   * for having a perfectly normal dessert menu.
+   */
+  it.each(['Dessert Menu', 'Desserts', 'Sides', 'Sauces', 'Cheese'])(
+    'does NOT flag a short "%s" — those are honestly short',
+    (label) => {
+      const flags = computeReviewFlags(labelled([{ label: 'Main Menu', count: 40 }, { label, count: 3 }]));
+      expect(flags.some((f) => f.code === 'thin_menu')).toBe(false);
+    }
+  );
+
+  it('does not flag an untagged single menu (already covered by MIN_GUIDE_DISHES)', () => {
+    const flags = computeReviewFlags(restaurant(manyDishes));
+    expect(flags.some((f) => f.code === 'thin_menu')).toBe(false);
+  });
+
+  it('does not flag menus that are all healthy', () => {
+    const flags = computeReviewFlags(labelled([{ label: 'Lunch', count: 12 }, { label: 'Dinner', count: 20 }]));
+    expect(flags).toHaveLength(0);
+  });
+});
+
 describe('isPubliclyVisible', () => {
   it('hides non-done restaurants', () => {
     expect(isPubliclyVisible(restaurant(manyDishes, { status: 'error' }))).toBe(false);

@@ -6,7 +6,33 @@ import type { Restaurant, Dish } from '@/types';
 // restaurant is withheld and surfaced for review instead of shown to diners.
 export const MIN_GUIDE_DISHES = 7;
 
-export type ReviewFlagCode = 'few_dishes' | 'menu_as_dish';
+/**
+ * The same test, applied to each menu individually.
+ *
+ * MIN_GUIDE_DISHES is a per-RESTAURANT total, so a restaurant can clear it
+ * comfortably while carrying a broken menu inside it — and the picker shows
+ * that broken menu to diners as an equal option. Found in production:
+ * Chapter One (13 dishes, live) had a "Dinner Menu" of 2, and Featherblade
+ * had a whole menu called "Burgers" holding one item, "The Best Burger in
+ * Dublin", which is a marketing headline rather than a dish.
+ *
+ * Lower than MIN_GUIDE_DISHES on purpose: the bar for a single menu has to sit
+ * below the bar for a whole restaurant.
+ */
+export const MIN_MENU_DISHES = 5;
+
+/**
+ * Menu types that are genuinely short, and must not be flagged for it.
+ *
+ * A dessert menu of three or four is a normal dessert menu, not a broken
+ * parse — Pickle (4) and Drury Buildings (3) both have one, and an earlier
+ * version of this rule would have pulled both off the live guide for it.
+ * Sides, sauces and cheese lists are short for the same honest reason.
+ */
+const LEGITIMATELY_SHORT_MENU_RE =
+  /\b(dessert|desserts|sweet|sweets|pudding|puddings|side|sides|sauce|sauces|cheese|cheeses|extra|extras|nagerecht|dolci|postres)\b/i;
+
+export type ReviewFlagCode = 'few_dishes' | 'menu_as_dish' | 'thin_menu';
 
 export interface ReviewFlag {
   code: ReviewFlagCode;
@@ -76,7 +102,41 @@ export function computeReviewFlags(restaurant: Pick<Restaurant, 'sections'>): Re
     }
   }
 
+  for (const { label, count } of thinMenus(restaurant)) {
+    flags.push({
+      code: 'thin_menu',
+      label: `"${label}" has ${count} dish${count === 1 ? '' : 'es'}`,
+      detail:
+        `The "${label}" menu holds only ${count} dish${count === 1 ? '' : 'es'} — ` +
+        `too few to be a real menu, so it was probably read wrong.`,
+    });
+    break; // one is enough to warrant a look
+  }
+
   return flags;
+}
+
+/**
+ * Menus that are individually too thin to be real. Only labelled menus are
+ * checked: an untagged single menu is already covered by the whole-restaurant
+ * MIN_GUIDE_DISHES test, and double-flagging it would say the same thing twice.
+ *
+ * Exported so the admin queue and the QA preview can name the offending menu
+ * rather than just reporting that something is wrong.
+ */
+export function thinMenus(
+  restaurant: Pick<Restaurant, 'sections'>
+): Array<{ label: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const section of restaurant.sections) {
+    const label = section.menuLabel;
+    if (!label) continue;
+    const live = section.dishes.filter((d) => !d.deletedAt).length;
+    counts.set(label, (counts.get(label) ?? 0) + live);
+  }
+  return Array.from(counts.entries())
+    .filter(([label, count]) => count < MIN_MENU_DISHES && !LEGITIMATELY_SHORT_MENU_RE.test(label))
+    .map(([label, count]) => ({ label, count }));
 }
 
 /** Whether a restaurant may appear on the PUBLIC guide right now.
