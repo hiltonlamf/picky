@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { extractLocationFromHtml, pointInGeoJson } from '../lib/location';
+import { describe, expect, it, vi } from 'vitest';
+import { extractLocationFromHtml, findLocationOnContactPage, pointInGeoJson } from '../lib/location';
 
 describe('first-party location extraction', () => {
   it('uses restaurant JSON-LD address and coordinates without model parsing', () => {
@@ -23,6 +23,24 @@ describe('first-party location extraction', () => {
       'https://restaurant.example'
     );
     expect(candidate).toMatchObject({ address: '12 Main Street, Dublin 2', latitude: 53.341, longitude: -6.261 });
+  });
+
+  it('uses one same-domain contact page when the homepage has no address', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      '<address>5 Dame Street, Dublin 2</address>',
+      { status: 200, headers: { 'content-type': 'text/html' } }
+    ));
+    const candidate = await findLocationOnContactPage(
+      '<a href="/contact">Contact</a>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({
+      address: '5 Dame Street, Dublin 2',
+      source: 'website_contact_page',
+      sourceUrl: 'https://restaurant.example/contact',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
   });
 });
 

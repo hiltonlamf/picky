@@ -245,6 +245,20 @@ async function fetchStaticHtml(url: string): Promise<string | null> {
 }
 
 /**
+ * The regular scraper has already fetched the homepage. Reuse that HTML and
+ * make only the one conditional, same-domain Contact-page request needed to
+ * find a published address. This deliberately avoids another reader or model
+ * request on the normal parse path.
+ */
+export async function findLocationOnContactPage(homepageHtml: string, pageUrl: string): Promise<LocationCandidate | null> {
+  const contactUrl = contactPageUrl(homepageHtml, pageUrl);
+  if (!contactUrl) return null;
+  const contactHtml = await fetchStaticHtml(contactUrl);
+  const candidate = contactHtml ? extractLocationFromHtml(contactHtml, contactUrl) : null;
+  return candidate ? { ...candidate, source: 'website_contact_page', sourceUrl: contactUrl } : null;
+}
+
+/**
  * Explicit, one-optional-page backfill path. It never invokes a reader or an
  * LLM: at most the restaurant homepage and one same-domain Contact page are
  * fetched with normal HTTP. The caller decides whether to run it in bulk.
@@ -255,9 +269,5 @@ export async function findLocationOnWebsite(url: string): Promise<LocationCandid
   const homepageCandidate = extractLocationFromHtml(homepage, url);
   if (homepageCandidate) return homepageCandidate;
 
-  const contactUrl = contactPageUrl(homepage, url);
-  if (!contactUrl) return null;
-  const contactHtml = await fetchStaticHtml(contactUrl);
-  const candidate = contactHtml ? extractLocationFromHtml(contactHtml, contactUrl) : null;
-  return candidate ? { ...candidate, source: 'website_contact_page', sourceUrl: contactUrl } : null;
+  return findLocationOnContactPage(homepage, url);
 }
