@@ -97,6 +97,14 @@ describe('first-party location extraction', () => {
     ]);
   });
 
+  it('accepts a first-party address block in an unfamiliar city and country', () => {
+    const candidates = extractLocationsFromHtml(
+      '<footer><p>12 Rue de Rivoli<br>75001 Paris, France</p></footer>',
+      'https://restaurant.example'
+    );
+    expect(candidates[0]?.address).toBe('12 Rue de Rivoli 75001 Paris, France');
+  });
+
   it('does not mistake promotional copy mentioning a city and unrelated number for an address', () => {
     const candidate = extractLocationFromHtml(
       '<p>DÍON is Dublin\'s first wine bar with 20 bottles, just off Market Lane.</p>',

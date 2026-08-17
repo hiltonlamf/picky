@@ -128,14 +128,16 @@ const VISIBLE_EIRCODE_RE = /\b(?:D(?:0[1-9]|1\d|2[0-4])|D6W)\s*(?=[A-Z0-9]{4}\b)
 // that include Amsterdam still use the street-and-city fallback below.
 const VISIBLE_DUTCH_POSTCODE_RE = /\b\d{4}\s?[A-Z]{2}\b/;
 const VISIBLE_CITY_RE = /\b(?:Dublin(?:\s+\d{1,2})?|Amsterdam|London|Westport)\b/i;
-const STREET_TYPE_RE = /\b(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue)\b|(?:straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
-const NUMBERED_STREET_RE = /\b\d+[A-Z]?(?:[-/]\d+[A-Z]?)?(?:\s+[^\s,]+){0,6}\s+(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue|straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
+const STREET_TYPES = 'street|st\\.?|road|rd\\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue|boulevard|straat|gracht|kade|plein|weg|dijk|markt|rue|quai|via|viale|piazza|calle|carrer|paseo|platz|strasse|straße|chaussee|chaussée|rua|travessa';
+const STREET_TYPE_RE = new RegExp(`\\b(?:${STREET_TYPES})\\b`, 'i');
+const NUMBERED_STREET_RE = new RegExp(`\\b\\d+[A-Z]?(?:[-/]\\d+[A-Z]?)?(?:\\s+[^\\s,]+){0,6}\\s+(?:${STREET_TYPES})\\b`, 'i');
 
 function addressesFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate[] {
   const candidates: LocationCandidate[] = [];
   for (const element of $('address, [itemprop="address"], [class*="address"], [class*="Address"], [id*="address"], [id*="Address"], p, li, h1, h2, h3, h4, h5, h6').toArray()) {
     const copy = $(element).clone();
     copy.find('script, style, svg').remove();
+    const hadLineBreak = copy.find('br').length > 0;
     // Cheerio's text() concatenates <br>-separated text without a space.
     // Preserve the visible line breaks before compacting the address.
     copy.find('br').replaceWith(' ');
@@ -165,14 +167,28 @@ function addressesFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): Loc
     const hasCompactAddress = value.length <= 140 && (
       STREET_TYPE_RE.test(beforeCity) || (labelledAddress && /\d/.test(beforeCity))
     );
+    const context = [
+      attributes,
+      $(element).parent().attr('class'),
+      $(element).parent().attr('id'),
+      $(element).closest('footer').length ? 'footer' : '',
+    ].filter(Boolean).join(' ');
+    // Country-independent fallback: an explicitly labelled/contact/footer
+    // block containing a numbered street can be accepted without knowing the
+    // city's postcode format in advance. A line break is strong address-layout
+    // evidence; ordinary promotional prose on an unlabelled single line is not.
+    const genericStreetAddress = value.length <= 180 && NUMBERED_STREET_RE.test(value) &&
+      (labelledAddress || hadLineBreak || /contact|location|visit|footer/i.test(context));
     if (
       value.length < 8 ||
       value.length > 260 ||
-      ((!postcode || postcode.index === undefined) && (!city || city.index === undefined || (!hasStreetAddress && !hasCompactAddress)))
+      ((!postcode || postcode.index === undefined) &&
+        (!city || city.index === undefined || (!hasStreetAddress && !hasCompactAddress)) &&
+        !genericStreetAddress)
     ) continue;
     const postcodeEnd = postcode && postcode.index !== undefined ? postcode.index + postcode[0].length : 0;
     const cityEnd = city && city.index !== undefined ? city.index + city[0].length : 0;
-    const end = Math.max(postcodeEnd, cityEnd);
+    const end = Math.max(postcodeEnd, cityEnd) || value.length;
     candidates.push({
       // A footer can place the email/telephone immediately after an Eircode
       // without a \"Phone\" label. The postcode is the trusted end of the
