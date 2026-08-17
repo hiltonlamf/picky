@@ -36,6 +36,7 @@ import {
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
 import { pointInGeoJson, type LocationCandidate } from './location';
+import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 
 let _client: ReturnType<typeof createClient> | null = null;
@@ -321,6 +322,8 @@ export async function fetchRestaurantWithDishes(
     longitude: r.longitude ?? null,
     neighbourhood,
     neighbourhoodId: r.neighbourhood_id ?? null,
+    area: r.area_label ?? neighbourhood,
+    areaCode: r.area_code ?? null,
     locationSource: (r.location_source as RestaurantLocationSource | null) ?? null,
     locationSourceUrl: r.location_source_url ?? null,
     locationConfidence: (r.location_confidence as LocationConfidence | null) ?? null,
@@ -350,6 +353,7 @@ export async function saveRestaurantLocation(restaurantId: string, candidate: Lo
   const existing = restaurant.location_confidence as LocationConfidence | null;
   if (existing && CONFIDENCE_RANK[existing] > CONFIDENCE_RANK[candidate.confidence]) return;
 
+  const dublinArea = city.toLowerCase() === 'dublin' ? dublinAreaForAddress(candidate.address) : null;
   const location = {
     ...(candidate.address ? { address: candidate.address } : {}),
     ...(candidate.latitude !== undefined ? { latitude: candidate.latitude } : {}),
@@ -358,6 +362,9 @@ export async function saveRestaurantLocation(restaurantId: string, candidate: Lo
     location_source_url: candidate.sourceUrl,
     location_confidence: candidate.confidence,
     location_checked_at: new Date().toISOString(),
+    ...(dublinArea
+      ? { area_code: dublinArea.code, area_label: dublinArea.label, area_source: 'eircode_prefix' }
+      : {}),
   };
   const { error } = await db().from('restaurants').update(location).eq('id', restaurantId);
   if (error) throw new Error(`Failed to save restaurant location: ${error.message}`);

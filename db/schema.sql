@@ -47,10 +47,17 @@ ALTER TABLE restaurants
   ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS neighbourhood_id UUID REFERENCES city_neighbourhoods(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS area_code TEXT,
+  ADD COLUMN IF NOT EXISTS area_label TEXT,
+  ADD COLUMN IF NOT EXISTS area_source TEXT CHECK (area_source IN ('eircode_prefix', 'manual', 'geocoder')),
   ADD COLUMN IF NOT EXISTS location_source TEXT CHECK (location_source IN ('website_jsonld', 'website_address_element', 'website_map_link', 'website_contact_page')),
   ADD COLUMN IF NOT EXISTS location_source_url TEXT,
   ADD COLUMN IF NOT EXISTS location_confidence TEXT CHECK (location_confidence IN ('high', 'medium', 'low')),
   ADD COLUMN IF NOT EXISTS location_checked_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS restaurants_city_area_label_idx
+  ON restaurants (lower(city), area_label)
+  WHERE area_label IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS menu_sections (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
