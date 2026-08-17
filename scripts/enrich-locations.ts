@@ -15,8 +15,20 @@ import { MIN_GUIDE_DISHES } from '../lib/review-flags';
 const cityIndex = process.argv.indexOf('--city');
 const city = cityIndex === -1 ? null : process.argv[cityIndex + 1]?.trim().toLowerCase();
 const apply = process.argv.includes('--apply');
+const limitIndex = process.argv.indexOf('--limit');
+const offsetIndex = process.argv.indexOf('--offset');
+const idsIndex = process.argv.indexOf('--ids');
+const limit = limitIndex === -1 ? null : Number(process.argv[limitIndex + 1]);
+const offset = offsetIndex === -1 ? 0 : Number(process.argv[offsetIndex + 1]);
+const requestedIds = idsIndex === -1
+  ? null
+  : (process.argv[idsIndex + 1] ?? '').split(',').map((id) => id.trim()).filter(Boolean);
+const listOnly = process.argv.includes('--list');
 
 if (cityIndex !== -1 && !city) throw new Error('Pass a non-empty --city <guide slug>.');
+if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) throw new Error('Pass a positive integer after --limit.');
+if (!Number.isInteger(offset) || offset < 0) throw new Error('Pass a non-negative integer after --offset.');
+if (requestedIds !== null && requestedIds.length === 0) throw new Error('Pass one or more comma-separated restaurant IDs after --ids.');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -29,6 +41,7 @@ async function main() {
     .is('address', null)
     .order('created_at');
   if (city) query = query.ilike('city', city);
+  if (requestedIds) query = query.in('id', requestedIds);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
@@ -47,12 +60,19 @@ async function main() {
       dishCounts.set(restaurantId, (dishCounts.get(restaurantId) ?? 0) + 1);
     }
   }
-  const restaurants = (data ?? []).filter((restaurant) =>
+  const eligibleRestaurants = (data ?? []).filter((restaurant) =>
     eligibleCity.has(restaurant.city as string) && (dishCounts.get(restaurant.id as string) ?? 0) >= MIN_GUIDE_DISHES
   );
+  const restaurants = limit === null ? eligibleRestaurants.slice(offset) : eligibleRestaurants.slice(offset, offset + limit);
+
+  if (listOnly) {
+    console.log(JSON.stringify(eligibleRestaurants.map((restaurant) => ({ id: restaurant.id, name: restaurant.name, city: restaurant.city }))));
+    return;
+  }
 
   const scope = city ?? 'all cities';
-  console.log(`${apply ? 'APPLY' : 'DRY RUN'} — first-party location enrichment for ${scope} (${restaurants.length} eligible restaurants; ${Math.max(0, (data?.length ?? 0) - restaurants.length)} skipped because they are unassigned or have fewer than ${MIN_GUIDE_DISHES} live dishes)`);
+  const batch = limit === null ? '' : `; batch offset ${offset}, limit ${limit}`;
+  console.log(`${apply ? 'APPLY' : 'DRY RUN'} — first-party location enrichment for ${scope} (${restaurants.length} of ${eligibleRestaurants.length} eligible restaurants${batch}; ${(data?.length ?? 0) - eligibleRestaurants.length} skipped because they are unassigned or have fewer than ${MIN_GUIDE_DISHES} live dishes)`);
   let found = 0;
   let rejected = 0;
   let failed = 0;

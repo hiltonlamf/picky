@@ -366,7 +366,15 @@ export async function saveRestaurantLocation(restaurantId: string, candidate: Lo
       ? { area_code: dublinArea.code, area_label: dublinArea.label, area_source: 'eircode_prefix' }
       : {}),
   };
-  const { error } = await db().from('restaurants').update(location).eq('id', restaurantId);
+  let { error } = await db().from('restaurants').update(location).eq('id', restaurantId);
+  // Address capture should remain deployable before the optional Dublin-area
+  // migration is applied. Retry the same first-party location write without
+  // area fields; the address is more valuable than rejecting it for migration
+  // ordering, and a later reparse/backfill will add the area once available.
+  if (error && dublinArea && /area_(code|label|source)/i.test(error.message)) {
+    const { area_code: _areaCode, area_label: _areaLabel, area_source: _areaSource, ...locationWithoutArea } = location;
+    ({ error } = await db().from('restaurants').update(locationWithoutArea).eq('id', restaurantId));
+  }
   if (error) throw new Error(`Failed to save restaurant location: ${error.message}`);
 
   if (candidate.latitude !== undefined && candidate.longitude !== undefined) {
