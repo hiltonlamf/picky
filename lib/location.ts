@@ -117,6 +117,44 @@ function mapCandidatesFromDocument($: cheerio.CheerioAPI, sourceUrl: string): Lo
   return candidates;
 }
 
+// An Eircode or Dutch postcode is a strong enough signal to accept a compact
+// visible text block as a published address. Many small restaurant sites put
+// this in an ordinary <p>, not an <address> element or JSON-LD.
+const VISIBLE_POSTCODE_RE = /\b(?:D(?:0[1-9]|1\d|2[0-4])|D6W)\s*[A-Z0-9]{4}\b|\b\d{4}\s?[A-Z]{2}\b/i;
+
+function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate | null {
+  for (const element of $('address, p, li').toArray()) {
+    const copy = $(element).clone();
+    copy.find('script, style, svg').remove();
+    // Cheerio's text() concatenates <br>-separated text without a space.
+    // Preserve the visible line breaks before compacting the address.
+    copy.find('br').replaceWith(' ');
+    const value = copy
+      .text()
+      .replace(/\s+/g, ' ')
+      // Contact blocks often put phone/email after the address in the same
+      // paragraph. Keep the street address but never display those details.
+      .replace(/\b(?:phone|tel(?:ephone)?|email)\s*:?[\s\S]*$/i, '')
+      // A compact footer may list telephone and email before the street line.
+      // Remove only recognisable contact tokens; never infer the address.
+      .replace(/^(?:\+?\d[\d\s().-]{5,})\s*/, '')
+      .replace(/^[\w.+-]+@[\w.-]+\.[A-Z]{2,}\s*/i, '')
+      .trim();
+    const postcode = value.match(VISIBLE_POSTCODE_RE);
+    if (value.length < 8 || value.length > 260 || !postcode || postcode.index === undefined) continue;
+    return {
+      // A footer can place the email/telephone immediately after an Eircode
+      // without a \"Phone\" label. The postcode is the trusted end of the
+      // address, so do not display whatever follows it.
+      address: value.slice(0, postcode.index + postcode[0].length).trim(),
+      confidence: 'medium',
+      source: 'website_address_element',
+      sourceUrl,
+    };
+  }
+  return null;
+}
+
 /** Extract only evidence a restaurant deliberately publishes on its own page. */
 export function extractLocationFromHtml(html: string, sourceUrl: string): LocationCandidate | null {
   const $ = cheerio.load(html);
@@ -148,6 +186,8 @@ export function extractLocationFromHtml(html: string, sourceUrl: string): Locati
       confidence: 'high', source: 'website_address_element', sourceUrl,
     };
   }
+  const visibleAddress = addressFromVisibleText($, sourceUrl);
+  if (visibleAddress) return visibleAddress;
   // Coordinates without a published street address are useful for automatic
   // neighbourhood assignment, but never shown as an invented address.
   return mapCandidates.find((candidate) => candidate.address) ?? mapCandidates[0] ?? null;
@@ -210,7 +250,7 @@ function contactPageUrl(html: string, pageUrl: string): string | null {
   for (const element of $('a[href]').toArray()) {
     const href = $(element).attr('href') ?? '';
     const label = `${$(element).text()} ${href}`.toLowerCase();
-    if (!/(contact|find[-_ ]?us|location|visit[-_ ]?us)/.test(label)) continue;
+    if (!/(contact|about|find[-_ ]?us|location|visit[-_ ]?us)/.test(label)) continue;
     try {
       const target = new URL(href, pageUrl);
       // Never use a directory/social profile as alleged first-party evidence.

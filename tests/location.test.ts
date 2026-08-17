@@ -17,6 +17,33 @@ describe('first-party location extraction', () => {
     expect(candidate).toMatchObject({ address: '12 Main Street, Dublin 2', source: 'website_address_element' });
   });
 
+  it('uses a compact visible text block with a postcode when semantic address markup is absent', () => {
+    const candidate = extractLocationFromHtml(
+      '<p>18 Merrion Row,<br>Dublin 2,<br>D02 A316<br>Phone: +35316788872</p>',
+      'https://etto.ie/contact'
+    );
+    expect(candidate).toMatchObject({
+      address: '18 Merrion Row, Dublin 2, D02 A316',
+      source: 'website_address_element',
+    });
+  });
+
+  it('stops a visible address at its postcode when contact details follow without labels', () => {
+    const candidate = extractLocationFromHtml(
+      '<p>16 Aungier St, Dublin, D02 X044 info@restaurant.example +35315388886</p>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: '16 Aungier St, Dublin, D02 X044' });
+  });
+
+  it('removes leading phone and email details before a visible address', () => {
+    const candidate = extractLocationFromHtml(
+      '<p>+31629827120 info@restaurant.example Schollenbrugstraat 8 | 1091EX</p>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: 'Schollenbrugstraat 8 | 1091EX' });
+  });
+
   it('combines an official address with a coordinate published in its map link', () => {
     const candidate = extractLocationFromHtml(
       '<address>12 Main Street, Dublin 2</address><a href="https://www.google.com/maps/@53.341,-6.261,16z">Map</a>',
@@ -40,6 +67,23 @@ describe('first-party location extraction', () => {
       sourceUrl: 'https://restaurant.example/contact',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
+  it('treats an About page as an eligible first-party address page', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      '<p>6 Norseman Court,<br>Manor Street, Stoneybatter,<br>Dublin 7, D07 NP83</p>',
+      { status: 200, headers: { 'content-type': 'text/html' } }
+    ));
+    const candidate = await findLocationOnContactPage(
+      '<a href="/about">About</a>',
+      'https://afianco.ie'
+    );
+    expect(candidate).toMatchObject({
+      address: '6 Norseman Court, Manor Street, Stoneybatter, Dublin 7, D07 NP83',
+      source: 'website_contact_page',
+      sourceUrl: 'https://afianco.ie/about',
+    });
     fetchMock.mockRestore();
   });
 });

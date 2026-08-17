@@ -77,7 +77,10 @@ async function main() {
   let rejected = 0;
   let failed = 0;
   for (const restaurant of restaurants) {
-    const url = (restaurant.canonical_url as string | null) ?? (restaurant.url as string);
+    // The submitted URL is normally the restaurant homepage. Some older rows
+    // have a menu subpage in canonical_url, which would hide a footer/contact
+    // address from the first-party check.
+    const url = (restaurant.url as string) ?? (restaurant.canonical_url as string);
     const name = (restaurant.name as string | null) ?? url;
     const restaurantCity = restaurant.city as string;
     try {
