@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { extractLocationFromHtml, findLocationOnContactPage, pointInGeoJson } from '../lib/location';
+import {
+  extractLocationFromHtml,
+  extractLocationsFromHtml,
+  findLocationOnContactPage,
+  findLocationsOnContactPages,
+  pointInGeoJson,
+} from '../lib/location';
 
 describe('first-party location extraction', () => {
   it('uses restaurant JSON-LD address and coordinates without model parsing', () => {
@@ -10,6 +16,18 @@ describe('first-party location extraction', () => {
       address: '5 Example Street, Dublin, D02 XY12, IE', latitude: 53.34, longitude: -6.26,
       source: 'website_jsonld', confidence: 'high',
     });
+  });
+
+  it('keeps every branch published as structured first-party data', () => {
+    const candidates = extractLocationsFromHtml(`
+      <script type="application/ld+json">[{"@type":"Restaurant","name":"North","address":{"streetAddress":"1 North Street","addressLocality":"Dublin","postalCode":"D01 AB12"}},{"@type":"Restaurant","name":"South","address":{"streetAddress":"2 South Street","addressLocality":"Dublin","postalCode":"D02 CD34"}}]</script>
+    `, 'https://restaurant.example/locations');
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((candidate) => candidate.label)).toEqual(['North', 'South']);
+    expect(candidates.map((candidate) => candidate.address)).toEqual([
+      '1 North Street, Dublin, D01 AB12',
+      '2 South Street, Dublin, D02 CD34',
+    ]);
   });
 
   it('falls back to a visible address element', () => {
@@ -66,6 +84,17 @@ describe('first-party location extraction', () => {
       'https://restaurant.example'
     );
     expect(candidate).toMatchObject({ address: 'Gigi Ranelagh, 53 Ranelagh Dublin 6' });
+  });
+
+  it('finds several branch addresses published in heading blocks', () => {
+    const candidates = extractLocationsFromHtml(
+      '<h4>Kerkstraat 332<br>1017 JA Amsterdam</h4><h4>Voetboogstraat 23<br>1012 XK Amsterdam</h4>',
+      'https://restaurant.example'
+    );
+    expect(candidates.map((candidate) => candidate.address)).toEqual([
+      'Kerkstraat 332 1017 JA Amsterdam',
+      'Voetboogstraat 23 1012 XK Amsterdam',
+    ]);
   });
 
   it('does not mistake promotional copy mentioning a city and unrelated number for an address', () => {
@@ -137,6 +166,21 @@ describe('first-party location extraction', () => {
     );
     expect(candidate).toMatchObject({ address: '4 Example Street, Dublin 2' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+  });
+
+  it('combines branches found across several first-party location pages', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('<address>1 North Street, Dublin 1</address>', { status: 200, headers: { 'content-type': 'text/html' } }))
+      .mockResolvedValueOnce(new Response('<address>2 South Street, Dublin 2</address>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    const candidates = await findLocationsOnContactPages(
+      '<a href="/locations/north">North location</a><a href="/locations/south">South location</a>',
+      'https://restaurant.example'
+    );
+    expect(candidates.map((candidate) => candidate.address)).toEqual([
+      '1 North Street, Dublin 1',
+      '2 South Street, Dublin 2',
+    ]);
     fetchMock.mockRestore();
   });
 

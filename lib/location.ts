@@ -10,6 +10,7 @@ export type LocationConfidence = 'high' | 'medium' | 'low';
 export type LocationSource = 'website_jsonld' | 'website_address_element' | 'website_map_link' | 'website_contact_page';
 
 export interface LocationCandidate {
+  label?: string;
   address: string;
   latitude?: number;
   longitude?: number;
@@ -66,6 +67,7 @@ function candidatesFromJson(value: unknown, sourceUrl: string): LocationCandidat
   const longitude = number(geo.longitude);
   return [
     {
+      ...(text(item.name) ? { label: text(item.name)! } : {}),
       address,
       ...(validCoordinates(latitude, longitude) ? { latitude, longitude } : {}),
       confidence: 'high',
@@ -129,8 +131,9 @@ const VISIBLE_CITY_RE = /\b(?:Dublin(?:\s+\d{1,2})?|Amsterdam|London|Westport)\b
 const STREET_TYPE_RE = /\b(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue)\b|(?:straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
 const NUMBERED_STREET_RE = /\b\d+[A-Z]?(?:[-/]\d+[A-Z]?)?(?:\s+[^\s,]+){0,6}\s+(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue|straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
 
-function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate | null {
-  for (const element of $('address, [itemprop="address"], [class*="address"], [class*="Address"], [id*="address"], [id*="Address"], p, li').toArray()) {
+function addressesFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate[] {
+  const candidates: LocationCandidate[] = [];
+  for (const element of $('address, [itemprop="address"], [class*="address"], [class*="Address"], [id*="address"], [id*="Address"], p, li, h1, h2, h3, h4, h5, h6').toArray()) {
     const copy = $(element).clone();
     copy.find('script, style, svg').remove();
     // Cheerio's text() concatenates <br>-separated text without a space.
@@ -167,10 +170,10 @@ function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): Locat
       value.length > 260 ||
       ((!postcode || postcode.index === undefined) && (!city || city.index === undefined || (!hasStreetAddress && !hasCompactAddress)))
     ) continue;
-    const end = postcode && postcode.index !== undefined
-      ? postcode.index + postcode[0].length
-      : (city!.index as number) + city![0].length;
-    return {
+    const postcodeEnd = postcode && postcode.index !== undefined ? postcode.index + postcode[0].length : 0;
+    const cityEnd = city && city.index !== undefined ? city.index + city[0].length : 0;
+    const end = Math.max(postcodeEnd, cityEnd);
+    candidates.push({
       // A footer can place the email/telephone immediately after an Eircode
       // without a \"Phone\" label. The postcode is the trusted end of the
       // address, so do not display whatever follows it.
@@ -178,13 +181,76 @@ function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): Locat
       confidence: 'medium',
       source: 'website_address_element',
       sourceUrl,
-    };
+    });
   }
-  return null;
+  return candidates;
 }
 
-/** Extract only evidence a restaurant deliberately publishes on its own page. */
-export function extractLocationFromHtml(html: string, sourceUrl: string): LocationCandidate | null {
+const LOCATION_CONFIDENCE_RANK: Record<LocationConfidence, number> = { low: 1, medium: 2, high: 3 };
+
+function addressKey(address: string): string {
+  return address.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+export function areAddressesEquivalent(left: string, right: string): boolean {
+  const a = addressKey(left);
+  const b = addressKey(right);
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  // The same official address often appears once without its postcode/country
+  // and once with them. A meaningful whole-address prefix is safe to merge;
+  // differing street numbers do not satisfy this check.
+  return shorter.length >= 12 && (longer.startsWith(`${shorter} `) || longer.endsWith(` ${shorter}`));
+}
+
+function isUsablePublishedAddress(address: string): boolean {
+  const compact = address.replace(/\s+/g, ' ').trim();
+  // Reject broken schema/map labels such as "D, IE" or a venue name alone.
+  // A real postal address almost always carries a building/street/postal number;
+  // numberless street names are still accepted when the city district supplies
+  // one (e.g. "Fade Street, Dublin 2").
+  return compact.length >= 8 && compact.length <= 300 && /\d/.test(compact) && /[A-Za-z]{2}/.test(compact);
+}
+
+/** Prefer stronger duplicate evidence while retaining coordinates and a branch label. */
+export function dedupeLocationCandidates(candidates: LocationCandidate[]): LocationCandidate[] {
+  const byAddress = new Map<string, LocationCandidate>();
+  const coordinatesOnly: LocationCandidate[] = [];
+  for (const candidate of candidates) {
+    if (candidate.address && !isUsablePublishedAddress(candidate.address)) continue;
+    const key = addressKey(candidate.address);
+    if (!key) {
+      if (candidate.latitude !== undefined && candidate.longitude !== undefined) coordinatesOnly.push(candidate);
+      continue;
+    }
+    const equivalentKey = Array.from(byAddress.keys()).find((storedKey) =>
+      areAddressesEquivalent(storedKey, key)
+    );
+    const existing = equivalentKey ? byAddress.get(equivalentKey) : undefined;
+    if (!existing) {
+      byAddress.set(key, candidate);
+      continue;
+    }
+    const stronger = LOCATION_CONFIDENCE_RANK[candidate.confidence] > LOCATION_CONFIDENCE_RANK[existing.confidence] ||
+      (candidate.confidence === existing.confidence && candidate.address.length > existing.address.length)
+      ? candidate
+      : existing;
+    const other = stronger === candidate ? existing : candidate;
+    if (equivalentKey && equivalentKey !== key) byAddress.delete(equivalentKey);
+    byAddress.set(addressKey(stronger.address), {
+      ...stronger,
+      ...(stronger.label || !other.label ? {} : { label: other.label }),
+      ...(stronger.latitude !== undefined || other.latitude === undefined
+        ? {}
+        : { latitude: other.latitude, longitude: other.longitude }),
+    });
+  }
+  return [...Array.from(byAddress.values()), ...coordinatesOnly];
+}
+
+/** Extract every address a restaurant deliberately publishes on its own page. */
+export function extractLocationsFromHtml(html: string, sourceUrl: string): LocationCandidate[] {
   const $ = cheerio.load(html);
   const structured: LocationCandidate[] = [];
   $('script[type="application/ld+json"]').each((_, element) => {
@@ -195,30 +261,43 @@ export function extractLocationFromHtml(html: string, sourceUrl: string): Locati
     }
   });
   const mapCandidates = mapCandidatesFromDocument($, sourceUrl);
-  const mapCoordinates = mapCandidates.find((candidate) => candidate.latitude !== undefined && candidate.longitude !== undefined);
-  const withCoordinates = structured.find((candidate) => candidate.latitude !== undefined && candidate.longitude !== undefined);
-  if (withCoordinates) return withCoordinates;
-  if (structured[0]) {
-    // The address remains explicitly published JSON-LD; the coordinate is from
-    // the same restaurant page's explicit map link. No inference is involved.
-    return mapCoordinates
-      ? { ...structured[0], latitude: mapCoordinates.latitude, longitude: mapCoordinates.longitude }
-      : structured[0];
-  }
+  const addressElements: LocationCandidate[] = [];
+  $('address').each((_, element) => {
+    const address = $(element).text().replace(/\s+/g, ' ').trim();
+    if (address.length >= 8 && address.length <= 300) {
+      addressElements.push({ address, confidence: 'high', source: 'website_address_element', sourceUrl });
+    }
+  });
 
-  const addressElement = $('address').first().text().replace(/\s+/g, ' ').trim();
-  if (addressElement.length >= 8 && addressElement.length <= 300) {
-    return {
-      address: addressElement,
-      ...(mapCoordinates ? { latitude: mapCoordinates.latitude, longitude: mapCoordinates.longitude } : {}),
-      confidence: 'high', source: 'website_address_element', sourceUrl,
-    };
+  let published = dedupeLocationCandidates([
+    ...structured,
+    ...addressElements,
+    ...addressesFromVisibleText($, sourceUrl),
+    ...mapCandidates.filter((candidate) => candidate.address),
+  ]);
+
+  // A page with exactly one published address and one coordinate-only map link
+  // unambiguously describes the same venue. With several branches we never
+  // guess which pin belongs to which address.
+  const mapCoordinates = mapCandidates.filter(
+    (candidate) => !candidate.address && candidate.latitude !== undefined && candidate.longitude !== undefined
+  );
+  if (published.length === 1 && mapCoordinates.length === 1 && published[0].latitude === undefined) {
+    published = [{
+      ...published[0],
+      latitude: mapCoordinates[0].latitude,
+      longitude: mapCoordinates[0].longitude,
+    }];
   }
-  const visibleAddress = addressFromVisibleText($, sourceUrl);
-  if (visibleAddress) return visibleAddress;
-  // Coordinates without a published street address are useful for automatic
-  // neighbourhood assignment, but never shown as an invented address.
-  return mapCandidates.find((candidate) => candidate.address) ?? mapCandidates[0] ?? null;
+  if (published.length) return published;
+  // Coordinates without a published street address may support local polygon
+  // matching, but they are never rendered as an invented address.
+  return mapCoordinates.slice(0, 1);
+}
+
+/** Backward-compatible single-location view for existing callers. */
+export function extractLocationFromHtml(html: string, sourceUrl: string): LocationCandidate | null {
+  return extractLocationsFromHtml(html, sourceUrl)[0] ?? null;
 }
 
 export function isCandidateInCity(candidate: LocationCandidate, city: string): boolean {
@@ -328,14 +407,20 @@ async function fetchStaticHtml(url: string): Promise<string | null> {
  * on the normal parse path.
  */
 export async function findLocationOnContactPage(homepageHtml: string, pageUrl: string): Promise<LocationCandidate | null> {
+  return (await findLocationsOnContactPages(homepageHtml, pageUrl))[0] ?? null;
+}
+
+/** Read every linked first-party contact/location page and retain every branch. */
+export async function findLocationsOnContactPages(homepageHtml: string, pageUrl: string): Promise<LocationCandidate[]> {
+  const candidates: LocationCandidate[] = [];
   for (const contactUrl of contactPageUrls(homepageHtml, pageUrl)) {
     const contactHtml = await fetchStaticHtml(contactUrl);
-    const candidate = contactHtml ? extractLocationFromHtml(contactHtml, contactUrl) : null;
-    if (candidate?.address) {
-      return { ...candidate, source: 'website_contact_page', sourceUrl: contactUrl };
-    }
+    if (!contactHtml) continue;
+    candidates.push(...extractLocationsFromHtml(contactHtml, contactUrl)
+      .filter((candidate) => candidate.address)
+      .map((candidate) => ({ ...candidate, source: 'website_contact_page' as const, sourceUrl: contactUrl })));
   }
-  return null;
+  return dedupeLocationCandidates(candidates);
 }
 
 /**
@@ -344,10 +429,15 @@ export async function findLocationOnContactPage(homepageHtml: string, pageUrl: s
  * fetched with normal HTTP. The caller decides whether to run it in bulk.
  */
 export async function findLocationOnWebsite(url: string): Promise<LocationCandidate | null> {
-  const homepage = await fetchStaticHtml(url);
-  if (!homepage) return null;
-  const homepageCandidate = extractLocationFromHtml(homepage, url);
-  if (homepageCandidate) return homepageCandidate;
+  return (await findLocationsOnWebsite(url))[0] ?? null;
+}
 
-  return findLocationOnContactPage(homepage, url);
+/** Multi-branch equivalent of findLocationOnWebsite. */
+export async function findLocationsOnWebsite(url: string): Promise<LocationCandidate[]> {
+  const homepage = await fetchStaticHtml(url);
+  if (!homepage) return [];
+  return dedupeLocationCandidates([
+    ...extractLocationsFromHtml(homepage, url),
+    ...await findLocationsOnContactPages(homepage, url),
+  ]);
 }

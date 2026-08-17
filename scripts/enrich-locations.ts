@@ -5,11 +5,11 @@
 //   npx tsx scripts/enrich-locations.ts --apply
 //
 // Dry-run is intentional. Each candidate gets one ordinary homepage request
-// and, only when needed, up to three linked same-domain location-page requests.
+// and up to three linked same-domain location-page requests.
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
-import { findLocationOnWebsite, isCandidateInCity } from '../lib/location';
-import { saveRestaurantLocation } from '../lib/db';
+import { findLocationsOnWebsite } from '../lib/location';
+import { saveRestaurantLocations } from '../lib/db';
 import { MIN_GUIDE_DISHES } from '../lib/review-flags';
 
 const cityIndex = process.argv.indexOf('--city');
@@ -38,7 +38,6 @@ async function main() {
     .from('restaurants')
     .select('id, name, url, canonical_url, city')
     .eq('status', 'done')
-    .is('address', null)
     .order('created_at');
   if (city) query = query.ilike('city', city);
   if (requestedIds) query = query.in('id', requestedIds);
@@ -74,7 +73,6 @@ async function main() {
   const batch = limit === null ? '' : `; batch offset ${offset}, limit ${limit}`;
   console.log(`${apply ? 'APPLY' : 'DRY RUN'} — first-party location enrichment for ${scope} (${restaurants.length} of ${eligibleRestaurants.length} eligible restaurants${batch}; ${(data?.length ?? 0) - eligibleRestaurants.length} skipped because they are unassigned or have fewer than ${MIN_GUIDE_DISHES} live dishes)`);
   let found = 0;
-  let rejected = 0;
   let failed = 0;
   for (const restaurant of restaurants) {
     // The submitted URL is normally the restaurant homepage. Some older rows
@@ -82,21 +80,16 @@ async function main() {
     // address from the first-party check.
     const url = (restaurant.url as string) ?? (restaurant.canonical_url as string);
     const name = (restaurant.name as string | null) ?? url;
-    const restaurantCity = restaurant.city as string;
     try {
-      const candidate = await findLocationOnWebsite(url);
-      if (!candidate) {
+      const candidates = (await findLocationsOnWebsite(url)).filter((candidate) => candidate.address);
+      if (!candidates.length) {
         console.log(`  no location: ${name}`);
-      } else if (!candidate.address) {
-        rejected++;
-        console.log(`  rejected without a verifiable city address: ${name} — coordinates only`);
-      } else if (!isCandidateInCity(candidate, restaurantCity)) {
-        rejected++;
-        console.log(`  rejected outside ${restaurantCity}: ${name} — ${candidate.address || 'coordinates only'}`);
       } else {
-        found++;
-        console.log(`  ${apply ? 'saved' : 'would save'}: ${name} — ${candidate.address || 'coordinates only'} (${candidate.source}, ${candidate.confidence})`);
-        if (apply) await saveRestaurantLocation(restaurant.id as string, candidate);
+        found += candidates.length;
+        for (const candidate of candidates) {
+          console.log(`  ${apply ? 'saved' : 'would save'}: ${name} — ${candidate.address} (${candidate.source}, ${candidate.confidence})`);
+        }
+        if (apply) await saveRestaurantLocations(restaurant.id as string, candidates);
       }
     } catch (error) {
       failed++;
@@ -106,7 +99,7 @@ async function main() {
     // Be a considerate website visitor. This is intentionally slow and bounded.
     await sleep(500);
   }
-  console.log(`\n${found} location candidate(s) ${apply ? 'saved' : 'found'}; ${rejected} candidate(s) rejected because their city could not be verified; ${failed} restaurant(s) skipped; no paid APIs were called.`);
+  console.log(`\n${found} branch address(es) ${apply ? 'saved' : 'found'}; ${failed} restaurant(s) skipped; no paid APIs were called.`);
   if (!apply) console.log('Review the output, then re-run with --apply to persist these values.');
 }
 

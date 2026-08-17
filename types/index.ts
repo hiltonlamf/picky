@@ -58,6 +58,23 @@ export type RestaurantLocationSource =
   | 'website_map_link'
   | 'website_contact_page';
 
+export interface RestaurantLocation {
+  id?: string;
+  /** Optional branch name published by the restaurant (for example, "Dawson Street"). */
+  label?: string | null;
+  address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  neighbourhood?: string | null;
+  neighbourhoodId?: string | null;
+  area?: string | null;
+  areaCode?: string | null;
+  source?: RestaurantLocationSource | null;
+  sourceUrl?: string | null;
+  confidence?: LocationConfidence | null;
+  checkedAt?: string | null;
+}
+
 export interface Restaurant {
   id: string;
   url: string;
@@ -77,6 +94,8 @@ export interface Restaurant {
   cuisine?: string | null;
   /** Full first-party postal address, shown on the restaurant detail page. */
   address?: string | null;
+  /** Every first-party branch address. `address` remains as a legacy summary. */
+  locations?: RestaurantLocation[];
   latitude?: number | null;
   longitude?: number | null;
   /** A data-driven city area; it is used for guide filters, not an AI guess. */

@@ -8,7 +8,7 @@ import {
   findExistingRestaurant,
   resetRestaurantForReparse,
   createRestaurantRecord,
-  saveRestaurantLocation,
+  saveRestaurantLocations,
   saveClassifiedMenu,
   saveMenuCandidates,
   markRestaurantError,
@@ -204,7 +204,8 @@ export async function POST(request: NextRequest) {
           // A best-effort side effect of the page fetch we already performed.
           // Location extraction is deterministic and adds no LLM/reader calls;
           // a location failure must never make menu analysis fail.
-          if (scrapeResult.location) await saveRestaurantLocation(restaurantId, scrapeResult.location).catch(() => undefined);
+          const locations = scrapeResult.locations ?? (scrapeResult.location ? [scrapeResult.location] : []);
+          if (locations.length) await saveRestaurantLocations(restaurantId, locations).catch(() => undefined);
         } catch (err) {
           const rawMsg = err instanceof Error ? err.message : 'Could not fetch this page';
           // A fetch that never returned a page: treat as "site down / not live"

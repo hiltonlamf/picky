@@ -1,7 +1,12 @@
 import * as cheerio from 'cheerio';
 import { readPage } from './reader';
 import { callClaude } from './ai';
-import { extractLocationFromHtml, findLocationOnContactPage, type LocationCandidate } from './location';
+import {
+  dedupeLocationCandidates,
+  extractLocationsFromHtml,
+  findLocationsOnContactPages,
+  type LocationCandidate,
+} from './location';
 
 export interface ScrapeResult {
   url: string;
@@ -17,6 +22,8 @@ export interface ScrapeResult {
   screenshotUrl?: string; // hosted full-page screenshot from the reader, if any
   /** First-party location evidence found while fetching the restaurant site. */
   location?: LocationCandidate;
+  /** Every first-party branch found while fetching the restaurant site. */
+  locations?: LocationCandidate[];
   urlType: 'html' | 'pdf' | 'google_maps' | 'social' | 'unknown';
   warning?: string;
 }
@@ -1075,6 +1082,7 @@ type HtmlPageResult = {
   linkLabels: Record<string, string>;
   screenshotUrl?: string;
   location?: LocationCandidate;
+  locations?: LocationCandidate[];
 };
 
 function dedupeStrings(arr: string[]): string[] {
@@ -1146,13 +1154,18 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
   // This runs against HTML we already fetched for menu discovery. It must not
   // call a reader or a model: location enrichment cannot make the normal
   // scrape spend additional provider or AI quota.
-  let location = extractLocationFromHtml(domHtml, finalUrl);
-  // If the existing page only exposes map coordinates (or no location at all),
-  // make one ordinary same-domain Contact-page request. It is intentionally
-  // bounded and never invokes Firecrawl/Jina or an LLM.
-  if (depth === 0 && !location?.address) {
-    location = (await findLocationOnContactPage(domHtml, finalUrl)) ?? location;
+  let locations = extractLocationsFromHtml(domHtml, finalUrl);
+  // A homepage may publish one flagship address while its Contact/Locations
+  // page lists every branch. Always inspect those already-linked pages at the
+  // top level; these are bounded ordinary HTTP requests, never Firecrawl/Jina
+  // or an LLM call.
+  if (depth === 0) {
+    locations = dedupeLocationCandidates([
+      ...locations,
+      ...await findLocationsOnContactPages(domHtml, finalUrl),
+    ]);
   }
+  const location = locations[0];
 
   // English-first: if this page declares itself non-English but offers an
   // English version, read the English one instead (whole pipeline, so menu +
@@ -1264,6 +1277,7 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
       linkLabels,
       screenshotUrl: reader?.screenshotUrl,
       location: location ?? undefined,
+      locations: locations.length ? locations : undefined,
     };
   }
 
@@ -1321,6 +1335,10 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
           // Prefer address evidence on the submitted restaurant homepage over
           // a menu sub-page, while retaining a sub-page result if necessary.
           location: location ?? menuRes.location ?? undefined,
+          locations: dedupeLocationCandidates([
+            ...locations,
+            ...(menuRes.locations ?? []),
+          ]),
         };
       }
     } catch {
@@ -1340,6 +1358,7 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
     linkLabels,
     screenshotUrl: reader?.screenshotUrl,
     location: location ?? undefined,
+    locations: locations.length ? locations : undefined,
   };
 }
 
@@ -1366,6 +1385,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
         location: result.location,
+        locations: result.locations,
         urlType: 'html',
       };
     }
@@ -1402,6 +1422,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         linkLabels: result.linkLabels,
         screenshotUrl: result.screenshotUrl,
         location: result.location,
+        locations: result.locations,
         urlType: 'html',
       };
     }
@@ -1449,6 +1470,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
             menuLinks: result.menuLinks,
             screenshotUrl: result.screenshotUrl,
             location: result.location,
+            locations: result.locations,
             urlType: 'html',
           };
         }
@@ -1459,7 +1481,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
   }
 
   // Standard HTML scraping
-  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, linkLabels, screenshotUrl, location } =
+  const { text, menuUrl, finalUrl, title: pageTitle, menuImages, menuPdfUrls, menuLinks, navLinks, linkLabels, screenshotUrl, location, locations } =
     await scrapeHtmlPage(url);
   const title = pageTitle || 'Restaurant';
 
@@ -1478,6 +1500,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         linkLabels,
         screenshotUrl,
         location,
+        locations,
         urlType: 'pdf',
       };
     }
@@ -1495,6 +1518,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         linkLabels,
         screenshotUrl,
         location,
+        locations,
         urlType: 'html',
       };
     }
@@ -1512,6 +1536,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
         linkLabels,
         screenshotUrl,
         location,
+        locations,
         urlType: 'html',
       };
     }
@@ -1533,6 +1558,7 @@ export async function scrapeRestaurant(rawUrl: string): Promise<ScrapeResult> {
     linkLabels,
     screenshotUrl,
     location,
+    locations,
     urlType: 'html',
   };
 }

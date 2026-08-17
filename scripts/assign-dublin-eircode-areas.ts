@@ -22,9 +22,17 @@ async function main() {
     .order('created_at');
   if (error) throw new Error(error.message);
 
+  const { data: locations, error: locationsError } = await supabase
+    .from('restaurant_locations')
+    .select('id, restaurant_id, address, restaurants!inner(name, city)')
+    .ilike('restaurants.city', 'dublin')
+    .is('area_label', null)
+    .order('created_at');
+  if (locationsError) throw new Error(locationsError.message);
+
   let assigned = 0;
   let unmatched = 0;
-  console.log(`${apply ? 'APPLY' : 'DRY RUN'} — Dublin Eircode area assignment (${data?.length ?? 0} address(es) without an area)`);
+  console.log(`${apply ? 'APPLY' : 'DRY RUN'} — Dublin Eircode area assignment (${data?.length ?? 0} legacy address(es), ${locations?.length ?? 0} branch address(es) without an area)`);
   for (const restaurant of data ?? []) {
     const area = dublinAreaForAddress(restaurant.address as string);
     const name = (restaurant.name as string | null) ?? 'Restaurant';
@@ -40,6 +48,26 @@ async function main() {
         .from('restaurants')
         .update({ area_code: area.code, area_label: area.label, area_source: 'eircode_prefix' })
         .eq('id', restaurant.id);
+      if (updateError) throw new Error(updateError.message);
+    }
+  }
+  for (const location of locations ?? []) {
+    const area = dublinAreaForAddress(location.address as string);
+    const relation = location.restaurants as unknown as { name?: string | null } | Array<{ name?: string | null }> | null;
+    const restaurant = Array.isArray(relation) ? relation[0] : relation;
+    const name = restaurant?.name ?? 'Restaurant';
+    if (!area) {
+      unmatched++;
+      console.log(`  no Eircode area (branch): ${name} — ${location.address}`);
+      continue;
+    }
+    assigned++;
+    console.log(`  ${apply ? 'assigned' : 'would assign'} branch: ${name} — ${area.label}`);
+    if (apply) {
+      const { error: updateError } = await supabase
+        .from('restaurant_locations')
+        .update({ area_code: area.code, area_label: area.label, area_source: 'eircode_prefix' })
+        .eq('id', location.id);
       if (updateError) throw new Error(updateError.message);
     }
   }

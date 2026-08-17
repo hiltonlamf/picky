@@ -20,6 +20,12 @@ export default function RestaurantCard({ restaurant }: Props) {
   const namedMenus = perMenu.filter((m) => m.label);
   const showPerMenu = namedMenus.length > 1;
   const menuLabels = namedMenus.map((m) => m.label as string);
+  const branchAreaCodes = Array.from(new Set((restaurant.locations ?? [])
+    .map((location) => location.areaCode ?? location.area ?? location.neighbourhood)
+    .filter((value): value is string => !!value)));
+  const displayedAreas = branchAreaCodes.length
+    ? branchAreaCodes
+    : (restaurant.area ? [restaurant.areaCode ?? restaurant.area] : []);
 
   return (
     <div
@@ -57,8 +63,8 @@ export default function RestaurantCard({ restaurant }: Props) {
             </span>
           )}
         </div>
-        {restaurant.area && (
-          <p className="-mt-1 text-xs text-forest/65">{restaurant.areaCode ?? restaurant.area}</p>
+        {displayedAreas.length > 0 && (
+          <p className="-mt-1 text-xs text-forest/65">{displayedAreas.join(' · ')}</p>
         )}
 
         {/* Dietary counts stay green with their emoji — pink never carries

@@ -24,6 +24,13 @@ function toggle(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+function restaurantAreas(restaurant: Restaurant): string[] {
+  const branchAreas = (restaurant.locations ?? [])
+    .map((location) => location.area ?? location.neighbourhood)
+    .filter((value): value is string => !!value);
+  return Array.from(new Set(branchAreas.length ? branchAreas : (restaurant.area ? [restaurant.area] : [])));
+}
+
 function MultiSelectDropdown({
   label,
   values,
@@ -64,7 +71,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
   const [draftAreas, setDraftAreas] = useState(selectedAreas);
   const [draftCuisines, setDraftCuisines] = useState(selectedCuisines);
   const areas = useMemo(
-    () => Array.from(new Set(restaurants.map((r) => r.area).filter((v): v is string => !!v))).sort(),
+    () => Array.from(new Set(restaurants.flatMap(restaurantAreas))).sort(),
     [restaurants]
   );
   const cuisines = useMemo(
@@ -73,7 +80,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
   );
   const filtered = restaurants.filter(
     (r) =>
-      (!selectedAreas.length || (!!r.area && selectedAreas.includes(r.area))) &&
+      (!selectedAreas.length || restaurantAreas(r).some((area) => selectedAreas.includes(area))) &&
       (!selectedCuisines.length || (!!r.cuisine && selectedCuisines.includes(r.cuisine)))
   );
   const filtersChanged =
