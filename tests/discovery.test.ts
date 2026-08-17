@@ -564,3 +564,163 @@ describe('discovery carries its billed cost out (cost-accounting regression)', (
     expect(res.usage).toBeUndefined();
   });
 });
+
+/**
+ * The homepage's own body text is offered as a menu when it reads like one.
+ * That candidate has no URL and no name of its own, and it used to be pushed
+ * with the hardcoded hint "Main Menu" — a name we invented. The labeler sees
+ * only the hint, so it echoed the fabrication straight back and we published a
+ * menu that appears nowhere on the restaurant's site.
+ *
+ * rasam.ie is the reported case: its nav offers Early Bird, A La Carte, Wine,
+ * Drinks and Dine at Home, yet the app showed a "Main Menu" whose 33 dishes
+ * duplicated another menu exactly. Four production restaurants were affected.
+ */
+describe('the homepage teaser is never a menu we named ourselves (Rasam)', () => {
+  it('labels the homepage-text candidate "Menu", never "Main Menu"', async () => {
+    const captured: Array<{ hint: string }> = [];
+    mockLabels(async (candidates) => {
+      captured.push(...candidates.map((c) => ({ hint: c.hint })));
+      // A labeler that tries to invent a name must not be believed.
+      return candidates.map((c) => ({
+        ref: c.ref, label: 'Main Menu', isDistinctMenu: true, isDrinkOnly: false, duplicateOf: null,
+      }));
+    });
+    const res = await discoverMenus(makeScrape({ menuText: MENU_LIKE_TEXT }));
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0].type).toBe('text');
+    // The hint reaching the AI is empty: there is nothing for it to echo.
+    expect(captured[0].hint).toBe('');
+    expect(res.candidates[0].label).toBe('Menu');
+    expect(res.candidates[0].label).not.toMatch(/main/i);
+  });
+
+  it('drops the teaser when the site names two or more menus (the Rasam shape)', async () => {
+    const early = 'https://rasam.ie/early-bird.pdf';
+    const carte = 'https://rasam.ie/a-la-carte.pdf';
+    const wine = 'https://rasam.ie/wine.pdf';
+    const res = await discoverMenus(
+      makeScrape({
+        menuText: MENU_LIKE_TEXT,
+        menuPdfUrls: [early, carte, wine],
+        linkLabels: { [early]: 'Early Bird Menu', [carte]: 'A La Carte Menu', [wine]: 'Wine Menu' },
+      })
+    );
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(false);
+    expect(res.candidates).toHaveLength(2);
+    const labels = res.candidates.map((c) => c.label).join(' ');
+    expect(labels).toMatch(/early bird/i);
+    expect(labels).toMatch(/carte/i);
+    expect(labels).not.toMatch(/wine/i);
+  });
+
+  it('drops "Dine at Home" — a cook-at-home kit is not a dine-in menu', async () => {
+    const home = 'https://rasam.ie/dine-at-home.pdf';
+    const carte = 'https://rasam.ie/a-la-carte.pdf';
+    const early = 'https://rasam.ie/early-bird.pdf';
+    const res = await discoverMenus(
+      makeScrape({
+        menuPdfUrls: [home, carte, early],
+        linkLabels: { [home]: 'Dine at Home (Download)', [carte]: 'A La Carte Menu', [early]: 'Early Bird Menu' },
+      })
+    );
+    expect(res.candidates.map((c) => c.label).join(' ')).not.toMatch(/home/i);
+    expect(res.candidates).toHaveLength(2);
+  });
+
+  /**
+   * The guard on the rule above. ONE named menu is not evidence the homepage
+   * is a teaser — a site whose full menu is on the landing page often also
+   * links a single "Dinner Menu" PDF.
+   */
+  it('KEEPS the teaser when only one menu is specifically named', async () => {
+    const pdf = 'https://example-restaurant.ie/dinner-menu.pdf';
+    const res = await discoverMenus(
+      makeScrape({ menuText: MENU_LIKE_TEXT, menuPdfUrls: [pdf], linkLabels: { [pdf]: 'Dinner Menu' } })
+    );
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
+    expect(res.candidates).toHaveLength(2);
+  });
+
+  /**
+   * The other guard, and the reason the rule ignores the bare word "menu".
+   * misters.ie (a smoke-test case) and baanthai.ie both serve their real menu
+   * as homepage text while linking something called only "menu"/"menus" —
+   * baanthai's is on a THIRD-PARTY domain. Counting those as "named menus"
+   * would suppress the real menu on both, and would re-open the
+   * linastores.co.uk regression whose link label is literally "View Menus".
+   */
+  it('KEEPS the teaser when the other links are only generically named', async () => {
+    const res = await discoverMenus(
+      makeScrape({
+        menuText: MENU_LIKE_TEXT,
+        menuLinks: ['https://example-restaurant.ie/menu', 'https://zakrademos.com/restaurant/menus/'],
+      })
+    );
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
+  });
+
+  it('never empties the picker: falls back to text when the named menus are drinks', async () => {
+    const lunch = 'https://example-restaurant.ie/lunch.pdf';
+    const dinner = 'https://example-restaurant.ie/dinner.pdf';
+    mockLabels(async (candidates) =>
+      candidates.map((c) => ({
+        ref: c.ref,
+        label: c.hint || 'Menu',
+        isDistinctMenu: true,
+        isDrinkOnly: c.type === 'pdf',
+        duplicateOf: null,
+      }))
+    );
+    const res = await discoverMenus(
+      makeScrape({
+        menuText: MENU_LIKE_TEXT,
+        menuPdfUrls: [lunch, dinner],
+        linkLabels: { [lunch]: 'Lunch Menu', [dinner]: 'Dinner Menu' },
+      })
+    );
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0].type).toBe('text');
+    expect(res.candidates[0].label).toBe('Menu');
+  });
+
+  /**
+   * Sequencing. `hasStrongSource` counts the text candidate when deciding
+   * whether to run the deep nav crawl, so the suppression must happen AFTER
+   * that decision. Filtering earlier would push sites that short-circuit today
+   * into three extra scrapes — reader spend for nothing.
+   */
+  it('does not trigger the deep nav crawl (suppression runs after that decision)', async () => {
+    const lunch = 'https://example-restaurant.ie/lunch.pdf';
+    const dinner = 'https://example-restaurant.ie/dinner.pdf';
+    await discoverMenus(
+      makeScrape({
+        menuText: MENU_LIKE_TEXT,
+        menuPdfUrls: [lunch, dinner],
+        linkLabels: { [lunch]: 'Lunch Menu', [dinner]: 'Dinner Menu' },
+        navLinks: ['https://example-restaurant.ie/about', 'https://example-restaurant.ie/contact'],
+      })
+    );
+    expect(mockScrape).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Real recorded sites, so the rule above is pinned against actual page shapes
+ * rather than only synthesised ones. Free — no network, no AI.
+ */
+describe('recorded sites keep the candidates they had (teaser-suppression guards)', () => {
+  it('text-menu (misters.ie) still yields its homepage-text candidate', async () => {
+    const scrape = loadFixture('text-menu');
+    if (!scrape) return;
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
+  });
+
+  it('pdf-menu (baanthai.ie) still yields its homepage-text candidate', async () => {
+    const scrape = loadFixture('pdf-menu');
+    if (!scrape) return;
+    const res = await discoverMenus(scrape);
+    expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
+  });
+});
