@@ -19,6 +19,9 @@ import type {
   RestaurantStatus,
   NoMenuReason,
   CityGuide,
+  LocationConfidence,
+  RestaurantLocationSource,
+  RestaurantLocation,
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
@@ -33,6 +36,8 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
+import { areAddressesEquivalent, pointInGeoJson, type LocationCandidate } from './location';
+import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 
 let _client: ReturnType<typeof createClient> | null = null;
@@ -262,6 +267,73 @@ export async function fetchRestaurantWithDishes(
   const { data: r } = await db().from('restaurants').select('*').eq('id', id).single();
   if (!r) return null;
 
+  let neighbourhood: string | null = null;
+  if (r.neighbourhood_id) {
+    const { data } = await db()
+      .from('city_neighbourhoods')
+      .select('display_name, group_name')
+      .eq('id', r.neighbourhood_id)
+      .maybeSingle();
+    neighbourhood = data?.group_name ?? data?.display_name ?? null;
+  }
+
+  let locations: RestaurantLocation[] = [];
+  const { data: rawLocations, error: locationsError } = await db()
+    .from('restaurant_locations')
+    .select('*')
+    .eq('restaurant_id', id)
+    .order('created_at');
+  // Deploys are allowed to start before the migration lands. In that brief
+  // window, expose the old single address instead of breaking the page.
+  if (!locationsError) {
+    const locationRows = (rawLocations ?? []) as DbRow[];
+    const neighbourhoodIds = Array.from(new Set(locationRows
+      .map((row) => row.neighbourhood_id as string | null)
+      .filter((value): value is string => !!value)));
+    const neighbourhoodById = new Map<string, string>();
+    if (neighbourhoodIds.length) {
+      const { data: names } = await db()
+        .from('city_neighbourhoods')
+        .select('id, display_name, group_name')
+        .in('id', neighbourhoodIds);
+      for (const item of (names ?? []) as DbRow[]) {
+        neighbourhoodById.set(item.id as string, (item.group_name as string | null) ?? (item.display_name as string));
+      }
+    }
+    locations = locationRows.map((location) => ({
+      id: location.id as string,
+      label: (location.label as string | null) ?? null,
+      address: location.address as string,
+      latitude: (location.latitude as number | null) ?? null,
+      longitude: (location.longitude as number | null) ?? null,
+      neighbourhoodId: (location.neighbourhood_id as string | null) ?? null,
+      neighbourhood: location.neighbourhood_id
+        ? (neighbourhoodById.get(location.neighbourhood_id as string) ?? null)
+        : null,
+      area: (location.area_label as string | null) ?? null,
+      areaCode: (location.area_code as string | null) ?? null,
+      source: (location.location_source as RestaurantLocationSource | null) ?? null,
+      sourceUrl: (location.location_source_url as string | null) ?? null,
+      confidence: (location.location_confidence as LocationConfidence | null) ?? null,
+      checkedAt: (location.location_checked_at as string | null) ?? null,
+    }));
+  }
+  if (!locations.length && r.address) {
+    locations = [{
+      address: r.address,
+      latitude: r.latitude ?? null,
+      longitude: r.longitude ?? null,
+      neighbourhood,
+      neighbourhoodId: r.neighbourhood_id ?? null,
+      area: r.area_label ?? neighbourhood,
+      areaCode: r.area_code ?? null,
+      source: (r.location_source as RestaurantLocationSource | null) ?? null,
+      sourceUrl: r.location_source_url ?? null,
+      confidence: (r.location_confidence as LocationConfidence | null) ?? null,
+      checkedAt: r.location_checked_at ?? null,
+    }];
+  }
+
   const { data: rawSections } = await db()
     .from('menu_sections')
     .select('*')
@@ -303,11 +375,170 @@ export async function fetchRestaurantWithDishes(
     noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
     noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
+    address: r.address ?? null,
+    locations,
+    latitude: r.latitude ?? null,
+    longitude: r.longitude ?? null,
+    neighbourhood,
+    neighbourhoodId: r.neighbourhood_id ?? null,
+    area: r.area_label ?? neighbourhood,
+    areaCode: r.area_code ?? null,
+    locationSource: (r.location_source as RestaurantLocationSource | null) ?? null,
+    locationSourceUrl: r.location_source_url ?? null,
+    locationConfidence: (r.location_confidence as LocationConfidence | null) ?? null,
+    locationCheckedAt: r.location_checked_at ?? null,
     menuLanguage: r.menu_language ?? null,
     guideApprovedAt: r.guide_approved_at ?? null,
     sections: sectionList,
     createdAt: r.created_at,
   };
+}
+
+const CONFIDENCE_RANK: Record<LocationConfidence, number> = { low: 1, medium: 2, high: 3 };
+
+/**
+ * Persist evidence published by the restaurant itself. Lower-confidence data
+ * never replaces a stronger existing result; no address is manufactured from
+ * coordinates, and no Google response is stored.
+ */
+export async function saveRestaurantLocation(restaurantId: string, candidate: LocationCandidate): Promise<void> {
+  await saveRestaurantLocations(restaurantId, [candidate]);
+}
+
+function storedAddressKey(address: string): string {
+  return address.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Persist every first-party branch. Eircodes are consulted only after an
+ * address is known, and only to assign Dublin's broad guide area. */
+export async function saveRestaurantLocations(restaurantId: string, candidates: LocationCandidate[]): Promise<void> {
+  const { data: restaurant } = await db()
+    .from('restaurants')
+    .select('city, location_confidence')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  if (!restaurant) return;
+  const city = restaurant.city as string;
+  const existing = restaurant.location_confidence as LocationConfidence | null;
+  const usable = candidates.filter((candidate) => candidate.address.trim());
+  if (!usable.length) return;
+
+  const { data: existingRows, error: locationReadError } = await db()
+    .from('restaurant_locations')
+    .select('id, address, location_confidence')
+    .eq('restaurant_id', restaurantId);
+  const tableAvailable = !locationReadError;
+  const existingByAddress = new Map(
+    ((existingRows ?? []) as DbRow[]).map((row) => [storedAddressKey(row.address as string), row])
+  );
+  const checkedAt = new Date().toISOString();
+
+  if (tableAvailable) {
+    for (const candidate of usable) {
+      const dublinArea = city.toLowerCase() === 'dublin' ? dublinAreaForAddress(candidate.address) : null;
+      const current = Array.from(existingByAddress.entries()).find(([address]) =>
+        areAddressesEquivalent(address, candidate.address)
+      )?.[1];
+      const currentConfidence = current?.location_confidence as LocationConfidence | null;
+      if (currentConfidence && CONFIDENCE_RANK[currentConfidence] > CONFIDENCE_RANK[candidate.confidence]) continue;
+      const row = {
+        restaurant_id: restaurantId,
+        label: candidate.label ?? null,
+        address: candidate.address,
+        latitude: candidate.latitude ?? null,
+        longitude: candidate.longitude ?? null,
+        location_source: candidate.source,
+        location_source_url: candidate.sourceUrl,
+        location_confidence: candidate.confidence,
+        location_checked_at: checkedAt,
+        area_code: dublinArea?.code ?? null,
+        area_label: dublinArea?.label ?? null,
+        area_source: dublinArea ? 'eircode_prefix' : null,
+      };
+      const write = current
+        ? await db().from('restaurant_locations').update(row).eq('id', current.id)
+        : await db().from('restaurant_locations').insert(row).select('id').maybeSingle();
+      if (write.error) throw new Error(`Failed to save restaurant branch: ${write.error.message}`);
+      const locationId = (current?.id as string | undefined) ?? (write.data?.id as string | undefined);
+      if (locationId && candidate.latitude !== undefined && candidate.longitude !== undefined) {
+        await assignLocationNeighbourhood(locationId, city, {
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+        });
+      }
+    }
+  }
+
+  // Keep the strongest first branch in the old restaurant columns for older
+  // deployments and admin code. Multi-branch UI and filtering use the table.
+  const candidate = [...usable].sort(
+    (a, b) => CONFIDENCE_RANK[b.confidence] - CONFIDENCE_RANK[a.confidence]
+  )[0];
+  if (existing && CONFIDENCE_RANK[existing] > CONFIDENCE_RANK[candidate.confidence]) return;
+
+  const dublinArea = city.toLowerCase() === 'dublin' ? dublinAreaForAddress(candidate.address) : null;
+  const location = {
+    ...(candidate.address ? { address: candidate.address } : {}),
+    ...(candidate.latitude !== undefined ? { latitude: candidate.latitude } : {}),
+    ...(candidate.longitude !== undefined ? { longitude: candidate.longitude } : {}),
+    location_source: candidate.source,
+    location_source_url: candidate.sourceUrl,
+    location_confidence: candidate.confidence,
+    location_checked_at: checkedAt,
+    ...(dublinArea
+      ? { area_code: dublinArea.code, area_label: dublinArea.label, area_source: 'eircode_prefix' }
+      : {}),
+  };
+  let { error } = await db().from('restaurants').update(location).eq('id', restaurantId);
+  // Address capture should remain deployable before the optional Dublin-area
+  // migration is applied. Retry the same first-party location write without
+  // area fields; the address is more valuable than rejecting it for migration
+  // ordering, and a later reparse/backfill will add the area once available.
+  if (error && dublinArea && /area_(code|label|source)/i.test(error.message)) {
+    const { area_code: _areaCode, area_label: _areaLabel, area_source: _areaSource, ...locationWithoutArea } = location;
+    ({ error } = await db().from('restaurants').update(locationWithoutArea).eq('id', restaurantId));
+  }
+  if (error) throw new Error(`Failed to save restaurant location: ${error.message}`);
+
+  if (candidate.latitude !== undefined && candidate.longitude !== undefined) {
+    await assignRestaurantNeighbourhood(restaurantId, city, {
+      latitude: candidate.latitude,
+      longitude: candidate.longitude,
+    });
+  }
+}
+
+async function assignLocationNeighbourhood(
+  locationId: string,
+  city: string,
+  point: { latitude: number; longitude: number }
+): Promise<void> {
+  const { data } = await db()
+    .from('city_neighbourhoods')
+    .select('id, geometry')
+    .ilike('city', city)
+    .eq('active', true);
+  const match = ((data ?? []) as Array<{ id: string; geometry: unknown }>).find((area) => pointInGeoJson(point, area.geometry));
+  if (!match) return;
+  const { error } = await db().from('restaurant_locations').update({ neighbourhood_id: match.id }).eq('id', locationId);
+  if (error) throw new Error(`Failed to assign branch neighbourhood: ${error.message}`);
+}
+
+/** Assign a neighbourhood locally from imported GeoJSON; there is no reverse-geocoding API call. */
+export async function assignRestaurantNeighbourhood(
+  restaurantId: string,
+  city: string,
+  point: { latitude: number; longitude: number }
+): Promise<void> {
+  const { data } = await db()
+    .from('city_neighbourhoods')
+    .select('id, geometry')
+    .ilike('city', city)
+    .eq('active', true);
+  const match = ((data ?? []) as Array<{ id: string; geometry: unknown }>).find((area) => pointInGeoJson(point, area.geometry));
+  if (!match) return;
+  const { error } = await db().from('restaurants').update({ neighbourhood_id: match.id }).eq('id', restaurantId);
+  if (error) throw new Error(`Failed to assign restaurant neighbourhood: ${error.message}`);
 }
 
 function mapDish(d: DbRow): Dish {
@@ -354,7 +585,10 @@ export function matchVerifiedDishes(
   });
 }
 
-export async function createRestaurantRecord(url: string, city = 'dublin'): Promise<string> {
+// A generic URL submission has no trustworthy city context. Callers that add
+// a restaurant to a city guide must pass that guide's slug explicitly; leaving
+// the record unassigned is safer than silently publishing it under Dublin.
+export async function createRestaurantRecord(url: string, city = 'unassigned'): Promise<string> {
   // Store the clean root URL as the identity (subpages stripped for dedicated
   // domains, kept as-is for shared platforms) and stamp the dedup key so the
   // unique index enforces one-row-per-restaurant at write time.

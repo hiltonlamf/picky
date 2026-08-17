@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { getFeaturedRestaurants, getCityGuideBySlug } from '@/lib/db';
-import RestaurantCard from '@/components/RestaurantCard';
+import GuideRestaurantGrid from '@/components/GuideRestaurantGrid';
 import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
@@ -174,11 +174,7 @@ export default async function CityGuidePage({ params }: { params: { city: string
 
       {/* Featured restaurants grid — publicly-visible ones only */}
       {visibleRestaurants.length > 0 && (
-        <div className="grid sm:grid-cols-2 gap-4 mb-6">
-          {visibleRestaurants.map((r) => (
-            <RestaurantCard key={r.id} restaurant={r} />
-          ))}
-        </div>
+        <GuideRestaurantGrid restaurants={visibleRestaurants} />
       )}
 
       {/* Pending / processing skeleton cards */}

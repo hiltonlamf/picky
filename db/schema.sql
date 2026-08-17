@@ -23,6 +23,42 @@ CREATE TABLE IF NOT EXISTS restaurants (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Restaurant location data is collected only from the restaurant's own site.
+-- Neighbourhood geometries are imported from OpenStreetMap-derived GeoJSON;
+-- `group_name` reserves a future admin override without changing raw data.
+CREATE TABLE IF NOT EXISTS city_neighbourhoods (
+  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  city           TEXT NOT NULL,
+  display_name   TEXT NOT NULL,
+  group_name     TEXT,
+  geometry       JSONB NOT NULL,
+  source         TEXT NOT NULL DEFAULT 'openstreetmap' CHECK (source IN ('openstreetmap', 'manual')),
+  source_url     TEXT,
+  source_license TEXT NOT NULL DEFAULT 'Open Data Commons Open Database License (ODbL) v1.0',
+  active         BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS city_neighbourhoods_city_name_unique
+  ON city_neighbourhoods (lower(city), lower(display_name));
+
+ALTER TABLE restaurants
+  ADD COLUMN IF NOT EXISTS address TEXT,
+  ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS neighbourhood_id UUID REFERENCES city_neighbourhoods(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS area_code TEXT,
+  ADD COLUMN IF NOT EXISTS area_label TEXT,
+  ADD COLUMN IF NOT EXISTS area_source TEXT CHECK (area_source IN ('eircode_prefix', 'manual', 'geocoder')),
+  ADD COLUMN IF NOT EXISTS location_source TEXT CHECK (location_source IN ('website_jsonld', 'website_address_element', 'website_map_link', 'website_contact_page')),
+  ADD COLUMN IF NOT EXISTS location_source_url TEXT,
+  ADD COLUMN IF NOT EXISTS location_confidence TEXT CHECK (location_confidence IN ('high', 'medium', 'low')),
+  ADD COLUMN IF NOT EXISTS location_checked_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS restaurants_city_area_label_idx
+  ON restaurants (lower(city), area_label)
+  WHERE area_label IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS menu_sections (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   restaurant_id   UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -380,6 +416,10 @@ CREATE TRIGGER restaurants_updated_at
 
 CREATE TRIGGER dishes_updated_at
   BEFORE UPDATE ON dishes
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER city_neighbourhoods_updated_at
+  BEFORE UPDATE ON city_neighbourhoods
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================

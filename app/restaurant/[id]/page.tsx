@@ -441,6 +441,23 @@ export default function RestaurantPage() {
         {restaurant.cuisine && (
           <p className="text-xs font-mono uppercase tracking-[0.08em] text-evergreen/50 mt-1">{restaurant.cuisine}</p>
         )}
+        {(restaurant.locations?.length ?? 0) > 0 ? (
+          <div className="mt-2 text-sm text-forest/70">
+            {restaurant.locations!.length > 1 && <p className="font-medium text-forest/80">Locations</p>}
+            <ul className={restaurant.locations!.length > 1 ? 'mt-1 space-y-1' : ''}>
+              {restaurant.locations!.map((location, index) => (
+                <li key={location.id ?? `${location.address}-${index}`}>
+                  {location.label && location.label.toLowerCase() !== restaurant.name?.toLowerCase() && (
+                    <span className="font-medium">{location.label}: </span>
+                  )}
+                  {location.address}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : restaurant.address ? (
+          <p className="text-sm text-forest/70 mt-2">{restaurant.address}</p>
+        ) : null}
         {/* Links out: the restaurant's own site, and the specific menu page when
             we have one (some sites publish no direct menu link — then it's hidden). */}
         <div className="mt-1 flex items-center gap-3 flex-wrap">

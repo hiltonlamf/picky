@@ -41,6 +41,7 @@ export const EVENTS = {
   GUIDE_CTA_CLICKED: 'guide_cta_clicked',
   GUIDE_VIEWED: 'guide_viewed',
   GUIDE_RESTAURANT_CLICKED: 'guide_restaurant_clicked',
+  GUIDE_FILTER_CHANGED: 'guide_filter_changed',
 
   // --- transparency ---
   // Fires once per visit when someone opens "How we count veggie dishes".

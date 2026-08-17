@@ -20,6 +20,13 @@ export default function RestaurantCard({ restaurant }: Props) {
   const namedMenus = perMenu.filter((m) => m.label);
   const showPerMenu = namedMenus.length > 1;
   const menuLabels = namedMenus.map((m) => m.label as string);
+  const branchAreas = Array.from(new Set((restaurant.locations ?? [])
+    .map((location) => location.area ?? location.neighbourhood ?? location.areaCode)
+    .filter((value): value is string => !!value)));
+  const displayedAreas = branchAreas.length
+    ? branchAreas
+    : [restaurant.area ?? restaurant.neighbourhood ?? restaurant.areaCode]
+      .filter((value): value is string => !!value);
 
   return (
     <div
@@ -57,6 +64,9 @@ export default function RestaurantCard({ restaurant }: Props) {
             </span>
           )}
         </div>
+        {displayedAreas.length > 0 && (
+          <p className="-mt-1 text-xs text-forest/65">{displayedAreas.join(' · ')}</p>
+        )}
 
         {/* Dietary counts stay green with their emoji — pink never carries
             dietary meaning. The capsule is glass, the numbers are not.

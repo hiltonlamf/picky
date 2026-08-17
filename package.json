@@ -14,7 +14,10 @@
     "test:smoke": "tsx scripts/run-pipeline-tests.ts --smoke",
     "record:fixture": "tsx scripts/record-fixture.ts",
     "test:eval": "tsx scripts/run-eval.ts",
-    "test:admin": "tsx scripts/test-admin-actions.ts"
+    "test:admin": "tsx scripts/test-admin-actions.ts",
+    "enrich:locations": "tsx scripts/enrich-locations.ts",
+    "import:neighbourhoods": "tsx scripts/import-neighbourhoods.ts",
+    "assign:dublin-areas": "tsx scripts/assign-dublin-eircode-areas.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.3",
