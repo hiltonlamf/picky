@@ -3,9 +3,10 @@ import GuideCtaLink from '@/components/GuideCtaLink';
 import HeroCta from '@/components/HeroCta';
 import RestaurantCard from '@/components/RestaurantCard';
 import SiteFeedbackButton from '@/components/SiteFeedbackButton';
+import VoteCityLink from '@/components/VoteCityLink';
 import { getFeaturedRestaurants } from '@/lib/db';
 import { isPubliclyVisible } from '@/lib/review-flags';
-import { FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
+import { CITY_VOTE_CTA, FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
 import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
 
@@ -171,7 +172,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* ---------------- Feedback ---------------- */}
+      {/* ---------------- Vote for the next guide ---------------- */}
       <section className="band plate z-[5] bg-forest text-paper pb-[78px]">
         <div className="mesh mesh-animate" aria-hidden="true">
           <span className="w-[52%] h-[86%] left-[56%] top-[-20%] bg-azalea-500 opacity-30" />
@@ -179,7 +180,26 @@ export default async function HomePage() {
         </div>
         <div className="grain" aria-hidden="true" />
 
-        <div className="band-inner flex flex-wrap items-center justify-between gap-7">
+        <div className="band-inner">
+          <div className="flex flex-wrap items-center justify-between gap-7">
+            <div>
+              <span className="eyebrow-light">{CITY_VOTE_CTA.eyebrow}</span>
+              <h2 className="font-display text-[clamp(1.7rem,3.5vw,2.5rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[20ch]">
+                {CITY_VOTE_CTA.headline.before}
+                <span className="text-azalea-400">{CITY_VOTE_CTA.headline.accent}</span>
+              </h2>
+              <p className="mt-3 text-[0.95rem] leading-relaxed text-paper/80 max-w-[52ch]">
+                {CITY_VOTE_CTA.body}
+              </p>
+            </div>
+            <VoteCityLink placement="bottom" className="btn-cta">
+              {CITY_VOTE_CTA.button}
+            </VoteCityLink>
+          </div>
+
+          <div className="my-10 h-px bg-paper/15" />
+
+          <div className="flex flex-wrap items-center justify-between gap-7">
           <div>
             <h2 className="font-display text-[clamp(1.5rem,3vw,2.1rem)] leading-[1.03] tracking-[-0.025em] max-w-[18ch]">
               {FEEDBACK_CTA.headline.before}
@@ -190,6 +210,7 @@ export default async function HomePage() {
             </p>
           </div>
           <SiteFeedbackButton variant="cta" label={FEEDBACK_CTA.button} />
+          </div>
         </div>
       </section>
     </div>

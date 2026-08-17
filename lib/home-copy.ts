@@ -27,6 +27,8 @@ export const HERO = {
   searchHint: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
   /** Collapses the panel again. Only offered while the search is idle. */
   searchCancel: 'Cancel',
+  voteCta: 'Vote for our next city →',
+  voteHint: 'Not in Dublin? Put your city on the map.',
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
@@ -85,4 +87,14 @@ export const FEEDBACK_CTA = {
   },
   body: 'A missing restaurant, a dish we mislabelled, a city you want next — tell us. It goes straight to a person, not an AI.',
   button: 'Share your feedback →',
+} as const;
+
+export const CITY_VOTE_CTA = {
+  eyebrow: 'Your city, your call',
+  headline: {
+    before: 'Where should Picky ',
+    accent: 'read every menu next?',
+  },
+  body: 'Back your city for the next veggie guide. One tap, one email, zero mushroom-risotto lobbying required.',
+  button: 'Vote for the next city →',
 } as const;

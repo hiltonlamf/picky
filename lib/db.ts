@@ -1180,6 +1180,42 @@ export async function saveNpsResponse(
   if (error) throw new Error(`Failed to save NPS response: ${error.message}`);
 }
 
+export async function countRecentCityGuideVotes(ipHash: string, since: string): Promise<number> {
+  const { count, error } = await db()
+    .from('city_guide_votes')
+    .select('*', { count: 'exact', head: true })
+    .eq('ip_hash', ipHash)
+    .gte('created_at', since);
+  if (error) throw new Error(`Failed to check city votes: ${error.message}`);
+  return count ?? 0;
+}
+
+export async function saveCityGuideVote(input: {
+  city: string;
+  country: string | null;
+  region: string | null;
+  isCustom: boolean;
+  email: string;
+  ipHash: string;
+  anonId: string | null;
+}): Promise<{ duplicate: boolean }> {
+  const { error } = await db().from('city_guide_votes').insert({
+    city_name: input.city,
+    country_name: input.country,
+    region: input.region,
+    is_custom: input.isCustom,
+    email: input.email.toLocaleLowerCase('en'),
+    ip_hash: input.ipHash,
+    anon_id: input.anonId,
+  });
+
+  // One email gets one vote per city. Re-submitting is a friendly success,
+  // rather than an error that makes people wonder whether their first tap landed.
+  if (error?.code === '23505') return { duplicate: true };
+  if (error) throw new Error(`Failed to save city vote: ${error.message}`);
+  return { duplicate: false };
+}
+
 export async function getFeaturedRestaurants(
   city: string,
   options?: { includeHidden?: boolean }
