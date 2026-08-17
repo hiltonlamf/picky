@@ -4,8 +4,8 @@
 //   npx tsx scripts/enrich-locations.ts --city dublin --apply
 //   npx tsx scripts/enrich-locations.ts --apply
 //
-// Dry-run is intentional. Each candidate gets at most two ordinary HTTP
-// requests: its homepage and, only when needed, one same-domain Contact page.
+// Dry-run is intentional. Each candidate gets one ordinary homepage request
+// and, only when needed, up to three linked same-domain location-page requests.
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
 import { findLocationOnWebsite, isCandidateInCity } from '../lib/location';

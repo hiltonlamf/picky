@@ -44,6 +44,46 @@ describe('first-party location extraction', () => {
     expect(candidate).toMatchObject({ address: 'Schollenbrugstraat 8 | 1091EX' });
   });
 
+  it('accepts a compact street-and-city block when the site omits a postcode', () => {
+    const candidate = extractLocationFromHtml(
+      '<footer><p>14 Trinity Street,<br>Dublin 2</p></footer>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: '14 Trinity Street, Dublin 2' });
+  });
+
+  it('accepts a short unnumbered street address published before the city', () => {
+    const candidate = extractLocationFromHtml(
+      '<footer><p>Fade Street Social,<br>Fade Street,<br>Dublin 2, Ireland</p></footer>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: 'Fade Street Social, Fade Street, Dublin 2' });
+  });
+
+  it('accepts a compact labelled venue address without a street suffix', () => {
+    const candidate = extractLocationFromHtml(
+      '<p class="address">Gigi Ranelagh, 53 Ranelagh<br>Dublin 6, Ireland</p>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: 'Gigi Ranelagh, 53 Ranelagh Dublin 6' });
+  });
+
+  it('does not mistake promotional copy mentioning a city and unrelated number for an address', () => {
+    const candidate = extractLocationFromHtml(
+      '<p>DÍON is Dublin\'s first wine bar with 20 bottles, just off Market Lane.</p>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toBeNull();
+  });
+
+  it('does not mistake a year following the letter D for an Eircode', () => {
+    const candidate = extractLocationFromHtml(
+      '<p>Graham held the post in Ireland from 2016 to 2019.</p>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toBeNull();
+  });
+
   it('combines an official address with a coordinate published in its map link', () => {
     const candidate = extractLocationFromHtml(
       '<address>12 Main Street, Dublin 2</address><a href="https://www.google.com/maps/@53.341,-6.261,16z">Map</a>',
@@ -84,6 +124,32 @@ describe('first-party location extraction', () => {
       source: 'website_contact_page',
       sourceUrl: 'https://afianco.ie/about',
     });
+    fetchMock.mockRestore();
+  });
+
+  it('checks another relevant page when the first one has no address', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('<p>Our story</p>', { status: 200, headers: { 'content-type': 'text/html' } }))
+      .mockResolvedValueOnce(new Response('<p>4 Example Street, Dublin 2</p>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    const candidate = await findLocationOnContactPage(
+      '<a href="/about">About</a><a href="/visit">Visit us</a>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: '4 Example Street, Dublin 2' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+  });
+
+  it('treats www and bare-domain contact links as the same first-party site', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('<p>4 Example Street, Dublin 2</p>', { status: 200, headers: { 'content-type': 'text/html' } })
+    );
+    const candidate = await findLocationOnContactPage(
+      '<a href="https://www.restaurant.example/contact">Contact</a>',
+      'https://restaurant.example'
+    );
+    expect(candidate).toMatchObject({ address: '4 Example Street, Dublin 2' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockRestore();
   });
 });

@@ -120,10 +120,17 @@ function mapCandidatesFromDocument($: cheerio.CheerioAPI, sourceUrl: string): Lo
 // An Eircode or Dutch postcode is a strong enough signal to accept a compact
 // visible text block as a published address. Many small restaurant sites put
 // this in an ordinary <p>, not an <address> element or JSON-LD.
-const VISIBLE_POSTCODE_RE = /\b(?:D(?:0[1-9]|1\d|2[0-4])|D6W)\s*[A-Z0-9]{4}\b|\b\d{4}\s?[A-Z]{2}\b/i;
+const VISIBLE_EIRCODE_RE = /\b(?:D(?:0[1-9]|1\d|2[0-4])|D6W)\s*(?=[A-Z0-9]{4}\b)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4}\b/i;
+// Keep Dutch postcode letters case-sensitive so ordinary prose such as
+// "from 2016 to 2019" cannot become a bogus address. Lowercase address blocks
+// that include Amsterdam still use the street-and-city fallback below.
+const VISIBLE_DUTCH_POSTCODE_RE = /\b\d{4}\s?[A-Z]{2}\b/;
+const VISIBLE_CITY_RE = /\b(?:Dublin(?:\s+\d{1,2})?|Amsterdam|London|Westport)\b/i;
+const STREET_TYPE_RE = /\b(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue)\b|(?:straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
+const NUMBERED_STREET_RE = /\b\d+[A-Z]?(?:[-/]\d+[A-Z]?)?(?:\s+[^\s,]+){0,6}\s+(?:street|st\.?|road|rd\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue|straat|gracht|kade|plein|weg|dijk|markt|boulevard)\b/i;
 
 function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate | null {
-  for (const element of $('address, p, li').toArray()) {
+  for (const element of $('address, [itemprop="address"], [class*="address"], [class*="Address"], [id*="address"], [id*="Address"], p, li').toArray()) {
     const copy = $(element).clone();
     copy.find('script, style, svg').remove();
     // Cheerio's text() concatenates <br>-separated text without a space.
@@ -140,13 +147,34 @@ function addressFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): Locat
       .replace(/^(?:\+?\d[\d\s().-]{5,})\s*/, '')
       .replace(/^[\w.+-]+@[\w.-]+\.[A-Z]{2,}\s*/i, '')
       .trim();
-    const postcode = value.match(VISIBLE_POSTCODE_RE);
-    if (value.length < 8 || value.length > 260 || !postcode || postcode.index === undefined) continue;
+    const postcode = value.match(VISIBLE_EIRCODE_RE) ?? value.match(VISIBLE_DUTCH_POSTCODE_RE);
+    const city = value.match(VISIBLE_CITY_RE);
+    const beforeCity = city?.index === undefined ? '' : value.slice(0, city.index);
+    const attributes = [$(element).attr('class'), $(element).attr('id'), $(element).attr('itemprop'), $(element).attr('aria-label')]
+      .filter(Boolean)
+      .join(' ');
+    const labelledAddress = /address/i.test(attributes) || /^address\s*:?/i.test(value);
+    const hasStreetAddress = NUMBERED_STREET_RE.test(beforeCity);
+    // Some legitimate city-centre addresses have no street number (for
+    // example "Fade Street, Dublin 2"), while a labelled venue address may
+    // use a building or suburb name ("53 Ranelagh, Dublin 6"). Keep this
+    // fallback short and require the address portion to precede the city.
+    const hasCompactAddress = value.length <= 140 && (
+      STREET_TYPE_RE.test(beforeCity) || (labelledAddress && /\d/.test(beforeCity))
+    );
+    if (
+      value.length < 8 ||
+      value.length > 260 ||
+      ((!postcode || postcode.index === undefined) && (!city || city.index === undefined || (!hasStreetAddress && !hasCompactAddress)))
+    ) continue;
+    const end = postcode && postcode.index !== undefined
+      ? postcode.index + postcode[0].length
+      : (city!.index as number) + city![0].length;
     return {
       // A footer can place the email/telephone immediately after an Eircode
       // without a \"Phone\" label. The postcode is the trusted end of the
       // address, so do not display whatever follows it.
-      address: value.slice(0, postcode.index + postcode[0].length).trim(),
+      address: value.slice(0, end).replace(/^address\s*:?\s*/i, '').trim(),
       confidence: 'medium',
       source: 'website_address_element',
       sourceUrl,
@@ -244,9 +272,10 @@ export function pointInGeoJson(point: GeoPosition, geometry: unknown): boolean {
   return false;
 }
 
-function contactPageUrl(html: string, pageUrl: string): string | null {
+function contactPageUrls(html: string, pageUrl: string): string[] {
   const $ = cheerio.load(html);
   const page = new URL(pageUrl);
+  const candidates: Array<{ url: string; priority: number }> = [];
   for (const element of $('a[href]').toArray()) {
     const href = $(element).attr('href') ?? '';
     const label = `${$(element).text()} ${href}`.toLowerCase();
@@ -254,12 +283,20 @@ function contactPageUrl(html: string, pageUrl: string): string | null {
     try {
       const target = new URL(href, pageUrl);
       // Never use a directory/social profile as alleged first-party evidence.
-      if (target.hostname === page.hostname && target.protocol.startsWith('http')) return target.href;
+      const sameFirstPartyHost = target.hostname.replace(/^www\./i, '') === page.hostname.replace(/^www\./i, '');
+      if (sameFirstPartyHost && target.protocol.startsWith('http')) {
+        candidates.push({
+          url: target.href,
+          priority: /(contact|find[-_ ]?us|location|visit[-_ ]?us)/.test(label) ? 0 : 1,
+        });
+      }
     } catch {
       // Continue scanning a malformed link.
     }
   }
-  return null;
+  return Array.from(new Map(
+    candidates.sort((a, b) => a.priority - b.priority).map((candidate) => [candidate.url, candidate.url])
+  ).values()).slice(0, 3);
 }
 
 async function fetchStaticHtml(url: string): Promise<string | null> {
@@ -286,21 +323,24 @@ async function fetchStaticHtml(url: string): Promise<string | null> {
 
 /**
  * The regular scraper has already fetched the homepage. Reuse that HTML and
- * make only the one conditional, same-domain Contact-page request needed to
- * find a published address. This deliberately avoids another reader or model
- * request on the normal parse path.
+ * make only bounded, conditional same-domain location-page requests needed to
+ * find a published address. This deliberately avoids reader or model requests
+ * on the normal parse path.
  */
 export async function findLocationOnContactPage(homepageHtml: string, pageUrl: string): Promise<LocationCandidate | null> {
-  const contactUrl = contactPageUrl(homepageHtml, pageUrl);
-  if (!contactUrl) return null;
-  const contactHtml = await fetchStaticHtml(contactUrl);
-  const candidate = contactHtml ? extractLocationFromHtml(contactHtml, contactUrl) : null;
-  return candidate ? { ...candidate, source: 'website_contact_page', sourceUrl: contactUrl } : null;
+  for (const contactUrl of contactPageUrls(homepageHtml, pageUrl)) {
+    const contactHtml = await fetchStaticHtml(contactUrl);
+    const candidate = contactHtml ? extractLocationFromHtml(contactHtml, contactUrl) : null;
+    if (candidate?.address) {
+      return { ...candidate, source: 'website_contact_page', sourceUrl: contactUrl };
+    }
+  }
+  return null;
 }
 
 /**
- * Explicit, one-optional-page backfill path. It never invokes a reader or an
- * LLM: at most the restaurant homepage and one same-domain Contact page are
+ * Explicit, bounded backfill path. It never invokes a reader or an LLM: the
+ * restaurant homepage and at most three linked same-domain location pages are
  * fetched with normal HTTP. The caller decides whether to run it in bulk.
  */
 export async function findLocationOnWebsite(url: string): Promise<LocationCandidate | null> {
