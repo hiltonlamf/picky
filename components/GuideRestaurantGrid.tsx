@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Restaurant } from '@/types';
 import { EVENTS } from '@/lib/analytics';
@@ -36,15 +36,42 @@ function MultiSelectDropdown({
   values,
   selected,
   onToggle,
+  emphasizePrefix = false,
 }: {
   label: string;
   values: string[];
   selected: string[];
   onToggle: (value: string) => void;
+  emphasizePrefix?: boolean;
 }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const selection = selected.length ? ` (${selected.length})` : '';
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const details = detailsRef.current;
+      if (details?.open && event.target instanceof Node && !details.contains(event.target)) {
+        details.open = false;
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const details = detailsRef.current;
+      if (event.key === 'Escape' && details?.open) {
+        details.open = false;
+        details.querySelector<HTMLElement>('summary')?.focus();
+      }
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
   return (
-    <details className="group relative">
+    <details ref={detailsRef} className="group relative">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl border border-forest/25 bg-white px-3.5 py-2.5 text-sm font-medium text-forest marker:content-none hover:border-picky-700">
         {label}{selection}
         <span aria-hidden="true" className="text-forest/60 transition-transform group-open:rotate-180">⌄</span>
@@ -54,7 +81,14 @@ function MultiSelectDropdown({
         {values.map((value) => (
           <label key={value} className="flex cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-sm text-forest hover:bg-mint-50">
             <input type="checkbox" checked={selected.includes(value)} onChange={() => onToggle(value)} className="mt-0.5 h-4 w-4 accent-picky-700" />
-            <span>{value}</span>
+            <span>
+              {emphasizePrefix && value.includes(' · ') ? (
+                <>
+                  <strong className="font-bold">{value.split(' · ', 1)[0]}</strong>
+                  {value.slice(value.indexOf(' · '))}
+                </>
+              ) : value}
+            </span>
           </label>
         ))}
       </fieldset>
@@ -111,16 +145,20 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
       {(areas.length > 0 || cuisines.length > 0) && (
         <div className="card p-4 mb-5">
           <p className="text-sm text-forest/75 mb-4">{filterPrompt}</p>
-          <div className="flex flex-wrap gap-3">
-          {areas.length > 0 && (
-            <MultiSelectDropdown label="Area" values={areas} selected={draftAreas} onToggle={(value) => setDraftAreas((values) => toggle(values, value))} />
-          )}
-          {cuisines.length > 0 && (
-            <MultiSelectDropdown label="Cuisine" values={cuisines} selected={draftCuisines} onToggle={(value) => setDraftCuisines((values) => toggle(values, value))} />
-          )}
-          </div>
-          <div className="mt-5 flex items-center gap-4">
-            <button onClick={applyFilters} disabled={!filtersChanged} className="btn-cta disabled:cursor-not-allowed disabled:opacity-50">Apply filters</button>
+          <div className="flex flex-wrap items-center gap-3">
+            {areas.length > 0 && (
+              <MultiSelectDropdown label="Area" values={areas} selected={draftAreas} onToggle={(value) => setDraftAreas((values) => toggle(values, value))} emphasizePrefix />
+            )}
+            {cuisines.length > 0 && (
+              <MultiSelectDropdown label="Cuisine" values={cuisines} selected={draftCuisines} onToggle={(value) => setDraftCuisines((values) => toggle(values, value))} />
+            )}
+            <button
+              onClick={applyFilters}
+              disabled={!filtersChanged}
+              className="inline-flex min-h-[42px] items-center justify-center rounded-xl bg-azalea-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-azalea-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azalea-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Apply filters
+            </button>
             {(draftAreas.length > 0 || draftCuisines.length > 0) && <button onClick={() => { setDraftAreas([]); setDraftCuisines([]); }} className="text-sm text-picky-700 underline">Clear selections</button>}
           </div>
         </div>
