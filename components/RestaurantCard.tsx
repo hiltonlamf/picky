@@ -20,12 +20,13 @@ export default function RestaurantCard({ restaurant }: Props) {
   const namedMenus = perMenu.filter((m) => m.label);
   const showPerMenu = namedMenus.length > 1;
   const menuLabels = namedMenus.map((m) => m.label as string);
-  const branchAreaCodes = Array.from(new Set((restaurant.locations ?? [])
-    .map((location) => location.areaCode ?? location.area ?? location.neighbourhood)
+  const branchAreas = Array.from(new Set((restaurant.locations ?? [])
+    .map((location) => location.area ?? location.neighbourhood ?? location.areaCode)
     .filter((value): value is string => !!value)));
-  const displayedAreas = branchAreaCodes.length
-    ? branchAreaCodes
-    : (restaurant.area ? [restaurant.areaCode ?? restaurant.area] : []);
+  const displayedAreas = branchAreas.length
+    ? branchAreas
+    : [restaurant.area ?? restaurant.neighbourhood ?? restaurant.areaCode]
+      .filter((value): value is string => !!value);
 
   return (
     <div
