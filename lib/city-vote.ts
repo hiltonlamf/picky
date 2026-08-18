@@ -97,7 +97,11 @@ export const CITY_VOTE_OPTIONS: readonly CityVoteOption[] = [
 ] as const;
 
 export function normaliseCustomCity(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
+  return value
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 export function cityVoteKey(city: string, country: string): string {

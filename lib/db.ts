@@ -1190,6 +1190,13 @@ export async function countRecentCityGuideVotes(ipHash: string, since: string): 
   return count ?? 0;
 }
 
+export class CityVoteRateLimitError extends Error {
+  constructor() {
+    super('City vote rate limit exceeded');
+    this.name = 'CityVoteRateLimitError';
+  }
+}
+
 export async function saveCityGuideVote(input: {
   city: string;
   country: string | null;
@@ -1212,6 +1219,9 @@ export async function saveCityGuideVote(input: {
   // One email gets one vote per city. Re-submitting is a friendly success,
   // rather than an error that makes people wonder whether their first tap landed.
   if (error?.code === '23505') return { duplicate: true };
+  if (error?.code === 'P0001' && error.message?.includes('city_vote_rate_limited')) {
+    throw new CityVoteRateLimitError();
+  }
   if (error) throw new Error(`Failed to save city vote: ${error.message}`);
   return { duplicate: false };
 }

@@ -27,4 +27,8 @@ describe('normaliseCustomCity', () => {
   it('trims and collapses pasted whitespace', () => {
     expect(normaliseCustomCity('  Cork,   Ireland  ')).toBe('Cork, Ireland');
   });
+
+  it('removes control and bidirectional override characters', () => {
+    expect(normaliseCustomCity('New\u0000\u202e York')).toBe('New York');
+  });
 });

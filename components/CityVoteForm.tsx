@@ -96,7 +96,7 @@ export default function CityVoteForm() {
           email: email.trim(),
         }),
       });
-      const data = (await response.json()) as { error?: string; duplicate?: boolean };
+      const data = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(data.error || 'We could not save your vote. Please try again.');
 
       setSubmitState('success');
@@ -104,13 +104,8 @@ export default function CityVoteForm() {
         city: selection.city,
         region: selection.region,
         custom: selection.isCustom,
-        duplicate: !!data.duplicate,
       });
-      setMessage(
-        data.duplicate
-          ? `You already backed ${selection.city} — your excellent taste is noted.`
-          : `${selection.city} is officially in the running.`
-      );
+      setMessage(`${selection.city} is officially in the running.`);
     } catch (error) {
       setSubmitState('error');
       setMessage(error instanceof Error ? error.message : 'We could not save your vote. Please try again.');
