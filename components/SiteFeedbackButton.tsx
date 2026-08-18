@@ -39,7 +39,7 @@ export default function SiteFeedbackButton({ variant = 'link', label }: Props) {
           onClick={openModal}
           className="text-azalea-400 font-semibold hover:text-white transition-colors"
         >
-          {label ?? 'Ideas or corrections →'}
+          {label ?? 'Share feedback →'}
         </button>
       )}
 
