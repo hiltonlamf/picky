@@ -6,7 +6,7 @@ import SiteFeedbackButton from '@/components/SiteFeedbackButton';
 import VoteCityLink from '@/components/VoteCityLink';
 import { getFeaturedRestaurants } from '@/lib/db';
 import { isPubliclyVisible } from '@/lib/review-flags';
-import { CITY_VOTE_CTA, FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
+import { FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
 import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
 
@@ -172,44 +172,44 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* ---------------- Vote for the next guide ---------------- */}
+      {/* ---------------- One quiet home for feedback ---------------- */}
       <section className="band plate z-[5] bg-forest text-paper pb-[78px]">
-        <div className="mesh mesh-animate" aria-hidden="true">
-          <span className="w-[52%] h-[86%] left-[56%] top-[-20%] bg-azalea-500 opacity-30" />
-          <span className="w-[56%] h-[78%] left-[-8%] top-[20%] bg-[#0f7a52] opacity-55" />
-        </div>
         <div className="grain" aria-hidden="true" />
 
-        <div className="band-inner">
-          <div className="flex flex-wrap items-center justify-between gap-7">
-            <div>
-              <span className="eyebrow-light">{CITY_VOTE_CTA.eyebrow}</span>
-              <h2 className="font-display text-[clamp(1.7rem,3.5vw,2.5rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[20ch]">
-                {CITY_VOTE_CTA.headline.before}
-                <span className="text-azalea-400">{CITY_VOTE_CTA.headline.accent}</span>
-              </h2>
-              <p className="mt-3 text-[0.95rem] leading-relaxed text-paper/80 max-w-[52ch]">
-                {CITY_VOTE_CTA.body}
-              </p>
-            </div>
-            <VoteCityLink placement="bottom" className="btn-cta">
-              {CITY_VOTE_CTA.button}
-            </VoteCityLink>
-          </div>
-
-          <div className="my-10 h-px bg-paper/15" />
-
-          <div className="flex flex-wrap items-center justify-between gap-7">
+        <div className="band-inner grid lg:grid-cols-[0.82fr_1.18fr] gap-8 lg:gap-12 items-start">
           <div>
-            <h2 className="font-display text-[clamp(1.5rem,3vw,2.1rem)] leading-[1.03] tracking-[-0.025em] max-w-[18ch]">
-              {FEEDBACK_CTA.headline.before}
-              <span className="text-azalea-400">{FEEDBACK_CTA.headline.accent}</span>
+            <span className="eyebrow-light">{FEEDBACK_CTA.eyebrow}</span>
+            <h2 className="font-display text-[clamp(1.55rem,3vw,2.15rem)] leading-[1.08] tracking-[-0.02em] mt-3 max-w-[18ch]">
+              {FEEDBACK_CTA.headline}
             </h2>
-            <p className="mt-2.5 text-[0.93rem] leading-relaxed text-paper/85 max-w-[46ch]">
+            <p className="mt-3 text-sm leading-relaxed text-paper/70 max-w-[42ch]">
               {FEEDBACK_CTA.body}
             </p>
           </div>
-          <SiteFeedbackButton variant="cta" label={FEEDBACK_CTA.button} />
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <VoteCityLink
+              placement="bottom"
+              className="group rounded-2xl border border-paper/15 bg-white/[0.07] p-5 transition-colors hover:bg-white/[0.11] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-400/25"
+            >
+              <span className="eyebrow-light block">{FEEDBACK_CTA.city.eyebrow}</span>
+              <span className="font-display text-lg leading-tight block mt-2">
+                {FEEDBACK_CTA.city.title}
+              </span>
+              <span className="text-sm text-azalea-400 group-hover:text-white transition-colors block mt-4">
+                {FEEDBACK_CTA.city.button}
+              </span>
+            </VoteCityLink>
+
+            <div className="rounded-2xl border border-paper/15 p-5">
+              <span className="eyebrow-light block">{FEEDBACK_CTA.general.eyebrow}</span>
+              <p className="font-display text-lg leading-tight mt-2">
+                {FEEDBACK_CTA.general.title}
+              </p>
+              <div className="mt-4 text-sm">
+                <SiteFeedbackButton label={FEEDBACK_CTA.general.button} />
+              </div>
+            </div>
           </div>
         </div>
       </section>

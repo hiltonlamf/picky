@@ -81,20 +81,17 @@ export const PILLARS = {
 } as const;
 
 export const FEEDBACK_CTA = {
-  headline: {
-    before: 'Got an idea, or ',
-    accent: 'something we got wrong?',
+  eyebrow: 'Help shape Picky',
+  headline: 'Got an idea—or something we got wrong?',
+  body: 'Choose where Picky goes next, or tell us what needs fixing.',
+  city: {
+    eyebrow: 'Next stop',
+    title: 'Put your city on Picky’s map.',
+    button: 'Vote for a city →',
   },
-  body: 'A missing restaurant, a dish we mislabelled, a city you want next — tell us. It goes straight to a person, not an AI.',
-  button: 'Share your feedback →',
-} as const;
-
-export const CITY_VOTE_CTA = {
-  eyebrow: 'Your city, your call',
-  headline: {
-    before: 'Where should Picky ',
-    accent: 'read every menu next?',
+  general: {
+    eyebrow: 'Everything else',
+    title: 'Ideas, fixes, missing places.',
+    button: 'Share feedback →',
   },
-  body: 'Back your city for the next veggie guide. One tap, one email, zero mushroom-risotto lobbying required.',
-  button: 'Vote for the next city →',
 } as const;
