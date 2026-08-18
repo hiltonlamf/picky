@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { getFeaturedRestaurants, getCityGuideBySlug } from '@/lib/db';
 import GuideRestaurantGrid from '@/components/GuideRestaurantGrid';
 import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
-import { SproutIcon } from '@/components/icons';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import CountingMethod from '@/components/CountingMethod';
 import GuideViewTracker from '@/components/GuideViewTracker';
@@ -78,8 +77,6 @@ export default async function CityGuidePage({ params }: { params: { city: string
   const heldBack = restaurants.filter(
     (r) => !isPubliclyVisible(r) && r.status !== 'pending' && r.status !== 'processing'
   );
-  const isInitialising = restaurants.length === 0 || pendingRestaurants.length > 0;
-
   const where = guide.country ? `${guide.displayName}, ${guide.country}` : guide.displayName;
   const flag = countryFlag(guide.country);
 
@@ -155,21 +152,6 @@ export default async function CityGuidePage({ params }: { params: { city: string
       </section>
 
       <div className="max-w-5xl mx-auto px-6 py-12">
-      {/* Initialising banner */}
-      {isInitialising && (
-        <div className="card p-5 mb-6 flex items-start gap-3">
-          <SproutIcon className="w-5 h-5 text-picky-600 mt-0.5 animate-pulse-gentle flex-shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-evergreen mb-0.5">
-              Reading the {guide.displayName} menus&hellip;
-            </p>
-            <p className="text-sm text-evergreen/80">
-              This page updates itself automatically as each restaurant finishes.
-            </p>
-          </div>
-        </div>
-      )}
-
       <GuideViewTracker city={slug} restaurantCount={visibleRestaurants.length} />
 
       {/* Featured restaurants grid — publicly-visible ones only */}
