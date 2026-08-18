@@ -162,6 +162,19 @@ type Raw = {
  *  label we never let the AI invent. */
 const isHomepageText = (r: Raw): boolean => r.type === 'text' && r.source === 'homepage';
 
+/**
+ * Which of two candidates for the SAME url to keep. A content-validated
+ * candidate always wins (we actually fetched it and confirmed it reads like a
+ * menu); otherwise the better format wins, so one document offered as both a
+ * PDF and a subpage is kept as the PDF — the format extraction reads best.
+ */
+function preferredOf(a: Raw, b: Raw): Raw {
+  if (!!a.contentValidated !== !!b.contentValidated) return a.contentValidated ? a : b;
+  // Strict <: on a tie the incumbent (b) is kept, so discovery order still
+  // decides, exactly as it did before this dedupe key changed.
+  return FORMAT_PREFERENCE[a.type] < FORMAT_PREFERENCE[b.type] ? a : b;
+}
+
 /** How many nav links the deep pass follows, and its total time budget. */
 const DEEP_NAV_LINKS = 3;
 const DEEP_BUDGET_MS = 15000;
@@ -413,9 +426,16 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   const dedupeRaw = (items: Raw[]): Raw[] => {
     const byKey = new Map<string, Raw>();
     for (const r of items) {
-      const key = `${r.type}|${r.ref}`;
+      // Key on the URL ALONE, not on `type|url`. A menu PDF routinely appears
+      // in BOTH menuPdfUrls and menuLinks, so the old key let one document
+      // through twice — once as [pdf] and once as [subpage] — and the picker
+      // offered the identical file under two names. That is precisely how
+      // picklerestaurant.com produced "Main Menu" AND "Main Menu 2" from a
+      // single Pickle_JanuaryMainMenu PDF (and "Group Menu 2" from a single
+      // group menu). The text candidate has no URL, so it keys on its type.
+      const key = r.ref || `${r.type}|`;
       const existing = byKey.get(key);
-      if (!existing || (r.contentValidated && !existing.contentValidated)) byKey.set(key, r);
+      if (!existing || preferredOf(r, existing) === r) byKey.set(key, r);
     }
     return Array.from(byKey.values()).filter((r) => {
       const hintText = `${r.hint} ${hintFromUrl(r.ref)}`;

@@ -717,6 +717,29 @@ describe('recorded sites keep the candidates they had (teaser-suppression guards
     expect(res.candidates.some((c) => c.type === 'text')).toBe(true);
   });
 
+  /**
+   * The real cause of picklerestaurant.com's "Main Menu" AND "Main Menu 2":
+   * one PDF listed in BOTH menuPdfUrls and menuLinks. dedupeRaw keyed on
+   * `type|url`, so the identical document survived once as [pdf] and once as
+   * [subpage] and the picker offered the same file under two names.
+   */
+  it('offers one candidate when a PDF is both a pdf link and a menu link (Pickle)', async () => {
+    const main = 'https://picklerestaurant.com/wp-content/uploads/Pickle_JanuaryMainMenu.pdf';
+    const group = 'https://picklerestaurant.com/wp-content/uploads/Pickle_GroupMenu.pdf';
+    const res = await discoverMenus(
+      makeScrape({
+        menuPdfUrls: [main, group],
+        menuLinks: [main, group],
+        linkLabels: { [main]: 'Main Menu', [group]: 'Group Menu' },
+      })
+    );
+    expect(res.candidates).toHaveLength(2);
+    // The PDF wins over the subpage view of the same URL: it reads best.
+    expect(res.candidates.every((c) => c.type === 'pdf')).toBe(true);
+    expect(res.candidates.map((c) => c.label).join(' ')).not.toMatch(/ 2\b/);
+    expect(new Set(res.candidates.map((c) => c.ref)).size).toBe(2);
+  });
+
   it('pdf-menu (baanthai.ie) still yields its homepage-text candidate', async () => {
     const scrape = loadFixture('pdf-menu');
     if (!scrape) return;
