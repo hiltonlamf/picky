@@ -196,7 +196,7 @@ export default async function HomePage() {
               <span className="font-display text-lg leading-tight block mt-2">
                 {FEEDBACK_CTA.city.title}
               </span>
-              <span className="text-sm text-azalea-400 group-hover:text-white transition-colors block mt-4">
+              <span className="text-sm font-semibold text-azalea-400 group-hover:text-white transition-colors block mt-4">
                 {FEEDBACK_CTA.city.button}
               </span>
             </VoteCityLink>
