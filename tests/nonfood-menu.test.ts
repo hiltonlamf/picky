@@ -6,6 +6,11 @@ describe('isNonFoodMenu', () => {
     for (const label of [
       'Allergen Menu',
       'Allergen Information',
+      'Allergens',
+      // zerozero.nl published an "Allergies" page as a menu — the filter only
+      // knew the word "allergen".
+      'Allergies',
+      'Allergy Information',
       'Catering',
       'Catering Menu',
       'Collection Order',
@@ -17,6 +22,14 @@ describe('isNonFoodMenu', () => {
       'Kids Activity Book',
       'Gift Vouchers',
       'Group Booking',
+      // Cook-at-home kits: a product you finish yourself, not a menu you can
+      // order at a table. rasam.ie sells "Dine at Home (Download)".
+      'Dine at Home',
+      'Dine at Home (Download)',
+      'Heat at Home',
+      'Cook at Home',
+      'Meal Kits',
+      'Home Kit',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(true);
     }
@@ -34,6 +47,9 @@ describe('isNonFoodMenu', () => {
       'Brunch',
       'Neighbourhood Menu',
       'Main Menu',
+      // The at-home rule is word-bounded, so these must not be caught.
+      'Homemade Pasta',
+      'Home Style Curry',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(false);
     }

@@ -92,11 +92,39 @@ export const DRINK_SOURCE_RE =
 /**
  * Not real dining menus — allergen sheets, catering/collection/delivery/takeaway
  * ordering, kids' menus (not the guide's audience), gift vouchers, group-booking
- * packages. Dropped in discovery so they never become a "menu" for ANY restaurant
- * or city. Kept separate from DRINK_SOURCE_RE for clarity.
+ * packages, and cook-at-home meal kits. Dropped in discovery so they never become
+ * a "menu" for ANY restaurant or city. Kept separate from DRINK_SOURCE_RE for
+ * clarity.
+ *
+ * The at-home family belongs here for the same reason delivery/takeaway does:
+ * rasam.ie sells a "Dine at Home (Download)" kit, which is a product you cook
+ * yourself, not a menu you can order from a table. One `at home` alternative
+ * covers "dine/heat/cook at home"; it is word-bounded so it cannot match
+ * "homemade" or "homepage". Bare `home` and `download` are deliberately absent
+ * (plenty of real menus say "Download menu").
  */
 export const NON_FOOD_MENU_RE =
-  /\b(allergen|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack)\b/i;
+  /\b(allergens?|allerg(y|ies)|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack|at\s?home|meal\s?kits?|home\s?kits?)\b/i;
+
+/**
+ * A menu source whose name says WHICH menu it is — a meal, a sitting, or a
+ * service. Used to decide that a site names its menus explicitly, so its
+ * homepage body text is a teaser rather than the menu itself.
+ *
+ * The bare words "menu"/"menus" are excluded ON PURPOSE. That is exactly the
+ * label that sits beside a homepage which genuinely IS the full menu:
+ * misters.ie (a smoke-test case) links to "/menu", and baanthai.ie has a
+ * 20k-character homepage menu next to a THIRD-PARTY ".../restaurant/menus/"
+ * link. Counting those would suppress the real menu on both. It would also
+ * re-open the linastores.co.uk regression, whose deep-discovered link label is
+ * literally "View Menus".
+ *
+ * The à-la-carte alternative sits OUTSIDE the \b(...)\b wrapper deliberately:
+ * JavaScript's \b is ASCII-only, so "à" is not a word character and `\bà` can
+ * never match. Written the obvious way, "À La Carte" is silently missed.
+ */
+const SPECIFIC_MENU_NAME_RE =
+  /[àa]\s?la\s?carte|\b(lunch|dinner|brunch|breakfast|early\s?bird|late\s?bird|pre[-\s]?theatre|pre[-\s]?theater|tasting|set\s?(menu|lunch|dinner)|sunday|evening|weekend|seasonal|lunchkaart|diner|midi|soir)\b/i;
 
 /** True if a menu label / hint is a non-food menu that should never be captured. */
 export function isNonFoodMenu(text: string): boolean {
@@ -128,6 +156,24 @@ type Raw = {
    *  same as text/pdf candidates (see the `kept` filter below). */
   contentValidated?: boolean;
 };
+
+/** The landing page's own body text, offered as a menu because it reads like
+ *  one. It has no URL and no name of its own, so it is the one candidate whose
+ *  label we never let the AI invent. */
+const isHomepageText = (r: Raw): boolean => r.type === 'text' && r.source === 'homepage';
+
+/**
+ * Which of two candidates for the SAME url to keep. A content-validated
+ * candidate always wins (we actually fetched it and confirmed it reads like a
+ * menu); otherwise the better format wins, so one document offered as both a
+ * PDF and a subpage is kept as the PDF — the format extraction reads best.
+ */
+function preferredOf(a: Raw, b: Raw): Raw {
+  if (!!a.contentValidated !== !!b.contentValidated) return a.contentValidated ? a : b;
+  // Strict <: on a tie the incumbent (b) is kept, so discovery order still
+  // decides, exactly as it did before this dedupe key changed.
+  return FORMAT_PREFERENCE[a.type] < FORMAT_PREFERENCE[b.type] ? a : b;
+}
 
 /** How many nav links the deep pass follows, and its total time budget. */
 const DEEP_NAV_LINKS = 3;
@@ -328,8 +374,16 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   // Only treat inline text as a menu candidate when it actually looks like a
   // menu (prices + course words) — avoids a homepage "teaser" masquerading as a
   // menu and creating a false multi-menu prompt alongside a real PDF.
+  //
+  // The hint is EMPTY on purpose. It used to be the hardcoded string
+  // "Main Menu", which is a name we invented: the labeler is handed the hint
+  // and no page content, so it could only echo the fabrication straight back,
+  // and rasam.ie ended up publishing a "Main Menu" that appears nowhere on its
+  // site (its nav offers Early Bird, A La Carte, Wine, Drinks, Dine at Home).
+  // Four production restaurants carried an invented menu because of this line.
+  // The label is pinned to the neutral "Menu" further down instead.
   if (textLooksLikeMenu(inlineText)) {
-    raw.push({ type: 'text', ref: '', hint: 'Main Menu', source: 'homepage' });
+    raw.push({ type: 'text', ref: '', hint: '', source: 'homepage' });
   }
   // Prefer the link's anchor text over the URL slug — Wix/Squarespace PDFs have
   // opaque hash filenames while the button says "Lunch" / "Dinner".
@@ -372,9 +426,16 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   const dedupeRaw = (items: Raw[]): Raw[] => {
     const byKey = new Map<string, Raw>();
     for (const r of items) {
-      const key = `${r.type}|${r.ref}`;
+      // Key on the URL ALONE, not on `type|url`. A menu PDF routinely appears
+      // in BOTH menuPdfUrls and menuLinks, so the old key let one document
+      // through twice — once as [pdf] and once as [subpage] — and the picker
+      // offered the identical file under two names. That is precisely how
+      // picklerestaurant.com produced "Main Menu" AND "Main Menu 2" from a
+      // single Pickle_JanuaryMainMenu PDF (and "Group Menu 2" from a single
+      // group menu). The text candidate has no URL, so it keys on its type.
+      const key = r.ref || `${r.type}|`;
       const existing = byKey.get(key);
-      if (!existing || (r.contentValidated && !existing.contentValidated)) byKey.set(key, r);
+      if (!existing || preferredOf(r, existing) === r) byKey.set(key, r);
     }
     return Array.from(byKey.values()).filter((r) => {
       const hintText = `${r.hint} ${hintFromUrl(r.ref)}`;
@@ -427,6 +488,33 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
   const subpageCount = deduped.filter((r) => r.type === 'subpage').length;
   if (!hasStrongSource && subpageCount <= 1 && (scrape.navLinks?.length ?? 0) > 0) {
     deduped = preferEnglishSiblings(dedupeRaw([...raw, ...(await deepDiscoverRaw(scrape.navLinks!))]));
+  }
+
+  // When a site names its menus explicitly, its homepage body text is a teaser
+  // for them, not a menu of its own — rasam.ie's landing page trips
+  // textLooksLikeMenu on a blurb while the real menus sit behind "Early Bird
+  // Menu" and "A La Carte Menu" links, so we published a phantom third menu
+  // whose dishes duplicated the others exactly.
+  //
+  // Two thresholds carry this rule, and both are load-bearing:
+  //
+  //  - TWO named menus, not one. A site with its full menu on the homepage
+  //    plus a single "Dinner Menu" PDF keeps its homepage text; only a site
+  //    that names several sittings is clearly routing diners elsewhere. A
+  //    Rasam-shaped site with just one named menu keeps the teaser, which is
+  //    the safe side to err on (founder's priority ①: losing a real menu is
+  //    worse than one option too many).
+  //  - SPECIFIC names only — see SPECIFIC_MENU_NAME_RE for why a bare
+  //    "menu"/"menus" link must never count.
+  //
+  // This MUST run after the deep-fallback block above: hasStrongSource counts
+  // the text candidate, so filtering earlier would push sites that short-
+  // circuit today into deepDiscoverRaw's three extra scrapes.
+  const specificallyNamed = deduped.filter(
+    (r) => r.type !== 'text' && SPECIFIC_MENU_NAME_RE.test(`${r.hint} ${hintFromUrl(r.ref)}`)
+  );
+  if (specificallyNamed.length >= 2) {
+    deduped = deduped.filter((r) => !isHomepageText(r));
   }
 
   let finalCandidates: MenuCandidate[] = [];
@@ -526,7 +614,12 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
     const labelCount = new Map<string, number>();
     const unique: Array<{ j: Judged; label: string }> = [];
     for (const j of representatives) {
-      const base = j.verdict.label || j.raw.hint || 'Menu';
+      // The homepage's own text is pinned to the neutral "Menu" — never the
+      // labeler's guess. It is the one candidate the model sees with no URL and
+      // no hint, so anything it returns is invention, and the site has no name
+      // for this "menu" to be wrong about. Matches the zero-candidate fallbacks
+      // below, which already use "Menu".
+      const base = isHomepageText(j.raw) ? 'Menu' : j.verdict.label || j.raw.hint || 'Menu';
       const norm = base.toLowerCase().replace(/\s+/g, ' ').trim();
       const n = (labelCount.get(norm) ?? 0) + 1;
       labelCount.set(norm, n);
