@@ -37,14 +37,47 @@ describe('computeReviewFlags', () => {
     expect(flags.some((f) => f.code === 'few_dishes')).toBe(true);
   });
 
+  /**
+   * The failure this flag exists for: the parse collapsed a whole menu into one
+   * row, so the suspect dish is nearly all we found.
+   */
   it('flags a tasting menu captured as a single dish', () => {
-    const flags = computeReviewFlags(restaurant([dish('Seven Course Tasting Menu', '€95 per person')].concat(manyDishes)));
+    const flags = computeReviewFlags(
+      restaurant([dish('Seven Course Tasting Menu', '€95 per person'), dish('Soup'), dish('Bread')])
+    );
     expect(flags.some((f) => f.code === 'menu_as_dish')).toBe(true);
   });
 
   it('flags a dish whose name is really a menu title', () => {
-    const flags = computeReviewFlags(restaurant([dish('Dim Sum Menu')].concat(manyDishes)));
+    const flags = computeReviewFlags(restaurant([dish('Dim Sum Menu'), dish('Soup'), dish('Bread')]));
     expect(flags.some((f) => f.code === 'menu_as_dish')).toBe(true);
+  });
+
+  /**
+   * ...but the same row inside a properly-read menu is just a dish the
+   * restaurant sells. Pickle lists a €95 "Tasting Menu — curated by Chef Sunil,
+   * on request" among 44 à la carte dishes, and Hot Stone an "A5 Kobe Tasting
+   * Menu" among 56. Both were withheld from the live guide for correctly
+   * reading a real item — a parse that found 44 dishes plainly did not collapse
+   * a menu into one row.
+   */
+  it('does NOT flag a tasting-menu row inside a well-populated menu (Pickle, Hot Stone)', () => {
+    const flags = computeReviewFlags(
+      restaurant([dish('Tasting Menu', 'Curated by the chef, on request. €95 per person')].concat(manyDishes))
+    );
+    expect(flags.some((f) => f.code === 'menu_as_dish')).toBe(false);
+  });
+
+  it('judges by the dish\'s OWN menu, not the restaurant total', () => {
+    // 10 healthy dishes on "À la carte" do not vouch for a "Tasting" menu that
+    // is nothing but its own title.
+    const r = restaurant([], {
+      sections: [
+        { id: 'a', name: 'Mains', displayOrder: 0, menuLabel: 'À la carte', dishes: manyDishes },
+        { id: 'b', name: 'Tasting', displayOrder: 1, menuLabel: 'Tasting', dishes: [dish('Tasting Menu')] },
+      ],
+    });
+    expect(computeReviewFlags(r).some((f) => f.code === 'menu_as_dish')).toBe(true);
   });
 
   it('does not flag a normal well-populated menu', () => {
@@ -215,7 +248,21 @@ describe('isPubliclyVisible', () => {
   });
 
   it('hides a flagged restaurant until approved, then shows it', () => {
-    const flagged = restaurant([dish('Tasting Menu', '5 courses, €90 per person')].concat(manyDishes));
+    // Plenty of dishes overall (so the count gate passes and the approval
+    // override is what's actually under test), but one menu is nothing more
+    // than its own title — the real menu-as-dish failure.
+    const flagged = restaurant([], {
+      sections: [
+        { id: 'a', name: 'Mains', displayOrder: 0, menuLabel: 'À la carte', dishes: manyDishes },
+        {
+          id: 'b',
+          name: 'Tasting',
+          displayOrder: 1,
+          menuLabel: 'Tasting',
+          dishes: [dish('Tasting Menu', '5 courses, €90 per person')],
+        },
+      ],
+    });
     expect(isPubliclyVisible(flagged)).toBe(false);
     expect(isPubliclyVisible({ ...flagged, guideApprovedAt: '2026-07-19T00:00:00Z' })).toBe(true);
   });

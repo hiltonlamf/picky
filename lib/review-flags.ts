@@ -80,6 +80,23 @@ function menuAsDishReason(dish: Dish): string | null {
   return null;
 }
 
+/**
+ * How many OTHER live dishes share a menu with this one.
+ *
+ * Menus are identified by menuLabel; an untagged restaurant is one menu, so
+ * every other dish counts. Used to tell a mis-read menu (the suspect row is
+ * nearly all there is) from a real dish that merely reads like a menu title.
+ */
+function dishesSharingMenuWith(restaurant: Pick<Restaurant, 'sections'>, dish: Dish): number {
+  const menuOf = (d: Dish): string | null =>
+    restaurant.sections.find((s) => s.dishes.some((x) => x.id === d.id))?.menuLabel ?? null;
+  const label = menuOf(dish);
+  return restaurant.sections
+    .filter((s) => (s.menuLabel ?? null) === label)
+    .flatMap((s) => s.dishes)
+    .filter((d) => !d.deletedAt && d.id !== dish.id).length;
+}
+
 /** All review flags for a restaurant. Empty = looks fine. Used both to gate
  *  public visibility and to build the admin "needs review" queue. */
 export function computeReviewFlags(restaurant: Pick<Restaurant, 'sections'>): ReviewFlag[] {
@@ -94,12 +111,19 @@ export function computeReviewFlags(restaurant: Pick<Restaurant, 'sections'>): Re
     });
   }
 
+  // Only a menu that is MOSTLY the suspect row was really mis-read. A "Tasting
+  // Menu" line sitting inside a properly-read menu is just a dish the
+  // restaurant sells: Pickle lists a €95 "Tasting Menu — curated by Chef Sunil,
+  // on request" among 44 à la carte dishes, and Hot Stone an "A5 Kobe Tasting
+  // Menu" among 56. Both were withheld from the guide for correctly reading a
+  // real item. A parse that found 44 dishes plainly did not collapse a menu
+  // into one row, which is the failure this flag exists to catch.
   for (const dish of dishes) {
     const reason = menuAsDishReason(dish);
-    if (reason) {
-      flags.push({ code: 'menu_as_dish', label: 'Menu-as-dish', detail: reason });
-      break; // one is enough to warrant a look
-    }
+    if (!reason) continue;
+    if (dishesSharingMenuWith(restaurant, dish) >= MIN_GUIDE_DISHES) continue;
+    flags.push({ code: 'menu_as_dish', label: 'Menu-as-dish', detail: reason });
+    break; // one is enough to warrant a look
   }
 
   for (const { label, count } of thinMenus(restaurant)) {
