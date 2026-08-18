@@ -1,7 +1,6 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { EVENTS } from '@/lib/analytics';
 import {
   CITY_VOTE_OPTIONS,
   cityVoteKey,
@@ -10,6 +9,7 @@ import {
   type CityVoteRegion,
 } from '@/lib/city-vote';
 import { capture } from '@/lib/posthog-client';
+import { cityVoteStartedEvent } from '@/lib/analytics-events';
 
 type RegionFilter = 'All' | CityVoteRegion;
 type Selection = CityVoteOption & { isCustom: boolean };
@@ -65,7 +65,8 @@ export default function CityVoteForm() {
     setSelection({ ...option, isCustom: false });
     setSubmitState('idle');
     setMessage('');
-    capture(EVENTS.CITY_VOTE_STARTED, { city: option.city, region: option.region, custom: false });
+    const analytics = cityVoteStartedEvent({ city: option.city, region: option.region, custom: false });
+    capture(analytics.event, analytics.properties);
   }
 
   function chooseCustomCity(region: CityVoteRegion) {
@@ -75,7 +76,8 @@ export default function CityVoteForm() {
     setSelection(option);
     setSubmitState('idle');
     setMessage('');
-    capture(EVENTS.CITY_VOTE_STARTED, { city: value, region, custom: true });
+    const analytics = cityVoteStartedEvent({ city: value, region, custom: true });
+    capture(analytics.event, analytics.properties);
   }
 
   async function submitVote(event: FormEvent<HTMLFormElement>) {
@@ -100,11 +102,6 @@ export default function CityVoteForm() {
       if (!response.ok) throw new Error(data.error || 'We could not save your vote. Please try again.');
 
       setSubmitState('success');
-      capture(EVENTS.CITY_VOTE_SUBMITTED, {
-        city: selection.city,
-        region: selection.region,
-        custom: selection.isCustom,
-      });
       setMessage(`${selection.city} is officially in the running.`);
     } catch (error) {
       setSubmitState('error');

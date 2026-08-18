@@ -7,6 +7,7 @@ import { captureServer } from '@/lib/posthog-server';
 import { getClientIp } from '@/lib/rate-limit';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
 import { hashCityVoteIp, validateCityVoteRequest, validatedAnonId } from '@/lib/city-vote-security';
+import { cityVoteSubmittedEvent } from '@/lib/analytics-events';
 
 const MAX_VOTES_PER_DAY = 10;
 
@@ -85,12 +86,13 @@ export async function POST(request: NextRequest) {
       anonId,
     });
 
-    await captureServer(request, anonId ?? ipHash, 'city_vote_submitted', {
+    const analytics = cityVoteSubmittedEvent({
       city,
       region: region ?? 'custom',
       custom: input.isCustom,
       duplicate: result.duplicate,
     });
+    await captureServer(request, anonId ?? ipHash, analytics.event, analytics.properties);
 
     // Do not reveal whether this email already voted for the city. That would
     // let anyone test an address and learn about another person's activity.

@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { EVENTS } from '@/lib/analytics';
 import { capture } from '@/lib/posthog-client';
+import { cityVoteCtaClickedEvent } from '@/lib/analytics-events';
 
 interface VoteCityLinkProps {
   placement: 'hero' | 'bottom';
@@ -11,11 +11,12 @@ interface VoteCityLinkProps {
 }
 
 export default function VoteCityLink({ placement, className, children }: VoteCityLinkProps) {
+  const analytics = cityVoteCtaClickedEvent(placement);
   return (
     <Link
       href="/vote"
       className={className}
-      onClick={() => capture(EVENTS.CITY_VOTE_CTA_CLICKED, { placement })}
+      onClick={() => capture(analytics.event, analytics.properties)}
     >
       {children}
     </Link>
