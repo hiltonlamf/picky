@@ -11,7 +11,7 @@ export default function SiteHeader() {
     // Glass over whatever scrolls beneath it — the first bit of the
     // intelligence layer people meet.
     <header className="sticky top-0 z-40 bg-forest-deep/75 backdrop-blur-md backdrop-saturate-150 border-b border-azalea-400/35 text-paper">
-      <div className="max-w-5xl mx-auto px-6 h-[62px] flex items-center justify-between">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 h-[62px] flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 font-display text-xl shrink-0">
           {/* The sprout is green at all times — green always means plants. */}
           <SproutIcon className="w-6 h-6 text-picky-400" />
@@ -31,19 +31,19 @@ export default function SiteHeader() {
               this header is global (rendered from app/layout.tsx). */}
           <Link
             href="/#story"
-            className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
+            className="text-xs sm:text-sm px-2.5 sm:px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
           >
             Story
           </Link>
           <Link
             href="/#how"
-            className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
+            className="text-xs sm:text-sm px-2.5 sm:px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
           >
             How
           </Link>
           <Link
             href="/dublin"
-            className="text-sm px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
+            className="text-xs sm:text-sm px-2.5 sm:px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
           >
             Dublin Guide
           </Link>

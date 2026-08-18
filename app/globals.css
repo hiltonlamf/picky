@@ -215,6 +215,15 @@
            focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-paper/40;
   }
 
+  /* Compact tertiary action in the hero: still reads as a button, while the
+     Dublin guide and restaurant search keep their stronger hierarchy. */
+  .btn-vote-glass {
+    @apply inline-flex items-center rounded-full border border-azalea-400/45
+           bg-azalea-500/10 px-4 py-2 font-display text-sm text-azalea-400
+           transition-colors hover:bg-azalea-500 hover:text-white
+           focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-400/30;
+  }
+
   .paste-field {
     @apply w-full rounded-full bg-white border-0
            px-7 py-4 text-[1.04rem] text-forest placeholder-forest/55

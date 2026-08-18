@@ -4,7 +4,6 @@ import { useState } from 'react';
 import FeedbackModal from './FeedbackModal';
 import { SITE_FEEDBACK_TYPES } from '@/lib/dietary-config';
 import { capture } from '@/lib/posthog-client';
-import { ChatIcon } from './icons';
 
 interface Props {
   /** 'cta' is the big liquid-pink button on the homepage; 'link' is the quiet
@@ -38,10 +37,9 @@ export default function SiteFeedbackButton({ variant = 'link', label }: Props) {
       ) : (
         <button
           onClick={openModal}
-          className="inline-flex items-center gap-1.5 text-azalea-400 font-semibold hover:text-white transition-colors"
+          className="text-azalea-400 font-semibold hover:text-white transition-colors"
         >
-          <ChatIcon className="w-4 h-4" />
-          {label ?? 'Ideas or corrections'}
+          {label ?? 'Share feedback →'}
         </button>
       )}
 

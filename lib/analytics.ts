@@ -1,72 +1,11 @@
 import * as Sentry from '@sentry/nextjs';
 import { capture } from './posthog-client';
 import { classifyError, type ErrorCode } from './telemetry';
+import { EVENTS } from './analytics-events';
 
 export { classifyError };
 export type { ErrorCode };
-
-/**
- * Every analytics event name in one place.
- *
- * Event names are a schema: once a dashboard or funnel refers to one, a typo or
- * a rename silently breaks it and the chart just reads zero. Importing from
- * here means a rename is a compile error instead.
- */
-export const EVENTS = {
-  // --- core funnel ---
-  /**
-   * The hero's secondary CTA revealed the URL bar. Since the guide became the
-   * primary action the search is one click behind a trigger, so someone who
-   * never opened it is no longer the same as someone who opened it and never
-   * pasted — a distinction that did not exist while the field was always on
-   * screen, and the one that says whether hiding it went too far.
-   */
-  SEARCH_DISCLOSED: 'search_disclosed',
-  SEARCH_SUBMITTED: 'search_submitted',
-  MENU_CANDIDATES_SHOWN: 'menu_candidates_shown',
-  MENUS_SELECTED: 'menus_selected',
-  ANALYSIS_COMPLETED: 'analysis_completed',
-  ANALYSIS_ABANDONED: 'analysis_abandoned',
-  RESULTS_VIEWED: 'results_viewed',
-  RESULTS_ENGAGED: 'results_engaged',
-  NO_MENU_RESULT: 'no_menu_result',
-
-  // --- city guides ---
-  /**
-   * Click on a guide CTA, carrying `placement` so the hero button and the
-   * paper band can be compared. guide_viewed only fires on *arrival* at
-   * /dublin, so without this a click that never landed — bounce, back button,
-   * slow route — was indistinguishable from no click at all.
-   */
-  GUIDE_CTA_CLICKED: 'guide_cta_clicked',
-  GUIDE_VIEWED: 'guide_viewed',
-  GUIDE_RESTAURANT_CLICKED: 'guide_restaurant_clicked',
-  GUIDE_FILTER_CHANGED: 'guide_filter_changed',
-
-  // --- transparency ---
-  // Fires once per visit when someone opens "How we count veggie dishes".
-  // If nobody opens it, the note is decoration and the split belongs on the
-  // card itself; if lots do, the number isn't explaining itself.
-  COUNTING_METHOD_EXPANDED: 'counting_method_expanded',
-
-  // --- errors (see captureError) ---
-  ERROR_SHOWN: 'error_shown',
-  APP_CRASHED: 'app_crashed',
-  RATE_LIMIT_HIT: 'rate_limit_hit',
-
-  // --- feedback & sharing ---
-  FEEDBACK_MODAL_OPENED: 'feedback_modal_opened',
-  FEEDBACK_SUBMITTED: 'feedback_submitted',
-  REPORT_MODAL_OPENED: 'report_modal_opened',
-  DISH_REPORTED: 'dish_reported',
-  SHARE_CLICKED: 'share_clicked',
-  SHARE_LANDING: 'share_landing',
-  NPS_SUBMITTED: 'nps_submitted',
-  NPS_DISMISSED: 'nps_dismissed',
-
-  // --- consent ---
-  COOKIE_CONSENT_DECISION: 'cookie_consent_decision',
-} as const;
+export { EVENTS } from './analytics-events';
 
 /**
  * Codes worth waking Sentry for.

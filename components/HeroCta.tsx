@@ -6,6 +6,7 @@ import GuideCtaLink from './GuideCtaLink';
 import { capture } from '@/lib/posthog-client';
 import { EVENTS } from '@/lib/analytics';
 import { HERO } from '@/lib/home-copy';
+import VoteCityLink from './VoteCityLink';
 
 const PANEL_ID = 'hero-search-panel';
 
@@ -79,7 +80,8 @@ export default function HeroCta() {
           only ways back are Cancel and Escape, both of which exist solely in
           HeroSearch's idle branch, so this can never orphan a live analysis. */}
       {!open && (
-        <div className="flex flex-wrap items-center gap-3">
+        <>
+          <div className="flex flex-wrap items-center gap-3">
           {/* Pink per founder's request — a deliberate exception to the
               pink-does/green-goes convention elsewhere on the site. Same
               .btn-cta treatment as "Find my veggies" so the two catchy pink
@@ -102,7 +104,14 @@ export default function HeroCta() {
           >
             {HERO.searchTrigger}
           </button>
-        </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="text-sm text-paper/65">{HERO.voteHint}</span>
+            <VoteCityLink placement="hero" className="btn-vote-glass">
+              {HERO.voteCta}
+            </VoteCityLink>
+          </div>
+        </>
       )}
 
       {/* Always rendered so aria-controls resolves even while collapsed. */}

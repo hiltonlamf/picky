@@ -483,10 +483,7 @@ export default function RestaurantPage() {
           )}
         </div>
         <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
-          <FreshnessIndicator
-            lastScrapedAt={restaurant.lastScrapedAt}
-            restaurantId={restaurant.id}
-          />
+          <FreshnessIndicator lastScrapedAt={restaurant.lastScrapedAt} />
           <FlagOutdatedButton restaurantId={restaurant.id} restaurantName={restaurant.name ?? null} />
         </div>
       </div>

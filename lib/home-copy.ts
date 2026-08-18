@@ -27,6 +27,8 @@ export const HERO = {
   searchHint: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
   /** Collapses the panel again. Only offered while the search is idle. */
   searchCancel: 'Cancel',
+  voteCta: 'Vote for our next city →',
+  voteHint: 'Not in Dublin? Put your city on the map.',
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
@@ -79,10 +81,17 @@ export const PILLARS = {
 } as const;
 
 export const FEEDBACK_CTA = {
-  headline: {
-    before: 'Got an idea, or ',
-    accent: 'something we got wrong?',
+  eyebrow: 'Help shape Picky',
+  headline: 'Got an idea—or something we got wrong?',
+  body: 'Choose where Picky goes next, or tell us what needs fixing.',
+  city: {
+    eyebrow: 'Next stop',
+    title: 'Put your city on Picky’s map.',
+    button: 'Vote for a city →',
   },
-  body: 'A missing restaurant, a dish we mislabelled, a city you want next — tell us. It goes straight to a person, not an AI.',
-  button: 'Share your feedback →',
+  general: {
+    eyebrow: 'Everything else',
+    title: 'Ideas, fixes, missing places.',
+    button: 'Share feedback →',
+  },
 } as const;
