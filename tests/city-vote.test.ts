@@ -8,10 +8,9 @@ describe('city vote inventory', () => {
   });
 
   it('has broad coverage in every promised region', () => {
-    const counts = Object.groupBy(CITY_VOTE_OPTIONS, (option) => option.region);
-    expect(counts.Europe?.length).toBeGreaterThanOrEqual(30);
-    expect(counts.Asia?.length).toBeGreaterThanOrEqual(20);
-    expect(counts.USA?.length).toBeGreaterThanOrEqual(20);
+    expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'Europe').length).toBeGreaterThanOrEqual(30);
+    expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'Asia').length).toBeGreaterThanOrEqual(20);
+    expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'USA').length).toBeGreaterThanOrEqual(20);
   });
 
   it('does not ask people to vote for the existing Dublin guide', () => {
