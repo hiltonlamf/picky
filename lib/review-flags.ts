@@ -32,7 +32,7 @@ export const MIN_MENU_DISHES = 5;
 const LEGITIMATELY_SHORT_MENU_RE =
   /\b(dessert|desserts|sweet|sweets|pudding|puddings|side|sides|sauce|sauces|cheese|cheeses|extra|extras|nagerecht|dolci|postres)\b/i;
 
-export type ReviewFlagCode = 'few_dishes' | 'menu_as_dish' | 'thin_menu';
+export type ReviewFlagCode = 'few_dishes' | 'menu_as_dish' | 'thin_menu' | 'duplicate_menu';
 
 export interface ReviewFlag {
   code: ReviewFlagCode;
@@ -113,7 +113,80 @@ export function computeReviewFlags(restaurant: Pick<Restaurant, 'sections'>): Re
     break; // one is enough to warrant a look
   }
 
+  for (const pair of duplicateMenus(restaurant)) {
+    flags.push({
+      code: 'duplicate_menu',
+      label: `"${pair.a}" \u2248 "${pair.b}"`,
+      detail:
+        `"${pair.a}" and "${pair.b}" share ${pair.shared} of ${pair.smaller} dishes \u2014 ` +
+        `probably one menu shown twice. Flagged for a human, never deleted automatically.`,
+    });
+    break; // one is enough to warrant a look
+  }
+
   return flags;
+}
+
+/**
+ * How alike two menus must be before a human should look at them.
+ *
+ * Founder's call (2026-08-18): a duplicate menu is ALWAYS flagged for review,
+ * never removed automatically. Extraction is not deterministic \u2014 the same PDF
+ * read twice yields 18, 19 or 20 dishes \u2014 so menus that are really one menu
+ * often do not match exactly, and a rule that deleted near-matches would be
+ * guessing. It would also be wrong: Blauw Amsterdam's "Amsterdam" and "Utrecht"
+ * menus share 24 of 25 dishes and are two genuinely different branches.
+ */
+const DUPLICATE_OVERLAP = 0.9;
+
+/** Menus of very different sizes are different menus however much they share:
+ *  an 8-dish lunch inside a 20-dish a la carte is a real, smaller menu. */
+const DUPLICATE_SIZE_RATIO = 0.7;
+
+/** Below this, two menus sharing a dish list is coincidence, not duplication. */
+const MIN_DUPLICATE_MENU_DISHES = 3;
+
+/** Normalised live dish names per labelled menu. */
+function dishNamesByMenu(restaurant: Pick<Restaurant, 'sections'>): Map<string, Set<string>> {
+  const byMenu = new Map<string, Set<string>>();
+  for (const section of restaurant.sections) {
+    const label = section.menuLabel;
+    if (!label) continue;
+    if (!byMenu.has(label)) byMenu.set(label, new Set());
+    const names = byMenu.get(label)!;
+    for (const d of section.dishes) {
+      if (d.deletedAt) continue;
+      names.add((d.name ?? '').toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim());
+    }
+  }
+  return byMenu;
+}
+
+/**
+ * Pairs of menus alike enough that they are probably one menu shown twice.
+ * Reported, never removed.
+ *
+ * Exported so the admin queue and the QA preview can name BOTH menus rather
+ * than just reporting that something is wrong.
+ */
+export function duplicateMenus(
+  restaurant: Pick<Restaurant, 'sections'>
+): Array<{ a: string; b: string; shared: number; smaller: number }> {
+  const byMenu = Array.from(dishNamesByMenu(restaurant).entries());
+  const pairs: Array<{ a: string; b: string; shared: number; smaller: number }> = [];
+  for (let i = 0; i < byMenu.length; i++) {
+    for (let j = i + 1; j < byMenu.length; j++) {
+      const [labelA, namesA] = byMenu[i];
+      const [labelB, namesB] = byMenu[j];
+      const smaller = Math.min(namesA.size, namesB.size);
+      const larger = Math.max(namesA.size, namesB.size);
+      if (smaller < MIN_DUPLICATE_MENU_DISHES || larger === 0) continue;
+      if (smaller / larger < DUPLICATE_SIZE_RATIO) continue;
+      const shared = Array.from(namesA).filter((n) => namesB.has(n)).length;
+      if (shared / smaller >= DUPLICATE_OVERLAP) pairs.push({ a: labelA, b: labelB, shared, smaller });
+    }
+  }
+  return pairs;
 }
 
 /**

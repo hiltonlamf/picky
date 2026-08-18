@@ -116,6 +116,91 @@ describe('per-menu thin tripwire', () => {
   });
 });
 
+/**
+ * Founder's call (2026-08-18): duplicate menus are ALWAYS flagged for a human,
+ * never removed automatically.
+ */
+describe('duplicate menus are flagged, never deleted', () => {
+  const menus = (spec: Array<{ label: string; dishes: string[] }>): Restaurant =>
+    restaurant([], {
+      sections: spec.map((m, i) => ({
+        id: `s${i}`,
+        name: 'Mains',
+        displayOrder: i,
+        menuLabel: m.label,
+        dishes: m.dishes.map((n) => dish(n)),
+      })),
+    });
+
+  const base = ['Bhel Puri', 'Lamb Rogan Josh', 'Saag Aloo', 'Dal Tadka', 'Naan'];
+
+  it('flags two menus that are near-identical (the Glas shape)', () => {
+    const flags = computeReviewFlags(
+      menus([
+        { label: 'Late Bird Menu', dishes: base },
+        { label: 'Menus', dishes: [...base, 'Kulfi'] },
+      ])
+    );
+    expect(flags.some((f) => f.code === 'duplicate_menu')).toBe(true);
+  });
+
+  it('names BOTH menus so the reviewer knows what to compare', () => {
+    const flag = computeReviewFlags(
+      menus([
+        { label: 'A La Carte', dishes: base },
+        { label: 'Menu 2', dishes: base },
+      ])
+    ).find((f) => f.code === 'duplicate_menu');
+    expect(flag?.label).toContain('A La Carte');
+    expect(flag?.label).toContain('Menu 2');
+  });
+
+  it('withholds the restaurant for review rather than deleting a menu', () => {
+    const r = menus([
+      { label: 'A La Carte', dishes: base },
+      { label: 'Menu 2', dishes: base },
+    ]);
+    expect(isPubliclyVisible(r)).toBe(false);
+    // Both menus are still there — nothing was removed.
+    expect(r.sections).toHaveLength(2);
+  });
+
+  /**
+   * Blauw Amsterdam's "Amsterdam" and "Utrecht" menus share 24 of 25 dishes and
+   * are two genuinely different branches. Flagging them is right; removing one
+   * would not be, which is exactly why this rule only ever flags.
+   */
+  it('flags branch menus rather than silently folding them together', () => {
+    const r = menus([
+      { label: 'Amsterdam', dishes: [...base, 'Bitterballen'] },
+      { label: 'Utrecht', dishes: base },
+    ]);
+    expect(computeReviewFlags(r).some((f) => f.code === 'duplicate_menu')).toBe(true);
+    expect(r.sections).toHaveLength(2);
+  });
+
+  it('does NOT flag a small menu nested inside a much larger one (Jinweide 8 vs 20)', () => {
+    const large = Array.from({ length: 20 }, (_, i) => `Dish ${i}`);
+    const flags = computeReviewFlags(
+      menus([
+        { label: 'Menu', dishes: large.slice(0, 8) },
+        { label: 'A la carte', dishes: large },
+      ])
+    );
+    expect(flags.some((f) => f.code === 'duplicate_menu')).toBe(false);
+  });
+
+  it('does NOT flag genuinely different menus', () => {
+    const flags = computeReviewFlags(
+      menus([
+        { label: 'Lunch', dishes: base },
+        { label: 'Dinner', dishes: ['Chateaubriand', 'Turbot', 'Venison', 'Grouse', 'Hare'] },
+      ])
+    );
+    expect(flags.some((f) => f.code === 'duplicate_menu')).toBe(false);
+  });
+});
+
 describe('isPubliclyVisible', () => {
   it('hides non-done restaurants', () => {
     expect(isPubliclyVisible(restaurant(manyDishes, { status: 'error' }))).toBe(false);
