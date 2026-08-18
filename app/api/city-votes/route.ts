@@ -12,7 +12,7 @@ const MAX_VOTES_PER_DAY = 10;
 const schema = z.object({
   city: z.string().min(2).max(120),
   country: z.string().max(100).nullable(),
-  region: z.enum(['Europe', 'Asia', 'USA']).nullable(),
+  region: z.enum(['Europe', 'Asia', 'USA', 'Australia']).nullable(),
   isCustom: z.boolean(),
   email: z.string().trim().email().max(254),
 });
@@ -30,8 +30,10 @@ export async function POST(request: NextRequest) {
     let region: string | null = input.region;
 
     if (input.isCustom) {
+      if (!region) {
+        return NextResponse.json({ error: 'Choose a region for your custom city.' }, { status: 400 });
+      }
       country = null;
-      region = null;
     } else {
       const known = CITY_VOTE_OPTIONS.find(
         (option) => option.city.toLocaleLowerCase('en') === city.toLocaleLowerCase('en')

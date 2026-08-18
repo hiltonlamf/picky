@@ -1,4 +1,4 @@
-export type CityVoteRegion = 'Europe' | 'Asia' | 'USA';
+export type CityVoteRegion = 'Europe' | 'Asia' | 'USA' | 'Australia';
 
 export interface CityVoteOption {
   city: string;
@@ -52,7 +52,6 @@ export const CITY_VOTE_OPTIONS: readonly CityVoteOption[] = [
   { city: 'Ho Chi Minh City', country: 'Vietnam', region: 'Asia', flag: '🇻🇳' },
   { city: 'Hong Kong', country: 'Hong Kong', region: 'Asia', flag: '🇭🇰' },
   { city: 'Jakarta', country: 'Indonesia', region: 'Asia', flag: '🇮🇩' },
-  { city: 'Jerusalem', country: 'Israel', region: 'Asia', flag: '🇮🇱' },
   { city: 'Kuala Lumpur', country: 'Malaysia', region: 'Asia', flag: '🇲🇾' },
   { city: 'Kyoto', country: 'Japan', region: 'Asia', flag: '🇯🇵' },
   { city: 'Manila', country: 'Philippines', region: 'Asia', flag: '🇵🇭' },
@@ -62,7 +61,6 @@ export const CITY_VOTE_OPTIONS: readonly CityVoteOption[] = [
   { city: 'Shanghai', country: 'China', region: 'Asia', flag: '🇨🇳' },
   { city: 'Singapore', country: 'Singapore', region: 'Asia', flag: '🇸🇬' },
   { city: 'Taipei', country: 'Taiwan', region: 'Asia', flag: '🇹🇼' },
-  { city: 'Tel Aviv', country: 'Israel', region: 'Asia', flag: '🇮🇱' },
   { city: 'Tokyo', country: 'Japan', region: 'Asia', flag: '🇯🇵' },
 
   { city: 'Atlanta', country: 'United States', region: 'USA', flag: '🇺🇸' },
@@ -86,6 +84,16 @@ export const CITY_VOTE_OPTIONS: readonly CityVoteOption[] = [
   { city: 'San Francisco', country: 'United States', region: 'USA', flag: '🇺🇸' },
   { city: 'Seattle', country: 'United States', region: 'USA', flag: '🇺🇸' },
   { city: 'Washington, DC', country: 'United States', region: 'USA', flag: '🇺🇸' },
+
+  { city: 'Adelaide', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Brisbane', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Canberra', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Darwin', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Gold Coast', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Hobart', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Melbourne', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Perth', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
+  { city: 'Sydney', country: 'Australia', region: 'Australia', flag: '🇦🇺' },
 ] as const;
 
 export function normaliseCustomCity(value: string): string {

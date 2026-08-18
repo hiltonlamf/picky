@@ -15,12 +15,13 @@ type RegionFilter = 'All' | CityVoteRegion;
 type Selection = CityVoteOption & { isCustom: boolean };
 type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
 
-const FILTERS: readonly RegionFilter[] = ['All', 'Europe', 'Asia', 'USA'];
+const REGIONS: readonly CityVoteRegion[] = ['Europe', 'Asia', 'USA', 'Australia'];
+const FILTERS: readonly RegionFilter[] = ['All', ...REGIONS];
 
 export default function CityVoteForm() {
   const [filter, setFilter] = useState<RegionFilter>('All');
   const [query, setQuery] = useState('');
-  const [customOpen, setCustomOpen] = useState(false);
+  const [customRegion, setCustomRegion] = useState<CityVoteRegion | null>(null);
   const [customCity, setCustomCity] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [email, setEmail] = useState('');
@@ -38,7 +39,7 @@ export default function CityVoteForm() {
   }, [filter, query]);
 
   const grouped = useMemo(() => {
-    return FILTERS.slice(1).map((region) => ({
+    return REGIONS.map((region) => ({
       region,
       cities: visibleCities.filter((city) => city.region === region),
     })).filter((group) => group.cities.length > 0);
@@ -67,14 +68,14 @@ export default function CityVoteForm() {
     capture(EVENTS.CITY_VOTE_STARTED, { city: option.city, region: option.region, custom: false });
   }
 
-  function chooseCustomCity() {
+  function chooseCustomCity(region: CityVoteRegion) {
     const value = normaliseCustomCity(customCity);
     if (value.length < 2) return;
-    const option: Selection = { city: value, country: '', region: 'Europe', flag: '📍', isCustom: true };
+    const option: Selection = { city: value, country: '', region, flag: '📍', isCustom: true };
     setSelection(option);
     setSubmitState('idle');
     setMessage('');
-    capture(EVENTS.CITY_VOTE_STARTED, { city: value, region: 'custom', custom: true });
+    capture(EVENTS.CITY_VOTE_STARTED, { city: value, region, custom: true });
   }
 
   async function submitVote(event: FormEvent<HTMLFormElement>) {
@@ -90,7 +91,7 @@ export default function CityVoteForm() {
         body: JSON.stringify({
           city: selection.city,
           country: selection.country || null,
-          region: selection.isCustom ? null : selection.region,
+          region: selection.region,
           isCustom: selection.isCustom,
           email: email.trim(),
         }),
@@ -101,7 +102,7 @@ export default function CityVoteForm() {
       setSubmitState('success');
       capture(EVENTS.CITY_VOTE_SUBMITTED, {
         city: selection.city,
-        region: selection.isCustom ? 'custom' : selection.region,
+        region: selection.region,
         custom: selection.isCustom,
         duplicate: !!data.duplicate,
       });
@@ -160,7 +161,10 @@ export default function CityVoteForm() {
             key={region}
             type="button"
             aria-pressed={filter === region}
-            onClick={() => setFilter(region)}
+            onClick={() => {
+              setFilter(region);
+              setCustomRegion(null);
+            }}
             className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-500/25 ${
               filter === region ? 'bg-forest text-paper' : 'border border-paper-line bg-white text-forest hover:border-azalea-500/60'
             }`}
@@ -196,63 +200,81 @@ export default function CityVoteForm() {
                   <span className="grid h-8 w-8 place-items-center rounded-full bg-mint-100 text-forest transition-colors group-hover:bg-azalea-500 group-hover:text-white" aria-hidden="true">↑</span>
                 </button>
               ))}
+
+              {customRegion === region ? (
+                <div className="flex min-h-[76px] items-center rounded-2xl border-[1.5px] border-azalea-500 bg-white p-3 shadow-card-soft animate-rise sm:col-span-2 lg:col-span-1">
+                  <label htmlFor={`custom-city-${region}`} className="sr-only">City and country in {region}</label>
+                  <div className="flex w-full gap-2">
+                    <input
+                      id={`custom-city-${region}`}
+                      autoFocus
+                      value={customCity}
+                      onChange={(event) => setCustomCity(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          chooseCustomCity(region);
+                        }
+                      }}
+                      placeholder="City, country"
+                      maxLength={120}
+                      className="min-w-0 flex-1 rounded-full bg-paper px-4 py-2.5 text-sm text-forest placeholder:text-forest/45 focus:outline-none focus:ring-4 focus:ring-azalea-500/15"
+                    />
+                    <button
+                      type="button"
+                      disabled={normaliseCustomCity(customCity).length < 2}
+                      onClick={() => chooseCustomCity(region)}
+                      className="rounded-full bg-azalea-500 px-4 py-2.5 font-display text-sm text-white transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Vote →
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  aria-expanded={false}
+                  onClick={() => {
+                    setCustomRegion(region);
+                    setCustomCity('');
+                  }}
+                  className="group flex min-h-[76px] items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-forest/30 bg-mint-50 px-4 py-3 text-left transition-all hover:-translate-y-0.5 hover:border-azalea-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-500/25"
+                  aria-label={`Add a custom city in ${region}`}
+                >
+                  <span className="grid h-9 w-9 place-items-center rounded-full bg-white text-xl text-azalea-700" aria-hidden="true">+</span>
+                  <span>
+                    <span className="block font-display text-base">Add your city</span>
+                    <span className="block mt-0.5 text-xs text-forest/55">Not on the list?</span>
+                  </span>
+                </button>
+              )}
             </div>
           </section>
         ))}
 
-        {visibleCities.length === 0 && !customOpen && (
+        {visibleCities.length === 0 && (
           <div className="rounded-3xl border border-paper-line bg-white p-8 text-center">
             <p className="font-display text-xl">No match. Excellent wildcard energy.</p>
-            <p className="mt-2 text-sm text-forest/65">Add it as your own pick below.</p>
+            <p className="mt-2 text-sm text-forest/65">Choose its region and add it as your own pick.</p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              {(filter === 'All' ? REGIONS : [filter]).map((region) => (
+                <button
+                  key={region}
+                  type="button"
+                  onClick={() => {
+                    setQuery('');
+                    setFilter(region);
+                    setCustomRegion(region);
+                    setCustomCity('');
+                  }}
+                  className="rounded-full border border-forest/20 bg-mint-50 px-4 py-2 text-sm font-semibold text-forest hover:border-azalea-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-500/20"
+                >
+                  Add to {region}
+                </button>
+              ))}
+            </div>
           </div>
         )}
-
-        <section className="relative overflow-hidden rounded-3xl bg-forest text-paper p-6 md:p-8">
-          <div className="mesh" aria-hidden="true">
-            <span className="w-[48%] h-[150%] right-[-8%] top-[-30%] bg-azalea-500 opacity-30" />
-          </div>
-          <div className="relative z-[2] flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-              <span className="eyebrow-light">Wildcard entry</span>
-              <h3 className="font-display text-2xl mt-2">City missing? Put it on the ballot.</h3>
-              <p className="mt-2 text-sm text-paper/70">Tiny, mighty, or simply overlooked—we&rsquo;re listening.</p>
-            </div>
-            {!customOpen ? (
-              <button type="button" onClick={() => setCustomOpen(true)} className="btn-ghost-glass self-start md:self-auto">
-                Add my city →
-              </button>
-            ) : (
-              <div className="w-full md:max-w-[390px] animate-rise">
-                <label htmlFor="custom-city" className="sr-only">City and country</label>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    id="custom-city"
-                    autoFocus
-                    value={customCity}
-                    onChange={(event) => setCustomCity(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        chooseCustomCity();
-                      }
-                    }}
-                    placeholder="e.g. Cork, Ireland"
-                    maxLength={120}
-                    className="min-w-0 flex-1 rounded-full bg-white px-5 py-3 text-forest placeholder:text-forest/45 focus:outline-none focus:ring-4 focus:ring-azalea-500/35"
-                  />
-                  <button
-                    type="button"
-                    disabled={normaliseCustomCity(customCity).length < 2}
-                    onClick={chooseCustomCity}
-                    className="rounded-full bg-azalea-500 px-5 py-3 font-display text-white transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Vote →
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
       </div>
 
       {selection && (

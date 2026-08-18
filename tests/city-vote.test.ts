@@ -11,6 +11,11 @@ describe('city vote inventory', () => {
     expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'Europe').length).toBeGreaterThanOrEqual(30);
     expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'Asia').length).toBeGreaterThanOrEqual(20);
     expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'USA').length).toBeGreaterThanOrEqual(20);
+    expect(CITY_VOTE_OPTIONS.filter((option) => option.region === 'Australia').length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('does not include Israeli cities', () => {
+    expect(CITY_VOTE_OPTIONS.some((option) => option.country === 'Israel')).toBe(false);
   });
 
   it('does not ask people to vote for the existing Dublin guide', () => {
