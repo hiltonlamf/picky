@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  areAddressesEquivalent,
+  cleanPublishedAddress,
+  dedupeLocationCandidates,
   extractLocationFromHtml,
   extractLocationsFromHtml,
   findLocationOnContactPage,
@@ -30,6 +33,29 @@ describe('first-party location extraction', () => {
     ]);
   });
 
+  it('collapses equivalent first-party Dublin address variants by Eircode', () => {
+    const candidates = dedupeLocationCandidates([
+      { label: 'Sichuan Chilli King 老湘好', address: '100 Parnell Street Parnell Street, Dublin 1, IE, D01 A7P8, IE', confidence: 'high', source: 'website_jsonld', sourceUrl: 'https://sichuanchilliking.com' },
+      { label: 'Sichuan Chilli King 老湘好', address: '100 PARNELL STREET, DUBLIN 1, IE, D01 A7P8, IE', confidence: 'high', source: 'website_jsonld', sourceUrl: 'https://sichuanchilliking.com' },
+      { address: '地址：100 Parnell street D01A7P8', confidence: 'medium', source: 'website_address_element', sourceUrl: 'https://sichuanchilliking.com' },
+      { address: 'Sichuan Chilli King Chinese Restaruant-English Menu, 100 Parnell Street, Parnell Street, Dublin 1, D01 A7P8', confidence: 'medium', source: 'website_map_link', sourceUrl: 'https://sichuanchilliking.com' },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      label: 'Sichuan Chilli King 老湘好',
+      address: '100 Parnell Street, Dublin 1, D01 A7P8, IE',
+      confidence: 'high',
+    });
+  });
+
+  it('uses matching Eircodes as duplicate evidence but keeps distinct branches', () => {
+    expect(areAddressesEquivalent('地址：100 Parnell street D01A7P8', '100 Parnell Street, Dublin 1, D01 A7P8')).toBe(true);
+    expect(areAddressesEquivalent('1 North Street, Dublin, D01 AB12', '2 South Street, Dublin, D02 CD34')).toBe(false);
+    expect(cleanPublishedAddress('Sichuan Chilli King Restaurant Menu, 100 Parnell Street, Parnell Street, Dublin 1, D01A7P8'))
+      .toBe('100 Parnell Street, Dublin 1, D01 A7P8');
+  });
+
   it('falls back to a visible address element', () => {
     const candidate = extractLocationFromHtml('<address>12 Main Street, Dublin 2</address>', 'https://restaurant.example');
     expect(candidate).toMatchObject({ address: '12 Main Street, Dublin 2', source: 'website_address_element' });
@@ -44,6 +70,27 @@ describe('first-party location extraction', () => {
       address: '18 Merrion Row, Dublin 2, D02 A316',
       source: 'website_address_element',
     });
+  });
+
+  it('uses an explicitly located-at address from first-party metadata', () => {
+    const candidate = extractLocationFromHtml(`
+      <title>Forest Avenue | Dublin 4</title>
+      <meta name="description" content="Forest Avenue is a modern restaurant located at 126 Leeson Street Upper.">
+    `, 'https://forestavenuerestaurant.ie/menu');
+    expect(candidate).toMatchObject({
+      address: '126 Leeson Street Upper, Dublin 4',
+      source: 'website_address_element',
+      confidence: 'medium',
+    });
+  });
+
+  it('prefers the named branch on a specific group-site page', () => {
+    const candidates = extractLocationsFromHtml(`
+      <p class="address">Charlotte Quay Dock, Millennium Tower, Ground Floor, Ringsend Rd, Dublin 4</p>
+      <p class="address">Row Wines, City Assembly House, Coppinger Row, Dublin 2</p>
+      <p class="address">Location—8 Orwell Road, D06 H2Y5</p>
+    `, 'https://bereenbrothers.com/orwell-road');
+    expect(candidates.map((candidate) => candidate.address)).toEqual(['8 Orwell Road, D06 H2Y5']);
   });
 
   it('stops a visible address at its postcode when contact details follow without labels', () => {
@@ -161,6 +208,19 @@ describe('first-party location extraction', () => {
       source: 'website_contact_page',
       sourceUrl: 'https://afianco.ie/about',
     });
+    fetchMock.mockRestore();
+  });
+
+  it('checks a same-site splash page used as the restaurant homepage', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(`
+      <title>Forest Avenue | Dublin 4</title>
+      <meta name="description" content="Forest Avenue is located at 126 Leeson Street Upper.">
+    `, { status: 200, headers: { 'content-type': 'text/html' } }));
+    const candidates = await findLocationsOnContactPages(
+      '<a href="/splash">Forest Avenue</a>',
+      'https://forestavenuerestaurant.ie/'
+    );
+    expect(candidates.map((candidate) => candidate.address)).toEqual(['126 Leeson Street Upper, Dublin 4']);
     fetchMock.mockRestore();
   });
 

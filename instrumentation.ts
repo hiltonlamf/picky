@@ -3,6 +3,8 @@
  * Initializes Sentry error monitoring, then seeds and parses the
  * Dublin city guide restaurants automatically.
  */
+import * as Sentry from '@sentry/nextjs';
+
 export async function register() {
   // Sentry must init in every server runtime (Node and Edge) before anything else.
   if (process.env.NEXT_RUNTIME === 'nodejs') {
@@ -19,6 +21,10 @@ export async function register() {
   // Fire-and-forget — don't block the server from starting
   void seedDublinInBackground();
 }
+
+// Captures errors from nested React Server Components and server requests that
+// never reach an application-level catch block.
+export const onRequestError = Sentry.captureRequestError;
 
 async function seedDublinInBackground() {
   try {

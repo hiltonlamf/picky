@@ -103,6 +103,7 @@ export type ErrorCode =
   | 'no_menu_readable'
   | 'not_found'
   | 'network'
+  | 'provider_unavailable'
   | 'server_error'
   | 'unknown';
 
@@ -111,11 +112,12 @@ const PATTERNS: Array<[RegExp, ErrorCode]> = [
   [/connection dropped|no response body|stream closed/i, 'connection_dropped'],
   [/taking much longer|timed? ?out|took longer than expected/i, 'timeout'],
   [/invalid url|invalid request|enter a valid|must be a valid/i, 'invalid_url'],
+  [/restaurant (?:name search|lookup) is temporarily unavailable/i, 'provider_unavailable'],
   // Apostrophes are matched as a class: the app's user-facing copy uses curly
   // ’ (U+2019), so a pattern written with a straight ' silently never matches
   // and the error lands in 'unknown'. Caught by tests/analytics.test.ts, which
   // asserts against the real strings rather than retyped approximations.
-  [/not found|does ?n['’]?o?t exist|was removed/i, 'not_found'],
+  [/not found|does ?n['’]?o?t exist|was removed|permanently closed|could ?n['’]?o?t find an official website/i, 'not_found'],
   // Widened after a real run classified as 'unknown': the live copy says
   // "couldn't READ A FOOD menu" and "couldn't FIND A food menu", neither of
   // which matched "read a menu". A failure_reason of 'unknown' makes the whole
@@ -136,4 +138,3 @@ export function classifyError(message: string | null | undefined): ErrorCode {
   }
   return 'unknown';
 }
-

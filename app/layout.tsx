@@ -62,12 +62,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <Link href="/dublin" className="hover:text-paper transition-colors">
                     Dublin Guide
                   </Link>
-                  <span className="text-paper/50 cursor-default" title="Coming soon">
+                  <Link href="/privacy" className="hover:text-paper transition-colors">
                     Privacy
-                  </span>
-                  <span className="text-paper/50 cursor-default" title="Coming soon">
+                  </Link>
+                  <Link href="/legal" className="hover:text-paper transition-colors">
                     Legal
-                  </span>
+                  </Link>
                   <SiteFeedbackButton />
                 </div>
               </div>

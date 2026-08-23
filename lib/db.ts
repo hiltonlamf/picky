@@ -22,6 +22,7 @@ import type {
   LocationConfidence,
   RestaurantLocationSource,
   RestaurantLocation,
+  PickyRestaurantSearchCandidate,
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
@@ -36,9 +37,10 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
-import { areAddressesEquivalent, pointInGeoJson, type LocationCandidate } from './location';
+import { areAddressesEquivalent, cleanPublishedAddress, pointInGeoJson, type LocationCandidate } from './location';
 import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
+import { rankPickyCandidates } from './restaurant-search-utils';
 
 let _client: ReturnType<typeof createClient> | null = null;
 
@@ -215,6 +217,103 @@ export async function findExistingRestaurant(
   };
 }
 
+type RestaurantSearchRow = {
+  id: string;
+  name: string | null;
+  status: RestaurantStatus;
+  city: string;
+  address: string | null;
+  area_label: string | null;
+  restaurant_locations?: Array<{
+    address: string;
+    label: string | null;
+    area_label: string | null;
+  }>;
+};
+
+/** Database-first restaurant-name lookup. Unassigned rows are eligible only
+ * when first-party location data proves they are in Dublin. */
+export async function searchDublinRestaurantsByName(
+  rawQuery: string,
+  limit = 6
+): Promise<PickyRestaurantSearchCandidate[]> {
+  const query = rawQuery.trim().replace(/[%_,]/g, ' ').replace(/\s+/g, ' ');
+  if (query.length < 2) return [];
+  const { data, error } = await db()
+    .from('restaurants')
+    .select('id, name, status, city, address, area_label, restaurant_locations(address, label, area_label)')
+    .in('city', ['dublin', 'unassigned'])
+    .in('status', ['done', 'no_menu', 'error'])
+    .not('name', 'is', null)
+    .ilike('name', `%${query}%`)
+    .limit(Math.max(limit * 4, 20));
+  if (error) throw new Error(`Failed to search restaurants: ${error.message}`);
+
+  const candidates = ((data ?? []) as RestaurantSearchRow[])
+    .filter((row) => {
+      if (row.city.toLowerCase() === 'dublin') return true;
+      if (row.area_label) return true;
+      if (/\bdublin\b/i.test(row.address ?? '')) return true;
+      return (row.restaurant_locations ?? []).some((location) =>
+        !!location.area_label || /\bdublin\b/i.test(location.address)
+      );
+    })
+    .map((row) => {
+      const locations = Array.from(new Set((row.restaurant_locations ?? [])
+        .map((location) => location.label || location.area_label || location.address)
+        .filter(Boolean)))
+        .slice(0, 2);
+      return {
+        source: 'picky' as const,
+        restaurantId: row.id,
+        name: row.name!,
+        location: locations.length ? locations.join(' · ') : row.area_label || row.address,
+        status: row.status,
+      };
+    });
+  return rankPickyCandidates(rawQuery, candidates).slice(0, limit);
+}
+
+export async function getRestaurantSearchTarget(
+  restaurantId: string
+): Promise<{ id: string; url: string; city: string } | null> {
+  const { data } = await db()
+    .from('restaurants')
+    .select('id, url, city')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  return data ? data as { id: string; url: string; city: string } : null;
+}
+
+export async function findRestaurantIdByProviderPlace(
+  provider: 'google',
+  providerPlaceId: string
+): Promise<string | null> {
+  const { data } = await db()
+    .from('restaurant_place_links')
+    .select('restaurant_id')
+    .eq('provider', provider)
+    .eq('provider_place_id', providerPlaceId)
+    .maybeSingle();
+  return (data?.restaurant_id as string | undefined) ?? null;
+}
+
+export async function linkRestaurantProviderPlace(
+  restaurantId: string,
+  provider: 'google',
+  providerPlaceId: string
+): Promise<void> {
+  const { error } = await db()
+    .from('restaurant_place_links')
+    .upsert(
+      { restaurant_id: restaurantId, provider, provider_place_id: providerPlaceId },
+      { onConflict: 'provider,provider_place_id', ignoreDuplicates: true }
+    );
+  // Deploys may briefly run before the migration lands. Search remains useful
+  // through URL deduplication, so linking is best-effort during that window.
+  if (error) console.error('[db] restaurant place link failed (non-fatal):', error.message);
+}
+
 export async function resetRestaurantForReparse(id: string): Promise<void> {
   await db()
     .from('restaurants')
@@ -317,10 +416,35 @@ export async function fetchRestaurantWithDishes(
       confidence: (location.location_confidence as LocationConfidence | null) ?? null,
       checkedAt: (location.location_checked_at as string | null) ?? null,
     }));
+    const deduped: RestaurantLocation[] = [];
+    for (const location of locations) {
+      const cleaned = { ...location, address: cleanPublishedAddress(location.address) };
+      const index = deduped.findIndex((stored) => areAddressesEquivalent(stored.address, cleaned.address));
+      if (index === -1) {
+        deduped.push(cleaned);
+        continue;
+      }
+      const existingLocation = deduped[index];
+      const existingRank = existingLocation.confidence ? CONFIDENCE_RANK[existingLocation.confidence] : 0;
+      const cleanedRank = cleaned.confidence ? CONFIDENCE_RANK[cleaned.confidence] : 0;
+      const preferred = cleanedRank > existingRank ? cleaned : existingLocation;
+      const other = preferred === cleaned ? existingLocation : cleaned;
+      deduped[index] = {
+        ...preferred,
+        label: preferred.label ?? other.label,
+        latitude: preferred.latitude ?? other.latitude,
+        longitude: preferred.longitude ?? other.longitude,
+        neighbourhood: preferred.neighbourhood ?? other.neighbourhood,
+        neighbourhoodId: preferred.neighbourhoodId ?? other.neighbourhoodId,
+        area: preferred.area ?? other.area,
+        areaCode: preferred.areaCode ?? other.areaCode,
+      };
+    }
+    locations = deduped;
   }
   if (!locations.length && r.address) {
     locations = [{
-      address: r.address,
+      address: cleanPublishedAddress(r.address),
       latitude: r.latitude ?? null,
       longitude: r.longitude ?? null,
       neighbourhood,
@@ -375,7 +499,7 @@ export async function fetchRestaurantWithDishes(
     noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
     noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
-    address: r.address ?? null,
+    address: r.address ? cleanPublishedAddress(r.address) : null,
     locations,
     latitude: r.latitude ?? null,
     longitude: r.longitude ?? null,

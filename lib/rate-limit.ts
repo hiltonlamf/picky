@@ -5,6 +5,14 @@ import { createClient } from '@supabase/supabase-js';
 // the default instead of parsing to NaN. Exported so the user-facing error
 // messages quote the real number instead of a hardcoded one.
 export const MAX_SEARCHES_PER_HOUR = parseInt(process.env.RATE_LIMIT_MAX_PER_HOUR || '15', 10);
+export const MAX_PLACE_AUTOCOMPLETE_PER_HOUR = parseInt(
+  process.env.PLACE_AUTOCOMPLETE_MAX_PER_HOUR || '60',
+  10
+);
+export const MAX_PLACE_DETAILS_PER_HOUR = parseInt(
+  process.env.PLACE_DETAILS_MAX_PER_HOUR || '15',
+  10
+);
 
 let _supabase: ReturnType<typeof createClient> | null = null;
 
@@ -64,6 +72,33 @@ export async function checkRateLimit(
   }
 
   return { allowed, remaining };
+}
+
+export async function checkPlaceLookupRateLimit(
+  ip: string,
+  kind: 'autocomplete' | 'details'
+): Promise<{ allowed: boolean; remaining: number }> {
+  const max = kind === 'autocomplete' ? MAX_PLACE_AUTOCOMPLETE_PER_HOUR : MAX_PLACE_DETAILS_PER_HOUR;
+  const sb = getSupabase();
+  if (!sb) return { allowed: true, remaining: max };
+  const ipHash = hashIp(ip);
+  const windowStart = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  try {
+    const result = await sb
+      .from('external_lookup_events')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_hash', ipHash)
+      .eq('kind', kind)
+      .gte('created_at', windowStart);
+    const count = result.count ?? 0;
+    if (count >= max) return { allowed: false, remaining: 0 };
+    await sb.from('external_lookup_events').insert({ ip_hash: ipHash, kind });
+    return { allowed: true, remaining: Math.max(0, max - count - 1) };
+  } catch {
+    // Lookup is still usable during a migration/configuration outage. Google
+    // Cloud quotas remain the hard project-wide protection.
+    return { allowed: true, remaining: max };
+  }
 }
 
 export function getClientIp(request: Request): string {
