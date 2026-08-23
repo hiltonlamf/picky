@@ -73,7 +73,7 @@ export default function GuideRestaurantCarousel({ restaurants }: { restaurants: 
         <ul
           ref={railRef}
           onScroll={updateEdges}
-          className="-mx-6 flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="-mx-6 -mt-2 flex snap-x snap-mandatory gap-4 overflow-x-auto px-6 pb-3 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {restaurants.map((restaurant) => (
             <li
