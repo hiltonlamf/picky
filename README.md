@@ -26,6 +26,7 @@ Then fill in the values in `.env.local`:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project Settings → API |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Project Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API |
+| `GOOGLE_PLACES_API_KEY` | Google Cloud → Places API (New); server-side restaurant-name lookup |
 
 ### 3. Set up the database
 
@@ -48,6 +49,11 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+Restaurant name search checks Picky's Dublin database before Google. For live
+fallback results, enable Places API (New), restrict the key to that API, set a
+Google Cloud usage quota/budget alert, and add `GOOGLE_PLACES_API_KEY`. Without
+it, database name search and direct website-link entry continue to work.
 
 ---
 

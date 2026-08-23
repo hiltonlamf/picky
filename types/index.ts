@@ -123,6 +123,42 @@ export interface Restaurant {
   createdAt: string;
 }
 
+export interface PickyRestaurantSearchCandidate {
+  source: 'picky';
+  restaurantId: string;
+  name: string;
+  location: string | null;
+  status: RestaurantStatus;
+  exact: boolean;
+}
+
+/** Google candidates are deliberately transient. Only `placeId` may be linked
+ * to a Picky restaurant after selection; the displayed name/address are never
+ * persisted. */
+export interface GoogleRestaurantSearchCandidate {
+  source: 'google';
+  placeId: string;
+  name: string;
+  location: string | null;
+  types: string[];
+}
+
+export type RestaurantSearchCandidate =
+  | PickyRestaurantSearchCandidate
+  | GoogleRestaurantSearchCandidate;
+
+export interface RestaurantSearchResponse {
+  candidates: RestaurantSearchCandidate[];
+  googleQueried: boolean;
+  attributionRequired: boolean;
+  providerError: 'unavailable' | 'rate_limited' | null;
+}
+
+export type RestaurantDiscoverInput =
+  | { url: string }
+  | { restaurantId: string }
+  | { googlePlaceId: string; sessionToken: string };
+
 /** A city guide's lifecycle metadata (draft → published). */
 export interface CityGuide {
   slug: string;

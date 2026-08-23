@@ -36,6 +36,69 @@ function validCoordinates(latitude: number | undefined, longitude: number | unde
   return latitude !== undefined && longitude !== undefined && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180;
 }
 
+const DUBLIN_EIRCODE_SOURCE = '(?:D(?:0[1-9]|1\\d|2[0-4])|D6W)\\s*[A-Z0-9]{4}';
+const DUBLIN_EIRCODE_RE = new RegExp(`\\b${DUBLIN_EIRCODE_SOURCE}\\b`, 'i');
+
+function eircodeKey(address: string): string | null {
+  return address.match(DUBLIN_EIRCODE_RE)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
+}
+
+function collapseRepeatedSuffixWords(value: string): string {
+  const words = value.split(/\s+/);
+  for (let width = Math.floor(words.length / 2); width >= 2; width -= 1) {
+    const first = words.slice(words.length - width * 2, words.length - width);
+    const second = words.slice(words.length - width);
+    if (first.every((word, index) => word.toLowerCase() === second[index]?.toLowerCase())) {
+      return words.slice(0, words.length - width).join(' ');
+    }
+  }
+  return value;
+}
+
+/** Clean first-party postal text without inventing or geocoding an address. */
+export function cleanPublishedAddress(value: string): string {
+  let compact = value
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:address|location|地址)\s*[-—:：]?\s*/i, '')
+    .trim();
+
+  // Map labels sometimes prefix the postal address with a venue/page title.
+  // Keep from the first numbered street only when the discarded text clearly
+  // describes a restaurant/menu label rather than a unit or building name.
+  const street = compact.match(NUMBERED_STREET_RE);
+  if (street?.index && /restaurant|restaruant|menu|location/i.test(compact.slice(0, street.index))) {
+    compact = compact.slice(street.index);
+  }
+
+  const eircode = compact.match(DUBLIN_EIRCODE_RE)?.[0];
+  if (eircode) {
+    const formatted = `${eircode.replace(/\s+/g, '').slice(0, 3).toUpperCase()} ${eircode.replace(/\s+/g, '').slice(3).toUpperCase()}`;
+    compact = compact.replace(DUBLIN_EIRCODE_RE, formatted);
+    // Insert the missing separator used by compact blocks such as
+    // "100 Parnell Street D01A7P8".
+    compact = compact.replace(new RegExp(`(?<![,\\s])\\s*(${DUBLIN_EIRCODE_SOURCE})`, 'i'), ', $1');
+  }
+
+  const parts: string[] = [];
+  let country: string | null = null;
+  for (const rawPart of compact.split(/\s*,\s*/)) {
+    const part = collapseRepeatedSuffixWords(rawPart.trim());
+    if (!part) continue;
+    const key = addressKey(part);
+    if (/^(?:ie|ireland)$/i.test(part) && eircode) {
+      country ??= /^ie$/i.test(part) ? 'IE' : 'Ireland';
+      continue;
+    }
+    if (parts.some((stored) => addressKey(stored) === key)) continue;
+    const previous = parts.at(-1);
+    // "100 Parnell Street, Parnell Street" is one street, not two branches.
+    if (previous && STREET_TYPE_RE.test(part) && addressKey(previous).endsWith(` ${key}`)) continue;
+    parts.push(part);
+  }
+  if (country) parts.push(country);
+  return parts.join(', ');
+}
+
 function normalizeAddress(value: unknown): string | null {
   if (typeof value === 'string') return text(value);
   if (!value || typeof value !== 'object') return null;
@@ -122,7 +185,7 @@ function mapCandidatesFromDocument($: cheerio.CheerioAPI, sourceUrl: string): Lo
 // An Eircode or Dutch postcode is a strong enough signal to accept a compact
 // visible text block as a published address. Many small restaurant sites put
 // this in an ordinary <p>, not an <address> element or JSON-LD.
-const VISIBLE_EIRCODE_RE = /\b(?:D(?:0[1-9]|1\d|2[0-4])|D6W)\s*(?=[A-Z0-9]{4}\b)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4}\b/i;
+const VISIBLE_EIRCODE_RE = new RegExp(`\\b${DUBLIN_EIRCODE_SOURCE}\\b`, 'i');
 // Keep Dutch postcode letters case-sensitive so ordinary prose such as
 // "from 2016 to 2019" cannot become a bogus address. Lowercase address blocks
 // that include Amsterdam still use the street-and-city fallback below.
@@ -202,6 +265,27 @@ function addressesFromVisibleText($: cheerio.CheerioAPI, sourceUrl: string): Loc
   return candidates;
 }
 
+function addressesFromMetadata($: cheerio.CheerioAPI, sourceUrl: string): LocationCandidate[] {
+  const candidates: LocationCandidate[] = [];
+  const title = $('title').first().text();
+  const city = title.match(/\bDublin(?:\s+\d{1,2})?\b/i)?.[0] ?? null;
+  for (const element of $('meta[name="description"], meta[property="og:description"], meta[name="twitter:description"]').toArray()) {
+    const description = text($(element).attr('content'));
+    if (!description) continue;
+    const match = description.match(/\b(?:located|based|find us)\s+(?:at|on)\s+([^.!?]{5,140})/i);
+    if (!match || !NUMBERED_STREET_RE.test(match[1])) continue;
+    let address = match[1].trim();
+    if (city && !/\bDublin\b/i.test(address)) address = `${address}, ${city}`;
+    candidates.push({
+      address,
+      confidence: 'medium',
+      source: 'website_address_element',
+      sourceUrl,
+    });
+  }
+  return candidates;
+}
+
 const LOCATION_CONFIDENCE_RANK: Record<LocationConfidence, number> = { low: 1, medium: 2, high: 3 };
 
 function addressKey(address: string): string {
@@ -209,6 +293,9 @@ function addressKey(address: string): string {
 }
 
 export function areAddressesEquivalent(left: string, right: string): boolean {
+  const leftEircode = eircodeKey(left);
+  const rightEircode = eircodeKey(right);
+  if (leftEircode && rightEircode && leftEircode === rightEircode) return true;
   const a = addressKey(left);
   const b = addressKey(right);
   if (a === b) return true;
@@ -233,7 +320,10 @@ function isUsablePublishedAddress(address: string): boolean {
 export function dedupeLocationCandidates(candidates: LocationCandidate[]): LocationCandidate[] {
   const byAddress = new Map<string, LocationCandidate>();
   const coordinatesOnly: LocationCandidate[] = [];
-  for (const candidate of candidates) {
+  for (const originalCandidate of candidates) {
+    const candidate = originalCandidate.address
+      ? { ...originalCandidate, address: cleanPublishedAddress(originalCandidate.address) }
+      : originalCandidate;
     if (candidate.address && !isUsablePublishedAddress(candidate.address)) continue;
     const key = addressKey(candidate.address);
     if (!key) {
@@ -265,6 +355,20 @@ export function dedupeLocationCandidates(candidates: LocationCandidate[]): Locat
   return [...Array.from(byAddress.values()), ...coordinatesOnly];
 }
 
+function specificPageLocationHint(sourceUrl: string): string | null {
+  try {
+    const slug = decodeURIComponent(new URL(sourceUrl).pathname.split('/').filter(Boolean).at(-1) ?? '')
+      .replace(/[-_]+/g, ' ')
+      .trim();
+    if (!slug || /^(?:home|index|contact|about|menu|menus|location|locations|find us|visit us|info|hours|splash|restaurant)$/i.test(slug)) {
+      return null;
+    }
+    return addressKey(slug).length >= 4 ? slug : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Extract every address a restaurant deliberately publishes on its own page. */
 export function extractLocationsFromHtml(html: string, sourceUrl: string): LocationCandidate[] {
   const $ = cheerio.load(html);
@@ -288,9 +392,22 @@ export function extractLocationsFromHtml(html: string, sourceUrl: string): Locat
   let published = dedupeLocationCandidates([
     ...structured,
     ...addressElements,
+    ...addressesFromMetadata($, sourceUrl),
     ...addressesFromVisibleText($, sourceUrl),
     ...mapCandidates.filter((candidate) => candidate.address),
   ]);
+
+  // A group site may list every sister venue in a shared footer. On a specific
+  // branch page, prefer the address that names the page slug (for example,
+  // /orwell-road -> "8 Orwell Road") instead of publishing every footer card.
+  const pageHint = specificPageLocationHint(sourceUrl);
+  if (published.length > 1 && pageHint) {
+    const hintKey = addressKey(pageHint);
+    const matching = published.filter((candidate) =>
+      addressKey(`${candidate.label ?? ''} ${candidate.address}`).includes(hintKey)
+    );
+    if (matching.length) published = matching;
+  }
 
   // A page with exactly one published address and one coordinate-only map link
   // unambiguously describes the same venue. With several branches we never
@@ -374,7 +491,7 @@ function contactPageUrls(html: string, pageUrl: string): string[] {
   for (const element of $('a[href]').toArray()) {
     const href = $(element).attr('href') ?? '';
     const label = `${$(element).text()} ${href}`.toLowerCase();
-    if (!/(contact|about|find[-_ ]?us|location|visit[-_ ]?us)/.test(label)) continue;
+    if (!/(contact|about|info|hours|splash|find[-_ ]?us|location|visit[-_ ]?us)/.test(label)) continue;
     try {
       const target = new URL(href, pageUrl);
       // Never use a directory/social profile as alleged first-party evidence.
@@ -382,7 +499,7 @@ function contactPageUrls(html: string, pageUrl: string): string[] {
       if (sameFirstPartyHost && target.protocol.startsWith('http')) {
         candidates.push({
           url: target.href,
-          priority: /(contact|find[-_ ]?us|location|visit[-_ ]?us)/.test(label) ? 0 : 1,
+          priority: /(contact|info|hours|find[-_ ]?us|location|visit[-_ ]?us)/.test(label) ? 0 : 1,
         });
       }
     } catch {

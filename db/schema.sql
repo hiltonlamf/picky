@@ -161,6 +161,24 @@ CREATE TABLE IF NOT EXISTS rate_limit_events (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Links transient place-provider discoveries to Picky's first-party record.
+-- Provider content is not cached; Google place IDs are explicitly exempt from
+-- the Places API caching restriction.
+CREATE TABLE IF NOT EXISTS restaurant_place_links (
+  provider          TEXT NOT NULL CHECK (provider IN ('google')),
+  provider_place_id TEXT NOT NULL,
+  restaurant_id     UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (provider, provider_place_id)
+);
+
+CREATE TABLE IF NOT EXISTS external_lookup_events (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  ip_hash    TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('autocomplete', 'details')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ============================================================
 -- AI cost tracking columns (migration — safe to run on existing schema)
 -- ============================================================
@@ -397,6 +415,12 @@ CREATE INDEX IF NOT EXISTS idx_dishes_section ON dishes(section_id);
 CREATE INDEX IF NOT EXISTS idx_dish_reports_dish ON dish_reports(dish_id);
 CREATE INDEX IF NOT EXISTS idx_featured_city ON featured_restaurants(city, display_order);
 CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_time ON rate_limit_events(ip_hash, created_at);
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS restaurants_name_trgm_idx
+  ON restaurants USING gin (name gin_trgm_ops) WHERE name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS restaurant_place_links_restaurant_idx ON restaurant_place_links(restaurant_id);
+CREATE INDEX IF NOT EXISTS external_lookup_events_ip_kind_time_idx
+  ON external_lookup_events(ip_hash, kind, created_at DESC);
 
 -- ============================================================
 -- Auto-update updated_at
