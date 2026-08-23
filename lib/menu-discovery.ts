@@ -129,6 +129,12 @@ export function isNonFoodMenu(text: string): boolean {
   return NON_FOOD_MENU_RE.test(text ?? '');
 }
 
+/** A URL without its #fragment. Two links differing only by fragment are the
+ *  same document, however different their anchor text looks. */
+function stripFragment(url: string): string {
+  return url ? url.replace(/#.*$/, '') : url;
+}
+
 /** Turn a URL into a short human hint from its slug, e.g. ".../wine-list.pdf" → "wine list". */
 export function hintFromUrl(url: string): string {
   try {
@@ -431,9 +437,30 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
       // picklerestaurant.com produced "Main Menu" AND "Main Menu 2" from a
       // single Pickle_JanuaryMainMenu PDF (and "Group Menu 2" from a single
       // group menu). The text candidate has no URL, so it keys on its type.
-      const key = r.ref || `${r.type}|`;
+      //
+      // The #fragment is stripped from the key because it does not identify a
+      // different document. rasam.ie lists its menus as /menu/#early-bird and
+      // /menu/#carte, which are ONE page; extracting each separately produced
+      // three menus holding the identical 42 dishes ("A la carte", "Early Bird"
+      // and a stray "Menu 2"), and paid for the same page three times. The page
+      // is now read once and the extraction splits it into its named menus,
+      // which SYSTEM_PROMPT already handles for a single page listing several.
+      const key = stripFragment(r.ref) || `${r.type}|`;
       const existing = byKey.get(key);
-      if (!existing || preferredOf(r, existing) === r) byKey.set(key, r);
+      if (!existing) {
+        byKey.set(key, r);
+        continue;
+      }
+      const winner = preferredOf(r, existing) === r ? r : existing;
+      // Several anchors into one page: keep the page, drop BOTH anchor names.
+      // Inheriting one of them would label the whole page "Early Bird" when it
+      // also holds the a la carte, which is a worse lie than no name at all —
+      // the extraction reads the page and names each menu it finds.
+      const sameDocDifferentAnchor = stripFragment(r.ref) === stripFragment(existing.ref) && r.ref !== existing.ref;
+      byKey.set(
+        key,
+        sameDocDifferentAnchor ? { ...winner, ref: stripFragment(winner.ref), hint: '' } : winner
+      );
     }
     return Array.from(byKey.values()).filter((r) => {
       const hintText = `${r.hint} ${hintFromUrl(r.ref)}`;

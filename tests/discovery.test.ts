@@ -721,6 +721,43 @@ describe('recorded sites keep the candidates they had (teaser-suppression guards
   });
 
   /**
+   * rasam.ie lists its menus as /menu/#early-bird and /menu/#carte. Those are
+   * ONE page: extracting each separately produced three menus holding the
+   * identical 42 dishes, and paid for the same page three times. The page is
+   * read once, and the extraction splits it into its named menus.
+   */
+  it('treats links differing only by #fragment as one document (Rasam)', async () => {
+    const res = await discoverMenus(
+      makeScrape({
+        menuLinks: [
+          'https://www.rasam.ie/menu/#early-bird',
+          'https://www.rasam.ie/menu/#carte',
+          'https://www.rasam.ie/menu/',
+        ],
+        linkLabels: {
+          'https://www.rasam.ie/menu/#early-bird': 'Early Bird Menu',
+          'https://www.rasam.ie/menu/#carte': 'A La Carte Menu',
+        },
+      })
+    );
+    expect(res.candidates).toHaveLength(1);
+    expect(res.candidates[0].ref).not.toContain('#');
+  });
+
+  it('still keeps genuinely different pages (Chapter One)', async () => {
+    const res = await discoverMenus(
+      makeScrape({
+        menuLinks: [
+          'https://chapteronerestaurant.com/lunch-menu/',
+          'https://chapteronerestaurant.com/dinner-menu/',
+          'https://chapteronerestaurant.com/tasting-menu/',
+        ],
+      })
+    );
+    expect(res.candidates).toHaveLength(3);
+  });
+
+  /**
    * The real cause of picklerestaurant.com's "Main Menu" AND "Main Menu 2":
    * one PDF listed in BOTH menuPdfUrls and menuLinks. dedupeRaw keyed on
    * `type|url`, so the identical document survived once as [pdf] and once as
