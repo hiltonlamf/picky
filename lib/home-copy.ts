@@ -35,7 +35,7 @@ export const HERO = {
 export const GUIDE = {
   eyebrow: 'Dublin, already tofu-analysed for you',
   headline: "Veggie dishes in Dublin's most popular restaurants",
-  lede: "These are the hottest spots in Dublin — we've read every menu so you can see what's there for vegetarians and vegans before you book.",
+  lede: "Hundreds of Dublin restaurants are already analysed for you — so you can see every vegetarian and vegan option before you book.",
   cta: 'View Dublin Guide →',
 } as const;
 
