@@ -37,7 +37,7 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
-import { areAddressesEquivalent, pointInGeoJson, type LocationCandidate } from './location';
+import { areAddressesEquivalent, cleanPublishedAddress, pointInGeoJson, type LocationCandidate } from './location';
 import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 import { rankPickyCandidates } from './restaurant-search-utils';
@@ -416,10 +416,35 @@ export async function fetchRestaurantWithDishes(
       confidence: (location.location_confidence as LocationConfidence | null) ?? null,
       checkedAt: (location.location_checked_at as string | null) ?? null,
     }));
+    const deduped: RestaurantLocation[] = [];
+    for (const location of locations) {
+      const cleaned = { ...location, address: cleanPublishedAddress(location.address) };
+      const index = deduped.findIndex((stored) => areAddressesEquivalent(stored.address, cleaned.address));
+      if (index === -1) {
+        deduped.push(cleaned);
+        continue;
+      }
+      const existingLocation = deduped[index];
+      const existingRank = existingLocation.confidence ? CONFIDENCE_RANK[existingLocation.confidence] : 0;
+      const cleanedRank = cleaned.confidence ? CONFIDENCE_RANK[cleaned.confidence] : 0;
+      const preferred = cleanedRank > existingRank ? cleaned : existingLocation;
+      const other = preferred === cleaned ? existingLocation : cleaned;
+      deduped[index] = {
+        ...preferred,
+        label: preferred.label ?? other.label,
+        latitude: preferred.latitude ?? other.latitude,
+        longitude: preferred.longitude ?? other.longitude,
+        neighbourhood: preferred.neighbourhood ?? other.neighbourhood,
+        neighbourhoodId: preferred.neighbourhoodId ?? other.neighbourhoodId,
+        area: preferred.area ?? other.area,
+        areaCode: preferred.areaCode ?? other.areaCode,
+      };
+    }
+    locations = deduped;
   }
   if (!locations.length && r.address) {
     locations = [{
-      address: r.address,
+      address: cleanPublishedAddress(r.address),
       latitude: r.latitude ?? null,
       longitude: r.longitude ?? null,
       neighbourhood,
@@ -474,7 +499,7 @@ export async function fetchRestaurantWithDishes(
     noMenuReason: (r.no_menu_reason as NoMenuReason | null) ?? null,
     noMenuConfirmedAt: r.no_menu_confirmed_at ?? null,
     cuisine: r.cuisine ?? null,
-    address: r.address ?? null,
+    address: r.address ? cleanPublishedAddress(r.address) : null,
     locations,
     latitude: r.latitude ?? null,
     longitude: r.longitude ?? null,
