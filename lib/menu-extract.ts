@@ -19,7 +19,29 @@ import { fetchScreenshot } from './reader';
 // already uses to tell a menu from a cookie banner. Pure and free (no AI).
 import { textLooksLikeMenu } from './menu-discovery';
 
-export const MIN_FOOD_ITEMS = 7;
+/**
+ * Dishes a single extraction must find before we call it a real menu.
+ *
+ * Lowered 7 -> 5 (founder, 2026-08-23): "a lot of fine dining places may have
+ * less than 7 [dishes] ... Chapter One could be one of them." A two-Michelin-star
+ * lunch menu really is six courses, and judging it a failure had two costs — it
+ * spent retry rungs and a Sonnet escalation trying to re-read a page that was
+ * already read correctly, and it made a correct menu look like a broken one.
+ */
+export const MIN_FOOD_ITEMS = 5;
+
+/**
+ * The floor for KEEPING an already-discovered menu alongside others, as opposed
+ * to MIN_FOOD_ITEMS which is the bar for trusting a menu on its own.
+ *
+ * Deliberately low. Real menus are often small — a tasting menu is six courses,
+ * a lunch menu is frequently a reduced dinner menu — and discarding them makes
+ * the app show fewer menus than the restaurant offers, the most visible failure
+ * there is (founder priority (1)). What this still discards is genuine junk: a
+ * one-or-two-line fragment, or a course-tier price blurb like "Menu 3 courses"
+ * (restaurantdekas.com), which looksLikeHeaderItems also catches.
+ */
+const MIN_KEPT_MENU_ITEMS = 3;
 
 /** Context shared across a discovery result — alternate sources for retry. */
 export interface ExtractContext {
@@ -568,6 +590,23 @@ function normName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
 }
 
+/*
+ * There was an automatic fold here that merged menus holding exactly the same
+ * dishes. It has been removed.
+ *
+ * It was wrong twice over. The founder's standing rule is that a duplicate menu
+ * is ALWAYS flagged for review and never removed automatically (2026-08-18),
+ * and this broke that rule. Worse, it destroyed real menus: rasam.ie publishes
+ * Early Bird, A La Carte and Dine at Home, and the fold reduced all three to
+ * one because extraction had read the same page twice. The duplicate dishes
+ * were a SYMPTOM of an extraction bug, and deleting a menu hid the bug rather
+ * than surfacing it.
+ *
+ * Near-identical menus are now reported by duplicateMenus() in
+ * lib/review-flags.ts, which withholds the restaurant for a human decision and
+ * keeps every menu.
+ */
+
 /**
  * Merge several labeled menus into one, tagging each section with its source
  * menu (menuLabel) so the UI can present one menu at a time.
@@ -660,7 +699,16 @@ export function selectSubstantialMenus(
   const strong = named.filter(
     (n) => countFoodItems(n.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(n.menu)
   );
-  return strong.length > 0 ? strong : named;
+  if (strong.length === 0) return named;
+  // Keep every candidate that holds a real dish list, not only the big ones.
+  // Requiring MIN_FOOD_ITEMS of EACH menu deleted real menus: chapteronerestaurant.com
+  // publishes Lunch, Dinner and Tasting as three separate pages, discovery found
+  // all three, and because Lunch and Tasting hold 6 courses each they were
+  // discarded the moment Dinner cleared 7 — leaving one unlabelled 15-dish menu
+  // where the restaurant offers three. Small menus are normal (a tasting menu is
+  // six courses; a lunch menu is often a reduced dinner menu), so the bar for
+  // KEEPING a menu has to be lower than the bar for trusting one on its own.
+  return named.filter((n) => countFoodItems(n.menu) >= MIN_KEPT_MENU_ITEMS && !looksLikeHeaderItems(n.menu));
 }
 
 /** Extract every selected candidate (bounded) and merge into a single menu. */

@@ -6,6 +6,11 @@ describe('isNonFoodMenu', () => {
     for (const label of [
       'Allergen Menu',
       'Allergen Information',
+      'Allergens',
+      // zerozero.nl published an "Allergies" page as a menu — the filter only
+      // knew the word "allergen".
+      'Allergies',
+      'Allergy Information',
       'Catering',
       'Catering Menu',
       'Collection Order',
@@ -34,6 +39,17 @@ describe('isNonFoodMenu', () => {
       'Brunch',
       'Neighbourhood Menu',
       'Main Menu',
+      'Homemade Pasta',
+      'Home Style Curry',
+      // Cook-at-home menus ARE menus. Founder's call (2026-08-23): rasam.ie's
+      // "Dine at Home" is one of the three menus he wants diners to see,
+      // alongside Early Bird and A La Carte. Only ORDERING channels
+      // (delivery/collection/takeaway) are excluded, not food the restaurant
+      // cooks that you happen to finish at home.
+      'Dine at Home',
+      'Dine at Home (Download)',
+      'Heat at Home',
+      'Meal Kits',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(false);
     }

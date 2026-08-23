@@ -2,6 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { mergeMenus, looksLikeHeaderItems } from '@/lib/menu-extract';
 import { makeDish, makeMenu } from './helpers';
 
+/*
+ * The "identical menus collapse into one" suite lived here and has been deleted
+ * along with the fold it covered.
+ *
+ * Founder's rule (2026-08-23): "some restaurants just have multiple menus of
+ * very similar dishes... it is very possible that a lunch menu is just a
+ * reduced version of a dinner menu. That's something to flag but not delete."
+ * Overlapping menus are now reported by duplicateMenus() in lib/review-flags.ts
+ * and covered by tests/review-flags.test.ts.
+ */
+
 describe('mergeMenus per-menu grouping', () => {
   it('tags sections with their source menu label when multiple menus merge', () => {
     const merged = mergeMenus([
