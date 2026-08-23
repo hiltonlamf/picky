@@ -26,6 +26,7 @@ const request = (consent?: string) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test';
+  process.env.VERCEL_ENV = 'preview';
 });
 
 describe('Google Places observability', () => {
@@ -59,6 +60,7 @@ describe('Google Places observability', () => {
         reason: 'request_failed',
         http_status: 403,
         picky_candidates_available: true,
+        deployment_environment: 'preview',
       },
     }));
     expect(posthog.capture).toHaveBeenCalledWith({
@@ -114,6 +116,7 @@ describe('Google Places observability', () => {
         reason: 'missing_website',
         http_status: null,
         picky_candidates_available: false,
+        deployment_environment: 'preview',
       },
     });
     expect(sentry.captureException).not.toHaveBeenCalled();

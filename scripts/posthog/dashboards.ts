@@ -96,7 +96,7 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
       }),
       trend(
         'HERO: guide vs search — the hypothesis under test',
-        'On 2026-08-06 the hero was rebuilt to lead with the Dublin guide, on the theory that people come here for "where can I eat", not "check this one restaurant" — which they could do themselves by opening its website. This chart is the direct read on whether that was right. Break the guide series down by `placement` to separate the hero button from the one in the band below it. A wide guide win says keep it; a narrow one, or a collapse in search_disclosed, says the search got buried and the hero should go back.',
+        'Compares Dublin-guide and restaurant-search intent since the guide-led hero launched on 2026-08-06. Break guide clicks down by `placement`. A wide guide win supports the layout; a narrow win or falling search_disclosed count suggests restaurant search is too hard to find.',
         [ev('guide_cta_clicked'), ev('search_disclosed')],
         { breakdownFilter: { breakdown: 'placement', breakdown_type: 'event' } }
       ),
@@ -141,7 +141,7 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
         // for a month and stop being comparable to anything before the change.
         name: 'Search funnel incl. disclosure',
         description:
-          'The search path since the hero became guide-led (2026-08-06). The URL bar now sits behind a "Search a restaurant" button, so the first step is opening it — the drop from search_disclosed to search_submitted is people who opened the box and never pasted, which was invisible while the field was always on screen. A wide gap here means the search is discoverable but the ask is unclear; a tiny search_disclosed count means it is buried.',
+          'The search path since the guide-led hero launched on 2026-08-06. The drop from search_disclosed to search_submitted shows people who opened search but did not submit. A wide gap means the ask may be unclear; a low search_disclosed count means search may be buried.',
         query: {
           kind: 'InsightVizNode',
           source: {
@@ -271,6 +271,18 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
       trend('Errors by surface', 'Which screen is failing.', [ev('error_shown')], {
         breakdownFilter: { breakdown: 'surface', breakdown_type: 'event' },
       }),
+      trend(
+        'Google Places lookup issues',
+        'Google fallback failures and actionable lookup outcomes, grouped by stable reason. Filter deployment_environment=production for the live-service view; Preview events are deliberately labelled for verification.',
+        [ev('restaurant_search_provider_failed')],
+        { breakdownFilter: { breakdown: 'reason', breakdown_type: 'event' } }
+      ),
+      trend(
+        'Restaurant selections by source',
+        'Whether selected restaurant-name results came from Picky or the Google fallback.',
+        [ev('restaurant_search_result_selected')],
+        { breakdownFilter: { breakdown: 'source', breakdown_type: 'event' } }
+      ),
       trend('No-menu reasons', 'Separates "site is down" from "site has no menu online" — different fixes.', [
         ev('no_menu_result'),
       ]),

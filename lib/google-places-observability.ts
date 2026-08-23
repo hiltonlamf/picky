@@ -21,6 +21,7 @@ function properties(input: ProviderContext, reason: string, status: number | nul
     reason,
     http_status: status,
     picky_candidates_available: input.pickyCandidatesAvailable ?? false,
+    deployment_environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'unknown',
   };
 }
 
