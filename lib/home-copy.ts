@@ -17,14 +17,14 @@ export const HERO = {
    * the page — so the `placement` breakdown in PostHog means something.
    */
   guideCta: 'Explore the Dublin guide →',
-  /** Secondary CTA — reveals the URL bar in place. */
+  /** Secondary CTA — reveals restaurant name/link search in place. */
   searchTrigger: 'Search a restaurant',
   /**
    * Shown inside the revealed panel. This used to sit under the headline as
    * `subAccent`, but it sells the *secondary* action — as a full-width pink
    * line under a guide-led headline it contradicted the hierarchy.
    */
-  searchHint: "Drop any restaurant website — we'll find the menu, broccoli, tofu, beans…",
+  searchHint: "Type a Dublin restaurant name — or paste its website — and we'll find the menu.",
   /** Collapses the panel again. Only offered while the search is idle. */
   searchCancel: 'Cancel',
   voteCta: 'Vote for our next city →',

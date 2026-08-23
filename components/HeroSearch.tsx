@@ -6,8 +6,15 @@ import ParseProgress from './ParseProgress';
 import { capture } from '@/lib/posthog-client';
 import { EVENTS, captureError, classifyError } from '@/lib/analytics';
 import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
-import type { ParseEvent, MenuCandidate } from '@/types';
-import { CloseIcon, DocIcon, CameraIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
+import { looksLikeRestaurantUrl, normalizeRestaurantName } from '@/lib/restaurant-search-utils';
+import type {
+  ParseEvent,
+  MenuCandidate,
+  RestaurantDiscoverInput,
+  RestaurantSearchCandidate,
+  RestaurantSearchResponse,
+} from '@/types';
+import { CloseIcon, DocIcon, CameraIcon, SearchIcon, LinkIcon, PageIcon, CheckIcon } from './icons';
 
 type AppState = 'idle' | 'parsing' | 'selecting' | 'error';
 
@@ -24,7 +31,7 @@ export default function HeroSearch({
   cancelLabel,
 }: {
   /**
-   * Focus the URL field on mount. True only when a person opened the panel —
+   * Focus the restaurant field on mount. True only when a person opened the panel —
    * never on page load, where it used to steal focus and pop the mobile
    * keyboard before anyone had decided what they wanted.
    */
@@ -34,7 +41,7 @@ export default function HeroSearch({
   cancelLabel?: string;
 }) {
   const router = useRouter();
-  const [url, setUrl] = useState('');
+  const [query, setQuery] = useState('');
   const [state, setState] = useState<AppState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -42,7 +49,19 @@ export default function HeroSearch({
   const [candidates, setCandidates] = useState<MenuCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
+  const [searchCandidates, setSearchCandidates] = useState<RestaurantSearchCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [googleQueried, setGoogleQueried] = useState(false);
+  const [attributionRequired, setAttributionRequired] = useState(false);
+  const [providerError, setProviderError] = useState<RestaurantSearchResponse['providerError']>(null);
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchSessionRef = useRef('');
+
+  const sessionToken = useCallback(() => {
+    if (!searchSessionRef.current) searchSessionRef.current = crypto.randomUUID();
+    return searchSessionRef.current;
+  }, []);
 
   // Set the moment the stream reaches ANY terminal outcome. The terminal
   // branches navigate away with router.push while `state` is still 'parsing',
@@ -56,6 +75,63 @@ export default function HeroSearch({
   useEffect(() => {
     if (autoFocusInput) inputRef.current?.focus({ preventScroll: true });
   }, [autoFocusInput]);
+
+  const requestSuggestions = useCallback(async (value: string, external: boolean, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ query: value, external: external ? '1' : '0' });
+    if (external) params.set('sessionToken', sessionToken());
+    const response = await fetch(`/api/restaurant-search?${params}`, { signal, cache: 'no-store' });
+    if (!response.ok) throw new Error('Restaurant search failed');
+    return await response.json() as RestaurantSearchResponse;
+  }, [sessionToken]);
+
+  // Picky is always asked first. Google is called only when Picky has no
+  // matching Dublin restaurant; a visible control lets the user broaden an
+  // existing result list deliberately.
+  useEffect(() => {
+    if (state !== 'idle') return;
+    const value = query.trim();
+    if (value.length < 2 || looksLikeRestaurantUrl(value)) {
+      setSearchCandidates([]);
+      setSearching(false);
+      setGoogleQueried(false);
+      setAttributionRequired(false);
+      setProviderError(null);
+      setActiveSearchIndex(-1);
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        let result = await requestSuggestions(value, false, controller.signal);
+        if (result.candidates.length === 0 && value.length >= 3) {
+          result = await requestSuggestions(value, true, controller.signal);
+        }
+        setSearchCandidates(result.candidates);
+        setGoogleQueried(result.googleQueried);
+        setAttributionRequired(result.attributionRequired);
+        setProviderError(result.providerError);
+        setActiveSearchIndex(-1);
+        if (result.googleQueried && result.candidates.length === 0) {
+          capture(EVENTS.RESTAURANT_SEARCH_NO_RESULTS, { query_length: value.length });
+        }
+        if (result.providerError) {
+          capture(EVENTS.RESTAURANT_SEARCH_PROVIDER_FAILED, { reason: result.providerError });
+        }
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setProviderError('unavailable');
+          setSearchCandidates([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [query, state, requestSuggestions]);
 
   // Consume an SSE stream from a fetch Response. Resolves 'done' on a terminal
   // outcome (redirect / candidates / error), or the restaurantId to continue
@@ -176,7 +252,7 @@ export default function HeroSearch({
   const parsingRef = useRef<{ startedAt: number; step: string; domain: string | null } | null>(null);
   parsingRef.current =
     state === 'parsing' && startedAt
-      ? { startedAt, step: log[log.length - 1] ?? 'starting', domain: domainOf(url.trim()) }
+      ? { startedAt, step: log[log.length - 1] ?? 'starting', domain: domainOf(query.trim()) }
       : null;
 
   useEffect(() => {
@@ -208,28 +284,8 @@ export default function HeroSearch({
     };
   }, []);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = url.trim();
-      // The button stays live even with an empty field, so say what's missing
-      // and put the cursor where it's needed.
-      if (!trimmed) {
-        setError('Paste a restaurant link first — a homepage or a menu page both work.');
-        inputRef.current?.focus();
-        return;
-      }
-
-      const submittedUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      capture(EVENTS.SEARCH_SUBMITTED, {
-        domain: domainOf(submittedUrl),
-        // Whether they pasted a bare homepage or a deep menu link — it strongly
-        // predicts whether discovery succeeds, so the funnel can be split on it.
-        url_has_path: (() => {
-          try { return new URL(submittedUrl).pathname.replace(/\/$/, '').length > 0; } catch { return false; }
-        })(),
-      });
-
+  const startDiscovery = useCallback(
+    async (input: RestaurantDiscoverInput, source: 'url' | 'picky' | 'google') => {
       reachedTerminalRef.current = false;
       setState('parsing');
       setError(null);
@@ -238,12 +294,26 @@ export default function HeroSearch({
       setCandidates([]);
       setSelectedIds([]);
       setRestaurantId(null);
+      setSearchCandidates([]);
+
+      const submittedUrl = 'url' in input
+        ? (/^https?:\/\//i.test(input.url) ? input.url : `https://${input.url}`)
+        : null;
+      capture(EVENTS.SEARCH_SUBMITTED, {
+        input_type: source === 'url' ? 'url' : 'name',
+        selection_source: source,
+        query_length: query.trim().length,
+        domain: submittedUrl ? domainOf(submittedUrl) : null,
+        url_has_path: submittedUrl ? (() => {
+          try { return new URL(submittedUrl).pathname.replace(/\/$/, '').length > 0; } catch { return false; }
+        })() : false,
+      });
 
       try {
         const response = await fetch('/api/parse/discover', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}` }),
+          body: JSON.stringify(submittedUrl ? { url: submittedUrl } : input),
         });
         await followStream(response);
       } catch (err) {
@@ -253,12 +323,69 @@ export default function HeroSearch({
         captureError({
           surface: 'search',
           message: msg,
-          extra: { domain: domainOf(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`) },
+          extra: { domain: submittedUrl ? domainOf(submittedUrl) : null, selection_source: source },
         });
       }
     },
-    [url, followStream]
+    [query, followStream]
   );
+
+  const chooseRestaurant = useCallback((candidate: RestaurantSearchCandidate) => {
+    capture(EVENTS.RESTAURANT_SEARCH_RESULT_SELECTED, {
+      source: candidate.source,
+      had_location: !!candidate.location,
+    });
+    if (candidate.source === 'picky') {
+      void startDiscovery({ restaurantId: candidate.restaurantId }, 'picky');
+    } else {
+      void startDiscovery({ googlePlaceId: candidate.placeId, sessionToken: sessionToken() }, 'google');
+    }
+  }, [sessionToken, startDiscovery]);
+
+  const searchAllDublin = useCallback(async () => {
+    const value = query.trim();
+    if (value.length < 3) return;
+    setSearching(true);
+    setError(null);
+    try {
+      const result = await requestSuggestions(value, true);
+      setSearchCandidates(result.candidates);
+      setGoogleQueried(result.googleQueried);
+      setAttributionRequired(result.attributionRequired);
+      setProviderError(result.providerError);
+      setActiveSearchIndex(-1);
+    } catch {
+      setProviderError('unavailable');
+    } finally {
+      setSearching(false);
+    }
+  }, [query, requestSuggestions]);
+
+  const handleSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setError('Enter a restaurant name or paste its website link.');
+      inputRef.current?.focus();
+      return;
+    }
+    if (looksLikeRestaurantUrl(trimmed)) {
+      void startDiscovery({ url: trimmed }, 'url');
+      return;
+    }
+    const exact = searchCandidates.filter(
+      (candidate) => candidate.source === 'picky' && normalizeRestaurantName(candidate.name) === normalizeRestaurantName(trimmed)
+    );
+    if (exact.length === 1) {
+      chooseRestaurant(exact[0]);
+      return;
+    }
+    if (activeSearchIndex >= 0 && searchCandidates[activeSearchIndex]) {
+      chooseRestaurant(searchCandidates[activeSearchIndex]);
+      return;
+    }
+    setError(searching ? 'Still searching Dublin…' : 'Choose a restaurant from the list, or paste its website link.');
+  }, [query, searchCandidates, activeSearchIndex, searching, chooseRestaurant, startDiscovery]);
 
   const handleAnalyzeSelected = useCallback(async () => {
     if (!restaurantId || selectedIds.length === 0) return;
@@ -297,6 +424,12 @@ export default function HeroSearch({
     setCandidates([]);
     setSelectedIds([]);
     setRestaurantId(null);
+    setSearchCandidates([]);
+    setGoogleQueried(false);
+    setAttributionRequired(false);
+    setProviderError(null);
+    setActiveSearchIndex(-1);
+    searchSessionRef.current = '';
   };
 
   if (state === 'selecting') {
@@ -376,7 +509,7 @@ export default function HeroSearch({
             onClick={reset}
             className="text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2"
           >
-            ← Try a different link
+            ← Try a different restaurant
           </button>
         )}
       </div>
@@ -394,7 +527,7 @@ export default function HeroSearch({
       // the idle state. Gated on an empty field: closing the panel discards the
       // component, and Escape must never throw away a link someone just pasted.
       onKeyDown={(e) => {
-        if (e.key === 'Escape' && onCancel && !url.trim()) {
+        if (e.key === 'Escape' && onCancel && !query.trim()) {
           e.stopPropagation();
           onCancel();
         }
@@ -403,39 +536,137 @@ export default function HeroSearch({
     >
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1 min-w-0">
-          <LinkIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <SearchIcon className="w-[19px] h-[19px] text-azalea-700 absolute left-5 top-[28px] -translate-y-1/2 pointer-events-none z-[1]" />
           <input
             type="text"
-            value={url}
+            value={query}
             onChange={(e) => {
-              setUrl(e.target.value);
+              setQuery(e.target.value);
               if (error) setError(null);
             }}
-            placeholder="Paste a restaurant website link"
-            // ph-no-mask: replay masks all inputs by default, which is right —
-            // but this field is the whole point of watching a replay, since
-            // without it a failed search is an invisible cursor in an empty box.
-            // A public restaurant URL is not personal data.
-            className="paste-field pl-[46px] pr-11 text-base ph-no-mask"
-            autoComplete="url"
-            aria-label="Restaurant website link"
+            onKeyDown={(e) => {
+              if (!searchCandidates.length) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveSearchIndex((index) => Math.min(index + 1, searchCandidates.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveSearchIndex((index) => Math.max(index - 1, 0));
+              } else if (e.key === 'Escape') {
+                e.stopPropagation();
+                setSearchCandidates([]);
+                setActiveSearchIndex(-1);
+              }
+            }}
+            placeholder="Restaurant name or website link"
+            // Keep PostHog's default input masking: analytics records input type
+            // and query length, never the restaurant name or URL itself.
+            className="paste-field pl-[46px] pr-11 text-base"
+            autoComplete="off"
+            role="combobox"
+            aria-label="Restaurant name or website link"
+            aria-autocomplete="list"
+            aria-expanded={searchCandidates.length > 0}
+            aria-controls={searchCandidates.length > 0 ? 'restaurant-search-results' : undefined}
+            aria-activedescendant={activeSearchIndex >= 0 ? `restaurant-search-option-${activeSearchIndex}` : undefined}
             aria-invalid={!!error}
             ref={inputRef}
           />
-          {url && (
+          {query && (
             <button
               type="button"
-              onClick={() => setUrl('')}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-forest/60 hover:text-forest p-1"
+              onClick={() => {
+                setQuery('');
+                setSearchCandidates([]);
+                setError(null);
+                searchSessionRef.current = '';
+                inputRef.current?.focus();
+              }}
+              className="absolute right-4 top-[28px] -translate-y-1/2 text-forest/60 hover:text-forest p-1 z-[1]"
               aria-label="Clear"
             >
               <CloseIcon className="w-4 h-4" />
             </button>
           )}
+
+          {(searchCandidates.length > 0 || searching || googleQueried || providerError) && !looksLikeRestaurantUrl(query) && (
+            <div className="ph-no-capture relative z-30 mt-2 overflow-hidden rounded-2xl border border-forest/15 bg-white text-forest shadow-[0_18px_45px_rgba(4,28,20,0.28)]">
+              {searching && searchCandidates.length === 0 && (
+                <p className="px-4 py-3 text-sm text-forest/65" role="status">Searching Dublin…</p>
+              )}
+              {!searching && googleQueried && searchCandidates.length === 0 && !providerError && (
+                <p className="px-4 py-3 text-sm text-forest/65" role="status">
+                  No Dublin matches yet. Try another spelling or paste the restaurant website.
+                </p>
+              )}
+              {searchCandidates.length > 0 && (
+                <ul id="restaurant-search-results" role="listbox" aria-label="Dublin restaurant matches" className="py-1">
+                  {searchCandidates.map((candidate, index) => (
+                    <li
+                      id={`restaurant-search-option-${index}`}
+                      role="option"
+                      aria-selected={activeSearchIndex === index}
+                      key={candidate.source === 'picky' ? `picky:${candidate.restaurantId}` : `google:${candidate.placeId}`}
+                    >
+                      <button
+                        type="button"
+                        onMouseEnter={() => setActiveSearchIndex(index)}
+                        onClick={() => chooseRestaurant(candidate)}
+                        className={`w-full px-4 py-3 text-left flex items-start justify-between gap-3 transition-colors ${
+                          activeSearchIndex === index ? 'bg-picky-50' : 'hover:bg-picky-50/70'
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-sm text-forest truncate">{candidate.name}</span>
+                          {candidate.location && (
+                            <span className="block text-xs text-forest/65 mt-0.5 truncate">{candidate.location}</span>
+                          )}
+                        </span>
+                        {candidate.source === 'picky' && (
+                          <span className="shrink-0 rounded-full bg-forest px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-paper">
+                            On Picky
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!googleQueried && searchCandidates.some((candidate) => candidate.source === 'picky') && query.trim().length >= 3 && (
+                <button
+                  type="button"
+                  onClick={searchAllDublin}
+                  disabled={searching}
+                  className="w-full border-t border-forest/10 px-4 py-3 text-left text-xs font-semibold text-azalea-700 hover:bg-azalea-50 disabled:opacity-60"
+                >
+                  {searching ? 'Searching all Dublin restaurants…' : 'Search all Dublin restaurants'}
+                </button>
+              )}
+              {providerError && (
+                <p className="border-t border-forest/10 px-4 py-3 text-xs text-forest/65">
+                  {providerError === 'rate_limited'
+                    ? 'Restaurant lookup limit reached. Pick a Picky result or paste the website link.'
+                    : 'Live Dublin lookup is unavailable. Picky results and website links still work.'}
+                </p>
+              )}
+              {attributionRequired && (
+                <div className="flex justify-end border-t border-forest/10 bg-white px-3 py-2">
+                  {/* Google requires its logo when Places predictions are shown without a map. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="https://maps.gstatic.com/mapfiles/api-3/images/powered-by-google-on-white3.png"
+                    alt="Powered by Google"
+                    width="120"
+                    height="14"
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {/* Never greyed out: an inviting CTA that asks for a link if it's empty
+        {/* Never greyed out: an inviting CTA that asks for a restaurant if empty
             beats a dead button the visitor can't act on. */}
-        <button type="submit" className="btn-cta shrink-0">
+        <button type="submit" className="btn-cta shrink-0 self-start">
           🥦 Find my veggies →
         </button>
       </div>

@@ -14,20 +14,37 @@ import {
   markRestaurantError,
   markRestaurantNoMenu,
   logParseAttempt,
+  getRestaurantSearchTarget,
+  findRestaurantIdByProviderPlace,
+  linkRestaurantProviderPlace,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { withDeadline } from '@/lib/deadline';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
-import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
+import {
+  checkRateLimit,
+  checkPlaceLookupRateLimit,
+  getClientIp,
+  hashIp,
+  MAX_SEARCHES_PER_HOUR,
+} from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
+import { GooglePlacesError, resolveGoogleRestaurant } from '@/lib/google-places';
 import type { ParseEvent } from '@/types';
 
 // Vercel Hobby caps functions at 60s. This route only scrapes + discovers
 // (analysis is handed to the resumable /analyze endpoint), which fits.
 export const maxDuration = 60;
 
-const schema = z.object({ url: z.string().url('Please provide a valid URL') });
+const schema = z.union([
+  z.object({ url: z.string().url('Please provide a valid URL') }),
+  z.object({ restaurantId: z.string().uuid('Invalid restaurant') }),
+  z.object({
+    googlePlaceId: z.string().trim().min(1).max(256),
+    sessionToken: z.string().trim().min(1).max(36),
+  }),
+]);
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -130,7 +147,7 @@ export async function POST(request: NextRequest) {
         });
 
       try {
-        let body: { url: string };
+        let body: Record<string, unknown>;
         try {
           body = await request.json();
         } catch {
@@ -144,7 +161,61 @@ export async function POST(request: NextRequest) {
           send({ type: 'error', error: parsed.error.issues[0]?.message ?? 'Invalid URL' });
           return close();
         }
-        const { url } = parsed.data;
+        let url: string;
+        let discoveryCity = 'unassigned';
+        let selectedGooglePlaceId: string | null = null;
+
+        if ('restaurantId' in parsed.data) {
+          const target = await getRestaurantSearchTarget(parsed.data.restaurantId);
+          if (!target) {
+            send({ type: 'error', error: 'That restaurant is no longer available. Search again.' });
+            return close();
+          }
+          url = target.url;
+          discoveryCity = target.city;
+        } else if ('googlePlaceId' in parsed.data) {
+          selectedGooglePlaceId = parsed.data.googlePlaceId;
+          discoveryCity = 'dublin';
+
+          // A previously selected Google branch is just another Picky cache
+          // lookup. Resolve its stored URL without another paid Places call.
+          const linkedId = await findRestaurantIdByProviderPlace('google', selectedGooglePlaceId).catch(() => null);
+          const linked = linkedId ? await getRestaurantSearchTarget(linkedId).catch(() => null) : null;
+          if (linked) {
+            url = linked.url;
+          } else {
+            const lookupBudget = await checkPlaceLookupRateLimit(ip, 'details');
+            if (!lookupBudget.allowed) {
+              send({ type: 'error', error: 'Too many restaurant lookups right now. Paste the website link or try again later.' });
+              return close();
+            }
+            send({ type: 'progress', step: 'Finding the restaurant website...', stepNumber: 1, totalSteps: 5 });
+            try {
+              const place = await resolveGoogleRestaurant(
+                selectedGooglePlaceId,
+                parsed.data.sessionToken,
+                request.signal
+              );
+              if (place.businessStatus === 'CLOSED_PERMANENTLY') {
+                send({ type: 'error', error: 'Google lists this restaurant as permanently closed. Try another result.' });
+                return close();
+              }
+              url = place.websiteUrl ?? place.googleMapsUrl ?? '';
+              if (!url) {
+                send({ type: 'error', error: "We couldn't find an official website for that restaurant. Paste a website or menu link instead." });
+                return close();
+              }
+            } catch (error) {
+              const message = error instanceof GooglePlacesError
+                ? error.message
+                : 'We could not look up that restaurant. Paste its website link or try again.';
+              send({ type: 'error', error: message });
+              return close();
+            }
+          }
+        } else {
+          url = parsed.data.url;
+        }
         attemptUrl = url;
         updateSpendContext({ url });
 
@@ -153,6 +224,9 @@ export async function POST(request: NextRequest) {
         // rate limit — the limit exists only to cap the cost of NEW analyses.
         send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
         const existing = await findExistingRestaurant(url).catch(() => null);
+        if (existing && selectedGooglePlaceId) {
+          await linkRestaurantProviderPlace(existing.id, 'google', selectedGooglePlaceId);
+        }
         if (existing?.status === 'done' && isFresh(existing.lastScrapedAt)) {
           send({ type: 'cached', restaurantId: existing.id });
           return close();
@@ -190,8 +264,11 @@ export async function POST(request: NextRequest) {
 
         let restaurantId = existing?.id ?? '';
         if (!restaurantId) {
-          restaurantId = await createRestaurantRecord(url);
+          restaurantId = await createRestaurantRecord(url, discoveryCity);
           updateSpendContext({ restaurantId });
+          if (selectedGooglePlaceId) {
+            await linkRestaurantProviderPlace(restaurantId, 'google', selectedGooglePlaceId);
+          }
         } else {
           await resetRestaurantForReparse(restaurantId);
         }

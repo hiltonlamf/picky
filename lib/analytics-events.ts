@@ -9,6 +9,9 @@ export const EVENTS = {
   // --- core funnel ---
   SEARCH_DISCLOSED: 'search_disclosed',
   SEARCH_SUBMITTED: 'search_submitted',
+  RESTAURANT_SEARCH_RESULT_SELECTED: 'restaurant_search_result_selected',
+  RESTAURANT_SEARCH_NO_RESULTS: 'restaurant_search_no_results',
+  RESTAURANT_SEARCH_PROVIDER_FAILED: 'restaurant_search_provider_failed',
   MENU_CANDIDATES_SHOWN: 'menu_candidates_shown',
   MENUS_SELECTED: 'menus_selected',
   ANALYSIS_COMPLETED: 'analysis_completed',
