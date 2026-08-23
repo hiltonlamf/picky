@@ -19,7 +19,29 @@ import { fetchScreenshot } from './reader';
 // already uses to tell a menu from a cookie banner. Pure and free (no AI).
 import { textLooksLikeMenu } from './menu-discovery';
 
-export const MIN_FOOD_ITEMS = 7;
+/**
+ * Dishes a single extraction must find before we call it a real menu.
+ *
+ * Lowered 7 -> 5 (founder, 2026-08-23): "a lot of fine dining places may have
+ * less than 7 [dishes] ... Chapter One could be one of them." A two-Michelin-star
+ * lunch menu really is six courses, and judging it a failure had two costs — it
+ * spent retry rungs and a Sonnet escalation trying to re-read a page that was
+ * already read correctly, and it made a correct menu look like a broken one.
+ */
+export const MIN_FOOD_ITEMS = 5;
+
+/**
+ * The floor for KEEPING an already-discovered menu alongside others, as opposed
+ * to MIN_FOOD_ITEMS which is the bar for trusting a menu on its own.
+ *
+ * Deliberately low. Real menus are often small — a tasting menu is six courses,
+ * a lunch menu is frequently a reduced dinner menu — and discarding them makes
+ * the app show fewer menus than the restaurant offers, the most visible failure
+ * there is (founder priority (1)). What this still discards is genuine junk: a
+ * one-or-two-line fragment, or a course-tier price blurb like "Menu 3 courses"
+ * (restaurantdekas.com), which looksLikeHeaderItems also catches.
+ */
+const MIN_KEPT_MENU_ITEMS = 3;
 
 /** Context shared across a discovery result — alternate sources for retry. */
 export interface ExtractContext {
@@ -568,110 +590,22 @@ function normName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
 }
 
-/** Below this, two menus sharing a dish list is coincidence, not duplication
- *  (two three-item menus of soup/salad/bread prove nothing). */
-const MIN_IDENTICAL_MENU_DISHES = 3;
-
-/**
- * Which menu name survives when two menus turn out to hold the same dishes.
- * Lower tier wins.
+/*
+ * There was an automatic fold here that merged menus holding exactly the same
+ * dishes. It has been removed.
  *
- * This is not cosmetic. An Early Bird is normally a time-restricted subset of
- * the à la carte, so when the two carry the SAME dishes, presenting them under
- * the Early Bird name would tell a diner those dishes are only available before
- * 7pm — a claim the restaurant never made. Keep the least-restricted name.
+ * It was wrong twice over. The founder's standing rule is that a duplicate menu
+ * is ALWAYS flagged for review and never removed automatically (2026-08-18),
+ * and this broke that rule. Worse, it destroyed real menus: rasam.ie publishes
+ * Early Bird, A La Carte and Dine at Home, and the fold reduced all three to
+ * one because extraction had read the same page twice. The duplicate dishes
+ * were a SYMPTOM of an extraction bug, and deleting a menu hid the bug rather
+ * than surfacing it.
+ *
+ * Near-identical menus are now reported by duplicateMenus() in
+ * lib/review-flags.ts, which withholds the restaurant for a human decision and
+ * keeps every menu.
  */
-// NOTE: the à-la-carte alternative sits OUTSIDE the \b(...)\b wrapper. In
-// JavaScript \b is defined on ASCII word characters, so "à" is a non-word
-// character and `\bà` can never match — "À La Carte" silently failed every
-// tier check until a test caught it.
-const MENU_LABEL_TIERS: RegExp[] = [
-  /[àa]\s?la\s?carte|\b(main|dinner|evening|restaurant)\b/i,
-  /\b(lunch|brunch|breakfast|sunday|weekend|seasonal|set|tasting)\b/i,
-  /\b(early\s?bird|late\s?bird|pre[-\s]?theatre|pre[-\s]?theater)\b/i,
-];
-
-/** Generic, information-free names ("Menu", "Menus", "Menu 2") rank last. */
-const GENERIC_MENU_LABEL_RE = /^\s*menus?(\s+\d+)?\s*$/i;
-
-function menuLabelTier(label: string): number {
-  if (GENERIC_MENU_LABEL_RE.test(label)) return MENU_LABEL_TIERS.length + 1;
-  const tier = MENU_LABEL_TIERS.findIndex((re) => re.test(label));
-  return tier === -1 ? MENU_LABEL_TIERS.length : tier;
-}
-
-/**
- * Collapse menus that hold exactly the same dishes into one.
- *
- * Discovery can legitimately find the same menu at two addresses — a "/menu"
- * page and an "à la carte" PDF that are byte-for-byte the same content, or two
- * nav links pointing at one document. Extraction then produces two menus with
- * identical dish lists, and the app shows the diner a picker whose options are
- * indistinguishable. Measured in production: 14 of 88 analysed restaurants had
- * at least one such pair, and rasam.ie had FOUR menus that were really two
- * (À la carte == Early Bird, 42 dishes for 42).
- *
- * The test is EXACT set equality, deliberately — never "mostly a subset". A
- * real Early Bird IS a strict subset of the à la carte, and a subset rule would
- * delete genuine menus; an exact match cannot, because a real subset menu is
- * smaller. Exact equality alone accounted for 12 of those 14 restaurants.
- *
- * Prices are ignored: the same dish list at two price points (early bird vs à
- * la carte) is the SAME menu offered on different terms, and showing it twice
- * is the bug being fixed. Only dish identity distinguishes menus here.
- *
- * Exported for testing.
- */
-export function collapseIdenticalMenus(sections: RawSection[]): RawSection[] {
-  const dishesByLabel = new Map<string, Set<string>>();
-  for (const section of sections) {
-    const label = section.menuLabel;
-    if (!label) continue; // untagged sections are a single menu already
-    if (!dishesByLabel.has(label)) dishesByLabel.set(label, new Set());
-    const set = dishesByLabel.get(label)!;
-    for (const dish of section.dishes) set.add(normName(dish.name));
-  }
-
-  const labels = Array.from(dishesByLabel.keys());
-  if (labels.length < 2) return sections;
-
-  const sameDishes = (a: string, b: string): boolean => {
-    const [x, y] = [dishesByLabel.get(a)!, dishesByLabel.get(b)!];
-    if (x.size !== y.size || x.size < MIN_IDENTICAL_MENU_DISHES) return false;
-    for (const name of Array.from(x)) if (!y.has(name)) return false;
-    return true;
-  };
-
-  // Greedy: walk in discovery order, and for each surviving menu drop every
-  // later menu holding the same dishes. When the loser has the better name,
-  // the survivor takes it over, so the collapse never costs us the clearer
-  // label (a "Menu" duplicated by "À La Carte" ends up called "À La Carte").
-  const dropped = new Set<string>();
-  const renamed = new Map<string, string>();
-  for (let i = 0; i < labels.length; i++) {
-    if (dropped.has(labels[i])) continue;
-    for (let j = i + 1; j < labels.length; j++) {
-      if (dropped.has(labels[j]) || !sameDishes(labels[i], labels[j])) continue;
-      dropped.add(labels[j]);
-      if (menuLabelTier(labels[j]) < menuLabelTier(labels[i])) renamed.set(labels[i], labels[j]);
-    }
-  }
-  if (dropped.size === 0) return sections;
-
-  // One menu left ⇒ present it as an ordinary single menu (menuLabel null),
-  // exactly as a restaurant that only ever had one menu is stored.
-  const survivors = labels.filter((label) => !dropped.has(label));
-  const single = survivors.length === 1;
-
-  return sections
-    .filter((section) => !section.menuLabel || !dropped.has(section.menuLabel))
-    .map((section) => {
-      if (!section.menuLabel) return section;
-      if (single) return { ...section, menuLabel: null };
-      const rename = renamed.get(section.menuLabel);
-      return rename ? { ...section, menuLabel: rename } : section;
-    });
-}
 
 /**
  * Merge several labeled menus into one, tagging each section with its source
@@ -686,11 +620,6 @@ export function collapseIdenticalMenus(sections: RawSection[]): RawSection[] {
  * and tagged its own sections with a menuLabel — that per-section label is
  * preserved rather than overwritten, so a single discovered candidate can
  * still present as multiple separate menus in the UI.
- *
- * Finally, menus that end up holding exactly the same dishes are folded into
- * one — see collapseIdenticalMenus. That is not cross-menu dish de-dup (which
- * would be wrong, per the paragraph above); it removes a whole menu only when
- * it is indistinguishable from another.
  */
 export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>): ClassifiedMenu {
   const multi = named.length > 1;
@@ -744,11 +673,7 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
     }
   }
 
-  // Last: fold away any menus that turned out to be the same menu twice. Runs
-  // on the finished sections rather than on the candidate list so it catches
-  // both causes — two candidates that returned the same document, and one page
-  // the extraction split into two identically-stocked named menus.
-  return { restaurantName, language, cuisine, sections: collapseIdenticalMenus(sections) };
+  return { restaurantName, language, cuisine, sections };
 }
 
 /**
@@ -774,7 +699,16 @@ export function selectSubstantialMenus(
   const strong = named.filter(
     (n) => countFoodItems(n.menu) >= MIN_FOOD_ITEMS && !looksLikeHeaderItems(n.menu)
   );
-  return strong.length > 0 ? strong : named;
+  if (strong.length === 0) return named;
+  // Keep every candidate that holds a real dish list, not only the big ones.
+  // Requiring MIN_FOOD_ITEMS of EACH menu deleted real menus: chapteronerestaurant.com
+  // publishes Lunch, Dinner and Tasting as three separate pages, discovery found
+  // all three, and because Lunch and Tasting hold 6 courses each they were
+  // discarded the moment Dinner cleared 7 — leaving one unlabelled 15-dish menu
+  // where the restaurant offers three. Small menus are normal (a tasting menu is
+  // six courses; a lunch menu is often a reduced dinner menu), so the bar for
+  // KEEPING a menu has to be lower than the bar for trusting one on its own.
+  return named.filter((n) => countFoodItems(n.menu) >= MIN_KEPT_MENU_ITEMS && !looksLikeHeaderItems(n.menu));
 }
 
 /** Extract every selected candidate (bounded) and merge into a single menu. */

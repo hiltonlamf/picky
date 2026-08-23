@@ -22,14 +22,6 @@ describe('isNonFoodMenu', () => {
       'Kids Activity Book',
       'Gift Vouchers',
       'Group Booking',
-      // Cook-at-home kits: a product you finish yourself, not a menu you can
-      // order at a table. rasam.ie sells "Dine at Home (Download)".
-      'Dine at Home',
-      'Dine at Home (Download)',
-      'Heat at Home',
-      'Cook at Home',
-      'Meal Kits',
-      'Home Kit',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(true);
     }
@@ -47,9 +39,17 @@ describe('isNonFoodMenu', () => {
       'Brunch',
       'Neighbourhood Menu',
       'Main Menu',
-      // The at-home rule is word-bounded, so these must not be caught.
       'Homemade Pasta',
       'Home Style Curry',
+      // Cook-at-home menus ARE menus. Founder's call (2026-08-23): rasam.ie's
+      // "Dine at Home" is one of the three menus he wants diners to see,
+      // alongside Early Bird and A La Carte. Only ORDERING channels
+      // (delivery/collection/takeaway) are excluded, not food the restaurant
+      // cooks that you happen to finish at home.
+      'Dine at Home',
+      'Dine at Home (Download)',
+      'Heat at Home',
+      'Meal Kits',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(false);
     }

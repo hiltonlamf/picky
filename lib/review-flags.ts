@@ -28,9 +28,14 @@ export const MIN_MENU_DISHES = 5;
  * parse — Pickle (4) and Drury Buildings (3) both have one, and an earlier
  * version of this rule would have pulled both off the live guide for it.
  * Sides, sauces and cheese lists are short for the same honest reason.
+ *
+ * So are course-based menus. Founder's call (2026-08-23): "if they say there
+ * are 3 course meals and only have 3 dishes, we shouldn't exclude the menu
+ * too." A three-course set menu listing three dishes is complete, not
+ * truncated — the number of dishes IS the number of courses.
  */
 const LEGITIMATELY_SHORT_MENU_RE =
-  /\b(dessert|desserts|sweet|sweets|pudding|puddings|side|sides|sauce|sauces|cheese|cheeses|extra|extras|nagerecht|dolci|postres)\b/i;
+  /\b(dessert|desserts|sweet|sweets|pudding|puddings|side|sides|sauce|sauces|cheese|cheeses|extra|extras|nagerecht|dolci|postres|tasting|set|course|courses|degustation|d[ée]gustation|prix\s?fixe|chef'?s)\b/i;
 
 export type ReviewFlagCode = 'few_dishes' | 'menu_as_dish' | 'thin_menu' | 'duplicate_menu';
 

@@ -92,19 +92,17 @@ export const DRINK_SOURCE_RE =
 /**
  * Not real dining menus — allergen sheets, catering/collection/delivery/takeaway
  * ordering, kids' menus (not the guide's audience), gift vouchers, group-booking
- * packages, and cook-at-home meal kits. Dropped in discovery so they never become
- * a "menu" for ANY restaurant or city. Kept separate from DRINK_SOURCE_RE for
- * clarity.
+ * packages. Dropped in discovery so they never become a "menu" for ANY
+ * restaurant or city. Kept separate from DRINK_SOURCE_RE for clarity.
  *
- * The at-home family belongs here for the same reason delivery/takeaway does:
- * rasam.ie sells a "Dine at Home (Download)" kit, which is a product you cook
- * yourself, not a menu you can order from a table. One `at home` alternative
- * covers "dine/heat/cook at home"; it is word-bounded so it cannot match
- * "homemade" or "homepage". Bare `home` and `download` are deliberately absent
- * (plenty of real menus say "Download menu").
+ * NOT here: cook-at-home menus. "Dine at Home" was added to this list and the
+ * founder overruled it (2026-08-23) — rasam.ie's Dine at Home is one of the
+ * three menus he wants diners to see, alongside Early Bird and A La Carte. A
+ * menu of real food the restaurant cooks is a menu, even if you finish it at
+ * home; only ORDERING channels (delivery/collection/takeaway) are excluded.
  */
 export const NON_FOOD_MENU_RE =
-  /\b(allergens?|allerg(y|ies)|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack|at\s?home|meal\s?kits?|home\s?kits?)\b/i;
+  /\b(allergens?|allerg(y|ies)|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack)\b/i;
 
 /**
  * A menu source whose name says WHICH menu it is — a meal, a sitting, or a

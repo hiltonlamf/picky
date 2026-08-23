@@ -10,15 +10,18 @@
 //
 // Why this exists: a restaurant showing "À la carte" and "Early Bird" as two
 // options containing the identical 42 dishes reads as broken software, and it
-// is founder priority ① (the right menus, no more and no fewer). The extraction
-// pipeline now folds EXACT duplicates away automatically (collapseIdenticalMenus
-// in lib/menu-extract.ts), so anything this reports as exact is stale data that
-// predates that fix and will clear on re-analysis.
+// is founder priority ① (the right menus, no more and no fewer).
 //
-// --near lists pairs above NEAR_THRESHOLD that are NOT exact. Those are
-// deliberately left alone by the pipeline: a real Early Bird is a genuine
-// subset of the à la carte, and two branch menus of one group can differ by a
-// dish. They need a human eye, which is what this flag is for.
+// NOTHING here is deleted, and nothing in the pipeline deletes it either.
+// Founder's rule (2026-08-23): "some restaurants just have multiple menus of
+// very similar dishes... it is very possible that a lunch menu is just a
+// reduced version of a dinner menu. That's something to flag but not delete."
+// Overlapping menus raise a duplicate_menu review flag (lib/review-flags.ts)
+// that withholds the restaurant until a human decides.
+//
+// A pair reported as EXACT is usually the tell for an extraction bug — the same
+// page read twice under two names — so it is worth chasing at the source rather
+// than papering over. --near also lists pairs that merely overlap heavily.
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
 
@@ -121,12 +124,6 @@ async function main() {
       `${affected} have duplicate pairs (${exactCount} exact${near ? `, ${nearCount} near` : ''}).`
   );
   if (!near) console.log('Re-run with --near to also list pairs that only mostly overlap.');
-  if (exactCount > 0) {
-    console.log(
-      'Exact pairs are stale rows: re-analysing those restaurants folds them away ' +
-        '(collapseIdenticalMenus, lib/menu-extract.ts).'
-    );
-  }
 }
 
 main().catch((error) => {

@@ -1,119 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { mergeMenus, looksLikeHeaderItems, collapseIdenticalMenus } from '@/lib/menu-extract';
+import { mergeMenus, looksLikeHeaderItems } from '@/lib/menu-extract';
 import { makeDish, makeMenu } from './helpers';
 
-/**
- * Two menus holding exactly the same dishes are one menu shown twice. Measured
- * in production: 14 of 88 analysed restaurants had such a pair, and rasam.ie
- * had four menus that were really two (À la carte == Early Bird, 42 for 42).
+/*
+ * The "identical menus collapse into one" suite lived here and has been deleted
+ * along with the fold it covered.
  *
- * The rule is EXACT set equality on dish names, never "mostly a subset" — a
- * real Early Bird IS a strict subset of the à la carte, so a subset rule would
- * delete genuine menus.
+ * Founder's rule (2026-08-23): "some restaurants just have multiple menus of
+ * very similar dishes... it is very possible that a lunch menu is just a
+ * reduced version of a dinner menu. That's something to flag but not delete."
+ * Overlapping menus are now reported by duplicateMenus() in lib/review-flags.ts
+ * and covered by tests/review-flags.test.ts.
  */
-describe('identical menus collapse into one', () => {
-  const threeDishes = () => [makeDish('Bhel Puri'), makeDish('Lamb Rogan Josh'), makeDish('Saag Aloo')];
-
-  it('folds two menus with the same dishes into a single unlabelled menu', () => {
-    const merged = mergeMenus([
-      { label: 'À La Carte', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-      { label: 'Early Bird', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-    ]);
-    // One menu left ⇒ presented as an ordinary single menu.
-    expect(merged.sections).toHaveLength(1);
-    expect(merged.sections[0].menuLabel).toBeNull();
-    expect(merged.sections[0].dishes).toHaveLength(3);
-  });
-
-  it('keeps the least-restricted name when three menus survive', () => {
-    const merged = mergeMenus([
-      { label: 'Early Bird', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-      { label: 'À La Carte', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-      { label: 'Lunch', menu: makeMenu([{ name: 'Mains', dishes: [makeDish('Dal Tadka')] }]) },
-    ]);
-    const labels = merged.sections.map((s) => s.menuLabel);
-    // "Early Bird" would tell a diner these dishes are only served before 7pm —
-    // a claim the restaurant never made. The à la carte name wins.
-    expect(labels).toContain('À La Carte');
-    expect(labels).not.toContain('Early Bird');
-    expect(labels).toContain('Lunch');
-  });
-
-  it('does NOT collapse a real Early Bird that is a strict subset', () => {
-    const merged = mergeMenus([
-      {
-        label: 'À La Carte',
-        menu: makeMenu([{ name: 'Mains', dishes: [...threeDishes(), makeDish('Tandoori Monkfish')] }]),
-      },
-      { label: 'Early Bird', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-    ]);
-    expect(merged.sections.map((s) => s.menuLabel)).toEqual(['À La Carte', 'Early Bird']);
-  });
-
-  it('ignores price: the same dishes at two price points is still one menu', () => {
-    const priced = (price: string) => [
-      makeDish('Bhel Puri', { price }),
-      makeDish('Lamb Rogan Josh', { price }),
-      makeDish('Saag Aloo', { price }),
-    ];
-    const merged = mergeMenus([
-      { label: 'À La Carte', menu: makeMenu([{ name: 'Mains', dishes: priced('€22') }]) },
-      { label: 'Early Bird', menu: makeMenu([{ name: 'Mains', dishes: priced('€18') }]) },
-    ]);
-    expect(merged.sections).toHaveLength(1);
-  });
-
-  it('needs at least three dishes — two tiny menus matching proves nothing', () => {
-    const merged = mergeMenus([
-      { label: 'Lunch', menu: makeMenu([{ name: 'Mains', dishes: [makeDish('Soup'), makeDish('Bread')] }]) },
-      { label: 'Dinner', menu: makeMenu([{ name: 'Mains', dishes: [makeDish('Soup'), makeDish('Bread')] }]) },
-    ]);
-    expect(merged.sections.map((s) => s.menuLabel)).toEqual(['Lunch', 'Dinner']);
-  });
-
-  it('leaves genuinely different menus alone', () => {
-    const merged = mergeMenus([
-      { label: 'Lunch', menu: makeMenu([{ name: 'Mains', dishes: threeDishes() }]) },
-      {
-        label: 'Dinner',
-        menu: makeMenu([{ name: 'Mains', dishes: [makeDish('Chateaubriand'), makeDish('Turbot'), makeDish('Venison')] }]),
-      },
-    ]);
-    expect(merged.sections.map((s) => s.menuLabel)).toEqual(['Lunch', 'Dinner']);
-  });
-
-  it('a specific name is promoted over a generic "Menu"', () => {
-    const sections = [
-      { name: 'Mains', dishes: threeDishes(), menuLabel: 'Menu' },
-      { name: 'Mains', dishes: threeDishes(), menuLabel: 'À La Carte' },
-      { name: 'Sides', dishes: [makeDish('Naan')], menuLabel: 'Lunch' },
-    ];
-    const out = collapseIdenticalMenus(sections);
-    expect(out.map((s) => s.menuLabel)).toEqual(['À La Carte', 'Lunch']);
-  });
-
-  /**
-   * JavaScript's \b is ASCII-only, so `\bà` never matches and the accented
-   * spelling silently fell through every name-ranking check. Both spellings
-   * are common on Irish menus, so both are pinned.
-   */
-  it.each(['À La Carte', 'A La Carte', 'à la carte', 'Alacarte'])(
-    'ranks "%s" above Early Bird despite the accent',
-    (carte) => {
-      const out = collapseIdenticalMenus([
-        { name: 'Mains', dishes: threeDishes(), menuLabel: 'Early Bird' },
-        { name: 'Mains', dishes: threeDishes(), menuLabel: carte },
-        { name: 'Sides', dishes: [makeDish('Naan')], menuLabel: 'Lunch' },
-      ]);
-      expect(out.map((s) => s.menuLabel)).toEqual([carte, 'Lunch']);
-    }
-  );
-
-  it('leaves untagged sections alone', () => {
-    const sections = [{ name: 'Mains', dishes: threeDishes(), menuLabel: null }];
-    expect(collapseIdenticalMenus(sections)).toEqual(sections);
-  });
-});
 
 describe('mergeMenus per-menu grouping', () => {
   it('tags sections with their source menu label when multiple menus merge', () => {

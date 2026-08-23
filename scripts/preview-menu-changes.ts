@@ -13,8 +13,8 @@
 //
 //   - Menus dropped as non-food (isNonFoodMenu) — EXACT: the same rule runs
 //     against the stored menu label.
-//   - Menus folded away as exact duplicates (collapseIdenticalMenus) — EXACT:
-//     the same dish-set comparison, on the stored dishes.
+//   - Menus flagged as near-duplicates (duplicateMenus) — EXACT: the same
+//     comparison, on the stored dishes. Nothing is ever folded or deleted.
 //   - Restaurants newly withheld by the per-menu thin tripwire — EXACT.
 //   - The phantom "Main Menu" — PREDICTED, not exact. That fix lives in
 //     discovery, so confirming it needs a real re-analysis of the site. Any
@@ -23,7 +23,6 @@
 import './_preload-env';
 import { createClient } from '@supabase/supabase-js';
 import { isNonFoodMenu } from '@/lib/menu-discovery';
-import { collapseIdenticalMenus } from '@/lib/menu-extract';
 import { thinMenus, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 import type { RawSection, Restaurant } from '@/types';
 
@@ -111,8 +110,9 @@ async function main() {
       notes.push(`  DROP    "${label}" (${beforeCounts.get(label)} dishes) — not a dine-in menu`);
     }
 
-    // 2. Exact-duplicate menus, folded together.
-    const after = collapseIdenticalMenus(afterNonFood);
+    // 2. Nothing is folded any more — overlapping menus are flagged, not
+    //    removed (a lunch menu is often a reduced dinner menu).
+    const after = afterNonFood;
     const afterCounts = countsFor(after);
     for (const [label, count] of Array.from(beforeCounts.entries())) {
       if (nonFood.includes(label)) continue;

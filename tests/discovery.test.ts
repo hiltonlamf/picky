@@ -614,7 +614,7 @@ describe('the homepage teaser is never a menu we named ourselves (Rasam)', () =>
     expect(labels).not.toMatch(/wine/i);
   });
 
-  it('drops "Dine at Home" — a cook-at-home kit is not a dine-in menu', async () => {
+  it('KEEPS "Dine at Home" — food the restaurant cooks is still a menu', async () => {
     const home = 'https://rasam.ie/dine-at-home.pdf';
     const carte = 'https://rasam.ie/a-la-carte.pdf';
     const early = 'https://rasam.ie/early-bird.pdf';
@@ -624,8 +624,11 @@ describe('the homepage teaser is never a menu we named ourselves (Rasam)', () =>
         linkLabels: { [home]: 'Dine at Home (Download)', [carte]: 'A La Carte Menu', [early]: 'Early Bird Menu' },
       })
     );
-    expect(res.candidates.map((c) => c.label).join(' ')).not.toMatch(/home/i);
-    expect(res.candidates).toHaveLength(2);
+    // Founder's call (2026-08-23): rasam.ie's three menus are Early Bird,
+    // A La Carte and Dine at Home. Only ORDERING channels (delivery /
+    // collection / takeaway) are excluded, not food the kitchen cooks.
+    expect(res.candidates.map((c) => c.label).join(' ')).toMatch(/home/i);
+    expect(res.candidates).toHaveLength(3);
   });
 
   /**
