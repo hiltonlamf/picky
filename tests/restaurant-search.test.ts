@@ -8,6 +8,7 @@ import {
 } from '@/lib/restaurant-search-utils';
 import {
   DUBLIN_SEARCH_RADIUS_METRES,
+  GooglePlacesError,
   resolveGoogleRestaurant,
   searchGoogleRestaurants,
 } from '@/lib/google-places';
@@ -112,6 +113,25 @@ describe('Google Places adapter', () => {
     expect(fetchMock.mock.calls[0][1].headers['X-Goog-FieldMask'])
       .toBe('websiteUri,googleMapsUri,businessStatus');
   });
+
+  it('keeps provider diagnostics separate from actionable user copy', async () => {
+    vi.stubEnv('GOOGLE_PLACES_API_KEY', 'server-key');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 403 })));
+
+    try {
+      await resolveGoogleRestaurant('place-1', 'session-1');
+      throw new Error('Expected Place Details to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(GooglePlacesError);
+      expect(error).toMatchObject({
+        code: 'request_failed',
+        operation: 'details',
+        status: 403,
+        message: 'Google Place Details returned 403',
+        userMessage: 'Restaurant lookup is temporarily unavailable. Paste its website link or try again.',
+      });
+    }
+  });
 });
 
 describe('restaurant search integration contracts', () => {
@@ -120,6 +140,7 @@ describe('restaurant search integration contracts', () => {
     expect(route.indexOf('searchDublinRestaurantsByName(query)'))
       .toBeLessThan(route.indexOf('searchGoogleRestaurants(query'));
     expect(route).toContain("'Cache-Control': 'no-store, max-age=0'");
+    expect(route).toContain('captureGooglePlacesFailure({');
   });
 
   it('keeps URL discovery backward compatible while accepting database and Google selections', () => {

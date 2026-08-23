@@ -115,13 +115,17 @@ export default function HeroSearch({
         if (result.googleQueried && result.candidates.length === 0) {
           capture(EVENTS.RESTAURANT_SEARCH_NO_RESULTS, { query_length: value.length });
         }
-        if (result.providerError) {
-          capture(EVENTS.RESTAURANT_SEARCH_PROVIDER_FAILED, { reason: result.providerError });
-        }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
           setProviderError('unavailable');
           setSearchCandidates([]);
+          // The server records provider responses authoritatively. This branch
+          // is only for a client/network failure where the route never replied.
+          capture(EVENTS.RESTAURANT_SEARCH_PROVIDER_FAILED, {
+            provider: 'google',
+            operation: 'autocomplete',
+            reason: 'network',
+          });
         }
       } finally {
         if (!controller.signal.aborted) setSearching(false);
@@ -356,6 +360,11 @@ export default function HeroSearch({
       setActiveSearchIndex(-1);
     } catch {
       setProviderError('unavailable');
+      capture(EVENTS.RESTAURANT_SEARCH_PROVIDER_FAILED, {
+        provider: 'google',
+        operation: 'autocomplete',
+        reason: 'network',
+      });
     } finally {
       setSearching(false);
     }

@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
 import { searchDublinRestaurantsByName } from '@/lib/db';
-import { GooglePlacesError, searchGoogleRestaurants } from '@/lib/google-places';
-import { checkPlaceLookupRateLimit, getClientIp } from '@/lib/rate-limit';
+import { searchGoogleRestaurants } from '@/lib/google-places';
+import { captureGooglePlacesFailure, trackGooglePlacesIssue } from '@/lib/google-places-observability';
+import { captureServerException } from '@/lib/posthog-server';
+import { checkPlaceLookupRateLimit, getClientIp, hashIp } from '@/lib/rate-limit';
 import { mergeSearchCandidates } from '@/lib/restaurant-search-utils';
+import { ANON_ID_COOKIE } from '@/lib/telemetry';
 import type { RestaurantSearchResponse } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +26,8 @@ function response(body: RestaurantSearchResponse, status = 200) {
 }
 
 export async function GET(request: NextRequest) {
+  const ip = getClientIp(request);
+  const distinctId = request.cookies.get(ANON_ID_COOKIE)?.value ?? hashIp(ip);
   const parsed = inputSchema.safeParse({
     query: request.nextUrl.searchParams.get('query') ?? '',
     external: request.nextUrl.searchParams.get('external') ?? '0',
@@ -41,8 +47,15 @@ export async function GET(request: NextRequest) {
       return response({ candidates: picky, googleQueried: false, attributionRequired: false, providerError: null }, 400);
     }
 
-    const budget = await checkPlaceLookupRateLimit(getClientIp(request), 'autocomplete');
+    const budget = await checkPlaceLookupRateLimit(ip, 'autocomplete');
     if (!budget.allowed) {
+      await trackGooglePlacesIssue({
+        request,
+        distinctId,
+        operation: 'autocomplete',
+        reason: 'rate_limited',
+        pickyCandidatesAvailable: picky.length > 0,
+      });
       return response({
         candidates: picky,
         googleQueried: false,
@@ -61,13 +74,26 @@ export async function GET(request: NextRequest) {
         providerError: null,
       });
     } catch (error) {
-      const providerError = error instanceof GooglePlacesError && error.code === 'unavailable'
-        ? 'unavailable' as const
-        : 'unavailable' as const;
+      const providerError = 'unavailable' as const;
+      await captureGooglePlacesFailure({
+        request,
+        distinctId,
+        error,
+        operation: 'autocomplete',
+        pickyCandidatesAvailable: picky.length > 0,
+      });
       console.error('[restaurant-search] Google Places failed:', error instanceof Error ? error.message : error);
       return response({ candidates: picky, googleQueried: true, attributionRequired: false, providerError });
     }
   } catch (error) {
+    Sentry.captureException(error, {
+      tags: { area: 'restaurant_search', component: 'database' },
+      level: 'error',
+    });
+    await captureServerException(request, distinctId, error, {
+      area: 'restaurant_search',
+      component: 'database',
+    });
     console.error('[restaurant-search] database search failed:', error instanceof Error ? error.message : error);
     return response({ candidates: [], googleQueried: false, attributionRequired: false, providerError: null }, 500);
   }

@@ -16,3 +16,7 @@ Sentry.init({
 // UUID from middleware, not anything identifying — so this adds no PII.
 const anonId = anonIdFromDocument();
 if (anonId) Sentry.setUser({ id: anonId });
+
+// Required by current @sentry/nextjs releases to instrument App Router client
+// navigations from the supported instrumentation-client entrypoint.
+export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;

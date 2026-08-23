@@ -5,16 +5,40 @@ const DETAILS_URL = 'https://places.googleapis.com/v1/places';
 const DUBLIN_CENTRE = { latitude: 53.3498, longitude: -6.2603 };
 export const DUBLIN_SEARCH_RADIUS_METRES = 30_000;
 
+export type GooglePlacesOperation = 'autocomplete' | 'details';
+
+interface GooglePlacesErrorOptions {
+  operation: GooglePlacesOperation;
+  status?: number | null;
+  userMessage?: string;
+}
+
 export class GooglePlacesError extends Error {
-  constructor(public readonly code: 'unavailable' | 'request_failed' | 'not_found', message: string) {
+  public readonly operation: GooglePlacesOperation;
+  public readonly status: number | null;
+  public readonly userMessage: string;
+
+  constructor(
+    public readonly code: 'unavailable' | 'request_failed' | 'not_found',
+    message: string,
+    options: GooglePlacesErrorOptions
+  ) {
     super(message);
     this.name = 'GooglePlacesError';
+    this.operation = options.operation;
+    this.status = options.status ?? null;
+    this.userMessage = options.userMessage ?? message;
   }
 }
 
-function apiKey(): string {
+function apiKey(operation: GooglePlacesOperation): string {
   const key = process.env.GOOGLE_PLACES_API_KEY?.trim();
-  if (!key) throw new GooglePlacesError('unavailable', 'Restaurant name search is temporarily unavailable. Paste a website link instead.');
+  if (!key) {
+    throw new GooglePlacesError('unavailable', 'GOOGLE_PLACES_API_KEY is not configured', {
+      operation,
+      userMessage: 'Restaurant name search is temporarily unavailable. Paste a website link instead.',
+    });
+  }
   return key;
 }
 
@@ -46,7 +70,7 @@ export async function searchGoogleRestaurants(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Goog-Api-Key': apiKey(),
+      'X-Goog-Api-Key': apiKey('autocomplete'),
       'X-Goog-FieldMask': [
         'suggestions.placePrediction.place',
         'suggestions.placePrediction.placeId',
@@ -68,7 +92,11 @@ export async function searchGoogleRestaurants(
     signal,
   });
   if (!response.ok) {
-    throw new GooglePlacesError('request_failed', `Google Places autocomplete returned ${response.status}`);
+    throw new GooglePlacesError('request_failed', `Google Places autocomplete returned ${response.status}`, {
+      operation: 'autocomplete',
+      status: response.status,
+      userMessage: 'Restaurant name search is temporarily unavailable. Paste a website link or try again.',
+    });
   }
   const payload = await response.json() as { suggestions?: Array<{ placePrediction?: GooglePrediction }> };
   return (payload.suggestions ?? [])
@@ -100,13 +128,25 @@ export async function resolveGoogleRestaurant(
   const params = new URLSearchParams({ sessionToken });
   const response = await fetch(`${DETAILS_URL}/${encodeURIComponent(placeId)}?${params}`, {
     headers: {
-      'X-Goog-Api-Key': apiKey(),
+      'X-Goog-Api-Key': apiKey('details'),
       'X-Goog-FieldMask': 'websiteUri,googleMapsUri,businessStatus',
     },
     signal,
   });
-  if (response.status === 404) throw new GooglePlacesError('not_found', 'That restaurant is no longer available. Try another result.');
-  if (!response.ok) throw new GooglePlacesError('request_failed', `Google Place Details returned ${response.status}`);
+  if (response.status === 404) {
+    throw new GooglePlacesError('not_found', 'Google Place Details returned 404', {
+      operation: 'details',
+      status: 404,
+      userMessage: 'That restaurant is no longer available. Try another result.',
+    });
+  }
+  if (!response.ok) {
+    throw new GooglePlacesError('request_failed', `Google Place Details returned ${response.status}`, {
+      operation: 'details',
+      status: response.status,
+      userMessage: 'Restaurant lookup is temporarily unavailable. Paste its website link or try again.',
+    });
+  }
   const payload = await response.json() as {
     websiteUri?: string;
     googleMapsUri?: string;

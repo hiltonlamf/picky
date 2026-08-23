@@ -55,3 +55,24 @@ export async function captureServer(
     // swallow — see above
   }
 }
+
+/**
+ * Send a server exception to PostHog Error Tracking after analytics consent.
+ * `captureExceptionImmediate` attaches the stack metadata PostHog needs and
+ * waits for delivery, which is important in a serverless route.
+ */
+export async function captureServerException(
+  request: CookieReader,
+  distinctId: string,
+  error: unknown,
+  properties?: Record<string, unknown>
+): Promise<void> {
+  if (!hasServerAnalyticsConsent(request)) return;
+  const ph = client();
+  if (!ph) return;
+  try {
+    await ph.captureExceptionImmediate(error, distinctId, properties);
+  } catch {
+    // Error tracking must never break the request it is observing.
+  }
+}

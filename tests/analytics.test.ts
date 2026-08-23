@@ -355,6 +355,10 @@ describe('classifyError', () => {
     ['We couldn’t read a menu from that. Please try another link or file.', 'no_menu_readable'],
     ['Rate limit exceeded', 'rate_limited'],
     ['Failed to fetch', 'network'],
+    ['Restaurant name search is temporarily unavailable. Paste a website link instead.', 'provider_unavailable'],
+    ['Restaurant lookup is temporarily unavailable. Paste its website link or try again.', 'provider_unavailable'],
+    ['Google lists this restaurant as permanently closed. Try another result.', 'not_found'],
+    ["We couldn't find an official website for that restaurant. Paste a website or menu link instead.", 'not_found'],
     ['Something went wrong. Please try again.', 'unknown'],
     // These three came back 'unknown' on the first real production run, which
     // would have made the health dashboard's failure breakdown useless. Taken
@@ -400,6 +404,8 @@ describe('captureError', () => {
     // A bad URL or a rate limit is the system working as designed.
     captureError({ surface: 'search', message: 'Invalid URL' });
     captureError({ surface: 'search', message: 'Rate limit exceeded' });
+    captureError({ surface: 'search', message: 'Restaurant lookup is temporarily unavailable. Paste its website link or try again.' });
+    captureError({ surface: 'search', message: 'Google lists this restaurant as permanently closed. Try another result.' });
     expect(sentry.captureException).not.toHaveBeenCalled();
   });
 

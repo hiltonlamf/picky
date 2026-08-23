@@ -31,6 +31,7 @@ import {
 } from '@/lib/rate-limit';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import { GooglePlacesError, resolveGoogleRestaurant } from '@/lib/google-places';
+import { captureGooglePlacesFailure, trackGooglePlacesIssue } from '@/lib/google-places-observability';
 import type { ParseEvent } from '@/types';
 
 // Vercel Hobby caps functions at 60s. This route only scrapes + discovers
@@ -186,6 +187,12 @@ export async function POST(request: NextRequest) {
           } else {
             const lookupBudget = await checkPlaceLookupRateLimit(ip, 'details');
             if (!lookupBudget.allowed) {
+              await trackGooglePlacesIssue({
+                request,
+                distinctId,
+                operation: 'details',
+                reason: 'rate_limited',
+              });
               send({ type: 'error', error: 'Too many restaurant lookups right now. Paste the website link or try again later.' });
               return close();
             }
@@ -197,17 +204,35 @@ export async function POST(request: NextRequest) {
                 request.signal
               );
               if (place.businessStatus === 'CLOSED_PERMANENTLY') {
+                await trackGooglePlacesIssue({
+                  request,
+                  distinctId,
+                  operation: 'details',
+                  reason: 'closed_permanently',
+                });
                 send({ type: 'error', error: 'Google lists this restaurant as permanently closed. Try another result.' });
                 return close();
               }
               url = place.websiteUrl ?? place.googleMapsUrl ?? '';
               if (!url) {
+                await trackGooglePlacesIssue({
+                  request,
+                  distinctId,
+                  operation: 'details',
+                  reason: 'missing_website',
+                });
                 send({ type: 'error', error: "We couldn't find an official website for that restaurant. Paste a website or menu link instead." });
                 return close();
               }
             } catch (error) {
+              await captureGooglePlacesFailure({
+                request,
+                distinctId,
+                error,
+                operation: 'details',
+              });
               const message = error instanceof GooglePlacesError
-                ? error.message
+                ? error.userMessage
                 : 'We could not look up that restaurant. Paste its website link or try again.';
               send({ type: 'error', error: message });
               return close();
