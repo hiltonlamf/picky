@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import GuideCtaLink from '@/components/GuideCtaLink';
+import GuideRestaurantCarousel from '@/components/GuideRestaurantCarousel';
 import HeroCta from '@/components/HeroCta';
-import RestaurantCard from '@/components/RestaurantCard';
 import SiteFeedbackButton from '@/components/SiteFeedbackButton';
 import VoteCityLink from '@/components/VoteCityLink';
 import { getFeaturedRestaurants } from '@/lib/db';
@@ -37,7 +37,7 @@ export default async function HomePage() {
     // omitted and the rest of the page still renders.
   }
   const visible = featured.filter(isPubliclyVisible);
-  const preview = visible.slice(0, 3);
+  const preview = visible.slice(0, 12);
 
   return (
     <div className="flex flex-col bg-forest">
@@ -89,11 +89,7 @@ export default async function HomePage() {
           </div>
 
           {preview.length > 0 && (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-8">
-              {preview.map((r) => (
-                <RestaurantCard key={r.id} restaurant={r} />
-              ))}
-            </div>
+            <GuideRestaurantCarousel restaurants={preview} />
           )}
         </div>
       </section>

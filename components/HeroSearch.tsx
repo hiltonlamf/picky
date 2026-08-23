@@ -512,7 +512,7 @@ export default function HeroSearch({
   if (state === 'parsing' || state === 'error') {
     return (
       <div className="flex flex-col items-start gap-5 mt-7 w-full">
-        <ParseProgress log={log} startedAt={startedAt} error={state === 'error' ? error : null} />
+        <ParseProgress log={log} error={state === 'error' ? error : null} />
         {state === 'error' && (
           <button
             onClick={reset}

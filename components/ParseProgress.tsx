@@ -5,7 +5,6 @@ import { AlertIcon } from './icons';
 
 interface Props {
   log: string[];
-  startedAt: number | null;
   error: string | null;
 }
 
@@ -55,17 +54,6 @@ function phaseOf(step: string): number {
   return 0;
 }
 
-function useElapsed(startedAt: number | null): string {
-  const [now, setNow] = useState(() => startedAt ?? Date.now());
-  useEffect(() => {
-    if (!startedAt) return;
-    const id = setInterval(() => setNow(Date.now()), 100);
-    return () => clearInterval(id);
-  }, [startedAt]);
-  if (!startedAt) return '0.0s';
-  return `${((now - startedAt) / 1000).toFixed(1)}s`;
-}
-
 /** Rotating ingredient word. Frozen for anyone who asked for reduced motion. */
 function useTickerWord(active: boolean): string {
   const [index, setIndex] = useState(0);
@@ -78,8 +66,7 @@ function useTickerWord(active: boolean): string {
   return TICKER_WORDS[index];
 }
 
-export default function ParseProgress({ log, startedAt, error }: Props) {
-  const elapsed = useElapsed(startedAt);
+export default function ParseProgress({ log, error }: Props) {
   const feedRef = useRef<HTMLDivElement>(null);
   const lastStep = log[log.length - 1] ?? '';
   const activePhase = phaseOf(lastStep);
@@ -91,16 +78,18 @@ export default function ParseProgress({ log, startedAt, error }: Props) {
 
   return (
     <div className="glass w-full max-w-[480px] rounded-3xl p-6 text-paper">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="font-display text-lg">Reading the whole menu</p>
-        <span className="font-mono text-xs text-white bg-azalea-500/85 rounded-lg px-2.5 py-1 tabular-nums">
-          {elapsed}
-        </span>
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-2 h-2.5 w-2.5 flex-shrink-0 rounded-full bg-azalea-400 shadow-[0_0_14px_rgba(255,95,174,0.85)] animate-blink"
+          aria-hidden="true"
+        />
+        <div>
+          <p className="font-display text-lg">We&rsquo;re tofu-analysing it now</p>
+          <p className="text-[0.8rem] text-paper/70 mt-1 leading-relaxed">
+            Most menus are ready in under a minute. The extra-crunchy ones can take a little longer.
+          </p>
+        </div>
       </div>
-      <p className="text-[0.8rem] text-paper/70 mt-2 leading-relaxed">
-        Usually under a minute. This is the real thing working — narrated live below, not a fake
-        progress bar.
-      </p>
 
       {error ? (
         <div role="alert" className="rounded-xl bg-sun-50 p-4 mt-4">
