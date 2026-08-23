@@ -241,14 +241,31 @@ export function thinMenus(
     .map(([label, count]) => ({ label, count }));
 }
 
+/**
+ * Flags that describe a menu we probably read WRONG, and so must keep a
+ * restaurant off the public guide until a human looks.
+ *
+ * duplicate_menu is deliberately absent. Overlapping menus are normal, not a
+ * defect: rasam.ie's Early Bird is a reduced selection of its a la carte (tikki,
+ * chatpata pork, curry leaf prawns, mangalorean chicken curry, old delhi butter
+ * chicken, paneer aur aloo ke kofte and mango prawn appear on both, priced per
+ * dish on one and as 2 courses for EUR 32.50 on the other), and its Dine at Home
+ * menu is the same food to take away. Founder, 2026-08-23: "it is very possible
+ * that a lunch menu is just a reduced version of a dinner menu. That's something
+ * to flag but not delete." Gating on it withheld six correctly-parsed
+ * restaurants, which is a bigger harm than the duplicate it was guarding
+ * against. It still raises a flag for the admin queue.
+ */
+const GATING_FLAGS: ReviewFlagCode[] = ['few_dishes', 'menu_as_dish', 'thin_menu'];
+
 /** Whether a restaurant may appear on the PUBLIC guide right now.
- *  Must be a completed analysis with enough dishes, and either clean of review
- *  flags OR explicitly approved by an admin (guideApprovedAt). */
+ *  Must be a completed analysis with enough dishes, and either clean of GATING
+ *  review flags OR explicitly approved by an admin (guideApprovedAt). */
 export function isPubliclyVisible(
   restaurant: Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>
 ): boolean {
   if (restaurant.status !== 'done') return false;
   if (countDishes(restaurant) < MIN_GUIDE_DISHES) return false;
   if (restaurant.guideApprovedAt) return true;
-  return computeReviewFlags(restaurant).length === 0;
+  return !computeReviewFlags(restaurant).some((f) => GATING_FLAGS.includes(f.code));
 }

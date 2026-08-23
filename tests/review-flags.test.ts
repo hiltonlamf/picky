@@ -188,14 +188,30 @@ describe('duplicate menus are flagged, never deleted', () => {
     expect(flag?.label).toContain('Menu 2');
   });
 
-  it('withholds the restaurant for review rather than deleting a menu', () => {
+  /**
+   * Overlapping menus are normal, so this flag informs the admin queue without
+   * pulling the restaurant off the guide. rasam.ie's Early Bird is a reduced
+   * selection of its a la carte and its Dine at Home is the same food to take
+   * away; gating on the overlap withheld six correctly-parsed restaurants,
+   * which is a bigger harm than the duplicate it guarded against.
+   */
+  it('flags but does NOT withhold — and never removes a menu', () => {
     const r = menus([
       { label: 'A La Carte', dishes: base },
       { label: 'Menu 2', dishes: base },
     ]);
-    expect(isPubliclyVisible(r)).toBe(false);
+    expect(computeReviewFlags(r).some((f) => f.code === 'duplicate_menu')).toBe(true);
+    expect(isPubliclyVisible(r)).toBe(true);
     // Both menus are still there — nothing was removed.
     expect(r.sections).toHaveLength(2);
+  });
+
+  it('still withholds for a flag that means we read the menu WRONG', () => {
+    const r = menus([
+      { label: 'A La Carte', dishes: base },
+      { label: 'Burgers', dishes: ['The Best Burger in Dublin'] },
+    ]);
+    expect(isPubliclyVisible(r)).toBe(false);
   });
 
   /**
