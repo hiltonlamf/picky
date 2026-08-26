@@ -7,6 +7,17 @@ import type { ReaderResult } from '@/lib/reader';
 // legitimate cert chain real browsers and curl already trust). The reader
 // does its own separate server-side fetch, so it isn't blocked by the same
 // local trust-store gap — this is what lets that class of site still resolve.
+// The SSRF guard (lib/url-guard) resolves DNS before every outbound fetch.
+// That is real network I/O, which vi.useFakeTimers() cannot coordinate with —
+// runAllTimersAsync() returns before the lookup settles, so the retry backoff
+// never advances and the test times out. Resolve to a public address instead:
+// these tests are about the reader fallback, not about the guard, which has
+// its own coverage in tests/url-guard.test.ts. A plain function (not vi.fn)
+// so beforeEach's resetAllMocks cannot strip the implementation.
+vi.mock('node:dns/promises', () => ({
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+}));
+
 vi.mock('@/lib/reader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/reader')>();
   return { ...actual, readPage: vi.fn() };

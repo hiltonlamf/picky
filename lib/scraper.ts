@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { safeFetch, assertPublicUrl, BlockedUrlError } from './url-guard';
 import { readPage } from './reader';
 import { callClaude } from './ai';
 import {
@@ -656,11 +657,25 @@ async function fetchWithRetry(
     ...extraHeaders,
   };
 
+  // Validated once, outside the loop: the host cannot change between attempts,
+  // and re-resolving it per retry only added latency.
+  await assertPublicUrl(url);
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+      // safeFetch, not fetch: `url` originates from an anonymous visitor, so
+      // every redirect hop is re-checked against private/loopback/link-local
+      // ranges too.
+      const res = await safeFetch(
+        url,
+        { headers, signal: AbortSignal.timeout(15000) },
+        { alreadyValidated: true }
+      );
       return res;
     } catch (err) {
+      // A blocked address is a verdict, not a transient failure — retrying
+      // cannot change it, and each retry is another outbound request.
+      if (err instanceof BlockedUrlError) throw err;
       if (attempt === retries) throw err;
       await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
     }
@@ -839,11 +854,12 @@ async function resolveViaClaudeLLM(name: string, city: string | null): Promise<s
     if (!text.startsWith('http')) return null;
 
     // Verify the URL actually resolves before using it
-    const probe = await fetch(text, {
+    // The model's output is untrusted input too — a prompt-injected page could
+    // steer it at an internal address.
+    const probe = await safeFetch(text, {
       method: 'HEAD',
       headers: { 'User-Agent': BROWSER_UA },
       signal: AbortSignal.timeout(6000),
-      redirect: 'follow',
     });
     if (probe.ok || (probe.status >= 200 && probe.status < 500)) {
       console.log(`[llm] resolved "${name}" → ${text}`);
