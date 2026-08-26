@@ -80,7 +80,7 @@ export default function GuideRestaurantCarousel({ restaurants }: { restaurants: 
               key={restaurant.id}
               className="flex h-auto shrink-0 basis-[86%] snap-start sm:basis-[56%] lg:basis-[42%] [&>*]:w-full"
             >
-              <RestaurantCard restaurant={restaurant} />
+              <RestaurantCard restaurant={restaurant} city="dublin" />
             </li>
           ))}
         </ul>

@@ -41,6 +41,12 @@ import { areAddressesEquivalent, cleanPublishedAddress, pointInGeoJson, type Loc
 import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 import { rankPickyCandidates } from './restaurant-search-utils';
+import {
+  assignRestaurantSlugs,
+  restaurantPath,
+  restaurantSlug,
+  restaurantSlugFromUrl,
+} from './restaurant-url';
 
 let _client: ReturnType<typeof createClient> | null = null;
 
@@ -488,6 +494,7 @@ export async function fetchRestaurantWithDishes(
 
   return {
     id: r.id,
+    slug: r.slug ?? null,
     url: r.url,
     canonicalUrl: r.canonical_url,
     name: r.name,
@@ -730,6 +737,179 @@ export async function createRestaurantRecord(url: string, city = 'unassigned'): 
   return (data as { id: string }).id;
 }
 
+type RestaurantRouteRow = {
+  id: string;
+  name: string | null;
+  city: string;
+  slug: string | null;
+  created_at: string;
+  featuredInPublicCity?: boolean;
+};
+
+/**
+ * Assign a permanent slug after the AI has supplied the restaurant name.
+ * A unique city+slug index arbitrates concurrent inserts; a collision simply
+ * advances to -2, -3, etc. Existing slugs are never rewritten by a rename,
+ * because shared/bookmarked URLs should remain stable.
+ */
+async function ensureRestaurantSlug(restaurantId: string, preferredName?: string | null): Promise<void> {
+  const current = await db()
+    .from('restaurants')
+    .select('id, city, slug, name, url')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  // Missing-column errors are expected only during a rolling migration.
+  if (current.error || !current.data || current.data.slug) return;
+
+  const storedName = (current.data.name as string | null)?.trim();
+  const base = preferredName || storedName
+    ? restaurantSlug(preferredName || storedName)
+    : restaurantSlugFromUrl(current.data.url as string);
+  for (let duplicate = 1; duplicate <= 1000; duplicate += 1) {
+    const slug = duplicate === 1 ? base : `${base}-${duplicate}`;
+    const result = await db()
+      .from('restaurants')
+      .update({ slug })
+      .eq('id', restaurantId)
+      .is('slug', null)
+      .select('id')
+      .maybeSingle();
+    if (!result.error) return;
+    if (result.error.code !== '23505') return;
+  }
+}
+
+/** Resolve the canonical readable path for an old UUID link. */
+export async function getRestaurantPublicPath(restaurantId: string): Promise<string | null> {
+  const result = await db()
+    .from('restaurants')
+    .select('id, name, city, slug')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  if (result.error || !result.data?.slug) return null;
+
+  let publicCity = result.data.city as string;
+  if (publicCity === 'unassigned') {
+    const membership = await db()
+      .from('featured_restaurants')
+      .select('city')
+      .eq('restaurant_id', restaurantId)
+      .order('created_at')
+      .limit(1);
+    publicCity = (membership.data?.[0]?.city as string | undefined) ?? publicCity;
+  }
+  return restaurantPath({
+    id: result.data.id as string,
+    name: result.data.name as string | null,
+    city: result.data.city as string,
+    slug: result.data.slug as string,
+  }, publicCity);
+}
+
+async function routeCandidates(city: string): Promise<RestaurantRouteRow[]> {
+  let direct = await db()
+    .from('restaurants')
+    .select('id, name, city, slug, created_at')
+    .eq('city', city);
+  // Code and migration deploy separately. Until `slug` exists, derive the
+  // exact same paths from names + creation order rather than returning 404s.
+  if (direct.error) {
+    const legacy = await db()
+      .from('restaurants')
+      .select('id, name, city, created_at')
+      .eq('city', city);
+    direct = {
+      ...legacy,
+      data: (legacy.data ?? []).map((row: DbRow) => ({ ...row, slug: null })),
+    };
+  }
+  if (direct.error) return [];
+
+  const membership = await db()
+    .from('featured_restaurants')
+    .select('restaurant_id, hidden')
+    .eq('city', city);
+  const featuredIds = new Set(
+    ((membership.data ?? []) as Array<{ restaurant_id: string; hidden?: boolean }>)
+      .filter((row) => !row.hidden)
+      .map((row) => row.restaurant_id)
+  );
+  const directRows = ((direct.data ?? []) as RestaurantRouteRow[]).map((row) => ({
+    ...row,
+    featuredInPublicCity: featuredIds.has(row.id),
+  }));
+  const directIds = new Set(directRows.map((row) => row.id));
+  const extraIds = Array.from(featuredIds)
+    .filter((id) => !directIds.has(id));
+  if (!extraIds.length) return directRows;
+
+  let extra = await db()
+    .from('restaurants')
+    .select('id, name, city, slug, created_at')
+    .in('id', extraIds);
+  if (extra.error) {
+    const legacy = await db()
+      .from('restaurants')
+      .select('id, name, city, created_at')
+      .in('id', extraIds);
+    extra = {
+      ...legacy,
+      data: (legacy.data ?? []).map((row: DbRow) => ({ ...row, slug: null })),
+    };
+  }
+  return [
+    ...directRows,
+    ...((extra.data ?? []) as RestaurantRouteRow[]).map((row) => ({
+      ...row,
+      featuredInPublicCity: true,
+    })),
+  ];
+}
+
+/** Resolve /restaurant/<city>/<slug> without exposing raw database IDs. */
+export async function getRestaurantByPublicPath(
+  city: string,
+  slug: string
+): Promise<{ id: string; path: string } | null> {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(city) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    return null;
+  }
+
+  // Normal deployed path: one indexed lookup. The broader candidate walk
+  // below exists only for rolling-migration fallback and the rare case where
+  // a guide's public city differs from the restaurant's legacy city field.
+  const direct = await db()
+    .from('restaurants')
+    .select('id, name, city, slug')
+    .eq('city', city)
+    .eq('slug', slug)
+    .maybeSingle();
+  if (!direct.error && direct.data) {
+    return {
+      id: direct.data.id as string,
+      path: restaurantPath({
+        id: direct.data.id as string,
+        name: direct.data.name as string | null,
+        city: direct.data.city as string,
+        slug: direct.data.slug as string,
+      }, city),
+    };
+  }
+
+  const rows = await routeCandidates(city);
+  const fallbackSlugs = assignRestaurantSlugs(rows.map((row) => ({
+    ...row,
+    createdAt: row.created_at,
+    featuredInPublicCity: row.featuredInPublicCity,
+  })));
+  const match = rows.find((row) => (row.slug ?? fallbackSlugs.get(row.id)) === slug);
+  if (!match) return null;
+  return {
+    id: match.id,
+    path: restaurantPath({ ...match, slug: match.slug ?? fallbackSlugs.get(match.id) }, city),
+  };
+}
+
 /**
  * Record API spend in the append-only ai_usage_log — called on successful
  * saves AND on failed analyses (failed retry ladders are the most expensive
@@ -858,6 +1038,11 @@ export async function saveClassifiedMenu(
       }),
     })
     .eq('id', restaurantId);
+
+  // URL assignment is deliberately separate from the menu save. During a
+  // rolling deploy the code can arrive just before the slug migration; menu
+  // analysis must still succeed, and the legacy UUID route remains available.
+  if (menu.restaurantName) await ensureRestaurantSlug(restaurantId, menu.restaurantName);
 
   // Append-only spend log — survives restaurant wipes (no FK by design).
   // (spend already recorded by callClaude when the API call returned)
@@ -1169,6 +1354,9 @@ export async function markRestaurantError(restaurantId: string, message: string)
     .from('restaurants')
     .update({ status: 'error', error_message: message })
     .eq('id', restaurantId);
+  // Even a failed analysis has a public result page. If no name was recovered,
+  // use the site domain so future links are still readable rather than UUIDs.
+  await ensureRestaurantSlug(restaurantId);
 }
 
 /**
@@ -1194,6 +1382,7 @@ export async function markRestaurantNoMenu(
       last_scraped_at: new Date().toISOString(),
     })
     .eq('id', restaurantId);
+  await ensureRestaurantSlug(restaurantId);
 }
 
 /**

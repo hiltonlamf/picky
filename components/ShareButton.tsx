@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { capture } from '@/lib/posthog-client';
 import type { Restaurant } from '@/types';
 import { splitVegDishes } from '@/lib/menu-insights';
+import { restaurantPath } from '@/lib/restaurant-url';
 import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
 type ShareChannel = 'native' | 'whatsapp' | 'copy';
@@ -109,7 +110,7 @@ export default function ShareButton({
   const pageUrl =
     typeof window !== 'undefined'
       ? window.location.origin + window.location.pathname
-      : `https://platefully.vercel.app/restaurant/${restaurant.id}`;
+      : `https://platefully.vercel.app${restaurantPath(restaurant)}`;
 
   async function handleNativeShare() {
     capture('share_clicked', { channel: 'native', restaurant_id: restaurant.id });

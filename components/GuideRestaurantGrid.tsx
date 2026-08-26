@@ -98,6 +98,7 @@ function MultiSelectDropdown({
 
 export default function GuideRestaurantGrid({ restaurants }: { restaurants: Restaurant[] }) {
   const pathname = usePathname();
+  const city = pathname.split('/')[1] || undefined;
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedAreas = selectedValues(searchParams, 'area');
@@ -165,7 +166,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
       )}
       {filtered.length > 0 ? (
         <div className="grid sm:grid-cols-2 gap-4">
-          {filtered.map((r) => <RestaurantCard key={r.id} restaurant={r} />)}
+          {filtered.map((r) => <RestaurantCard key={r.id} restaurant={r} city={city} />)}
         </div>
       ) : <div className="card p-6 text-center text-evergreen/70">No restaurants match those filters.</div>}
     </section>

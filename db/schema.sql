@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS restaurants (
   url               TEXT NOT NULL,
   canonical_url     TEXT,
   name              TEXT,
+  slug              TEXT CHECK (slug IS NULL OR slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
   city              TEXT NOT NULL DEFAULT 'dublin',
   status            TEXT NOT NULL DEFAULT 'pending'
                       CHECK (status IN ('pending', 'processing', 'done', 'error', 'no_menu')),
@@ -22,6 +23,10 @@ CREATE TABLE IF NOT EXISTS restaurants (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS restaurants_city_slug_unique
+  ON restaurants (lower(city), slug)
+  WHERE slug IS NOT NULL;
 
 -- Restaurant location data is collected only from the restaurant's own site.
 -- Neighbourhood geometries are imported from OpenStreetMap-derived GeoJSON;
