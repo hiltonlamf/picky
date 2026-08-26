@@ -146,7 +146,7 @@ export default function RestaurantPage() {
         // page opened on Sunday Menu while the card talked about the Main one.
         if (data.name) {
           setRestaurantName(data.name);
-          document.title = `${data.name} | Picky`;
+          document.title = `${data.name} | Platefully`;
         }
         setLoading(false);
 

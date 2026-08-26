@@ -22,7 +22,7 @@ export default function ReviewerGuide() {
   return (
     <div>
       <p className="text-sm text-evergreen/80 mb-6">
-        This is the human quality-control loop behind Picky. The AI reads menus and classifies dishes automatically;
+        This is the human quality-control loop behind Platefully. The AI reads menus and classifies dishes automatically;
         your job is to spot-check it, fix what&rsquo;s wrong, and — every time you do — quietly grow a human-verified
         golden set we use to measure whether the app is getting better. You will <strong>not</strong> review every
         restaurant. You&rsquo;ll clear real user complaints, then <em>sample</em>.

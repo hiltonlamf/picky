@@ -3,18 +3,18 @@
  * the footer). Homepage prose lives in `lib/home-copy.ts` instead.
  */
 
-/** The standard one-line description of Picky. Founder-approved wording — use
+/** The standard one-line description of Platefully. Founder-approved wording — use
  *  it verbatim for meta descriptions, OG/Twitter cards and share text. */
 export const SITE_TAGLINE =
-  'Picky — find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified.';
+  'Platefully — find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified.';
 
-/** The tagline without the "Picky — " prefix, for places that already show the
- *  site name (e.g. an OG card whose title is "Picky"). */
+/** The tagline without the "Platefully — " prefix, for places that already show the
+ *  site name (e.g. an OG card whose title is "Platefully"). */
 export const SITE_DESCRIPTION =
   'Find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified.';
 
 /** Title used for the browser tab and as the OG/Twitter card title. */
-export const SITE_TITLE = 'Picky — find veggie dishes in any restaurant';
+export const SITE_TITLE = 'Platefully — find veggie dishes in any restaurant';
 
 // ---------------------------------------------------------------- city guides
 

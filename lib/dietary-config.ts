@@ -118,7 +118,7 @@ export const FEEDBACK_RESOLUTION: Record<string, FeedbackResolveAction> = {
 // Site-level feedback — the footer / homepage button, not tied to any
 // restaurant or city. Shares the /api/feedback route (restaurantId is null).
 export const SITE_FEEDBACK_TYPES = [
-  { value: 'idea', label: 'I have an idea for Picky' },
+  { value: 'idea', label: 'I have an idea for Platefully' },
   { value: 'restaurant_request', label: 'Add a restaurant or a city' },
   { value: 'something_wrong', label: 'Something looks wrong' },
   { value: 'other', label: 'Something else' },

@@ -32,9 +32,9 @@ export default function CookieConsent() {
       aria-label="Cookie consent"
     >
       <p className="text-sm text-evergreen/80 mb-3">
-        Picky counts anonymous visits using a random ID set when you arrive — never linked to your
+        Platefully counts anonymous visits using a random ID set when you arrive — never linked to your
         identity, never used for advertising. Say yes and we&apos;ll also remember your preferences
-        and measure which features actually get used, so we can make Picky better.
+        and measure which features actually get used, so we can make Platefully better.
       </p>
       {/* Equal-sized buttons on purpose: making "no" harder to click than
           "yes" is a dark pattern, and a compliance risk under GDPR. */}

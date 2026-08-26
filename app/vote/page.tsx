@@ -3,7 +3,7 @@ import CityVoteForm from '@/components/CityVoteForm';
 
 export const metadata: Metadata = {
   title: 'Vote for the next city guide',
-  description: 'Pick the city Picky should tofu-analyse next.',
+  description: 'Pick the city Platefully should tofu-analyse next.',
   alternates: { canonical: '/vote' },
 };
 
@@ -21,7 +21,7 @@ export default function VotePage() {
         <div className="band-inner">
           <span className="eyebrow-light">The next guide is up for grabs</span>
           <h1 className="font-display text-[clamp(2.55rem,6vw,4.8rem)] leading-[0.98] tracking-[-0.035em] mt-4 max-w-[15ch] text-balance">
-            Put your city on <span className="text-azalea-400">Picky&rsquo;s map.</span>
+            Put your city on <span className="text-azalea-400">Platefully&rsquo;s map.</span>
           </h1>
           <p className="mt-6 max-w-[55ch] text-[1.08rem] md:text-xl leading-relaxed text-paper/85">
             Where should we read every menu next? Tap your city, add your email, and help bring a
