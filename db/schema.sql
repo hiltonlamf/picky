@@ -501,3 +501,33 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 
 -- service_role keeps its grants and BYPASSRLS — that is what the app,
 -- the admin pages and everything in scripts/ authenticate as.
+
+-- Server-side spend aggregate (see migration 20260826140000_ai_spend_since).
+-- PostgREST caps selects at 1000 rows, so summing cost_usd client-side silently
+-- under-reports; this also backs the daily spend guard on the request path.
+CREATE OR REPLACE FUNCTION ai_spend_since(since TIMESTAMPTZ)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(SUM(cost_usd), 0)::NUMERIC
+  FROM ai_usage_log
+  WHERE created_at >= since;
+$$;
+
+REVOKE ALL ON FUNCTION ai_spend_since(TIMESTAMPTZ) FROM PUBLIC, anon, authenticated;
+
+-- Per-IP budget for the public write endpoints (feedback, NPS, dish reports).
+-- See migration 20260826150000_write_rate_limit_events.
+CREATE TABLE IF NOT EXISTS write_rate_limit_events (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  ip_hash    TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS write_rate_limit_events_ip_kind_time_idx
+  ON write_rate_limit_events(ip_hash, kind, created_at DESC);
+
+ALTER TABLE write_rate_limit_events ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE write_rate_limit_events FROM PUBLIC, anon, authenticated;

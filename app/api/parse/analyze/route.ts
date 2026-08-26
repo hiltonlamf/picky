@@ -7,6 +7,7 @@ import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
+import { checkDailySpend, AT_CAPACITY_MESSAGE } from '@/lib/spend-guard';
 import type { AnalysisState, ParseEvent } from '@/types';
 import { verifyVegClassifications, VERIFY_VEG_ENABLED, type AIUsage } from '@/lib/ai';
 import { withDeadline } from '@/lib/deadline';
@@ -136,6 +137,20 @@ export async function POST(request: NextRequest) {
         // flow, while still refusing to proceed if the budget is already spent.
         let state: AnalysisState;
         if (candidateIds?.length) {
+          // Global daily ceiling. Checked here as well as in /discover because
+          // this route is entered directly when the user picks menus from the
+          // candidate screen, which is where the expensive extraction starts.
+          const spend = await checkDailySpend();
+          if (!spend.allowed) {
+            await captureServer(request, distinctId, 'spend_cap_hit', {
+              stage: 'analyze',
+              spent_usd: spend.spentUsd,
+              cap_usd: spend.capUsd,
+            });
+            send({ type: 'error', error: AT_CAPACITY_MESSAGE });
+            return close();
+          }
+
           const { allowed } = await checkRateLimit(ip, { consume: false });
           if (!allowed) {
             send({ type: 'error', error: `You've reached the limit of ${MAX_SEARCHES_PER_HOUR} new-restaurant searches per hour. Please try again later.` });

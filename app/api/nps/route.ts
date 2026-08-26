@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { saveNpsResponse } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
-import { hashIp, getClientIp } from '@/lib/rate-limit';
+import { hashIp, getClientIp, checkWriteRateLimit } from '@/lib/rate-limit';
 
 const schema = z.object({
   score: z.number().int().min(0).max(10),
@@ -21,6 +21,15 @@ export async function POST(request: NextRequest) {
 
     const { score, notes } = parsed.data;
     const anonId = request.cookies.get(ANON_ID_COOKIE)?.value ?? null;
+
+    // Unauthenticated insert: throttle so the NPS scores can't be stuffed.
+    const { allowed } = await checkWriteRateLimit(getClientIp(request), 'nps');
+    if (!allowed) {
+      return NextResponse.json(
+        { error: 'Thanks — you have sent us a lot just now. Please try again a bit later.' },
+        { status: 429 }
+      );
+    }
 
     await saveNpsResponse(anonId, score, notes);
     // Mirrors the nps_responses insert so PostHog and the DB agree.

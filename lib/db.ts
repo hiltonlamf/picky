@@ -911,6 +911,21 @@ export async function getRestaurantByPublicPath(
 }
 
 /**
+ * Total AI spend (USD) since `since`, summed in Postgres.
+ *
+ * Uses the `ai_spend_since` DB function rather than selecting cost_usd and
+ * summing here: PostgREST silently truncates at 1000 rows, which at ~11 calls
+ * per restaurant means any day busier than ~90 restaurants would under-report
+ * with no error. Throws on failure — callers decide the policy (the spend
+ * guard fails closed; the admin dashboard tolerates it).
+ */
+export async function aiSpendSince(since: Date): Promise<number> {
+  const { data, error } = await db().rpc('ai_spend_since', { since: since.toISOString() });
+  if (error) throw new Error(`ai_spend_since failed: ${error.message}`);
+  return Number(data) || 0;
+}
+
+/**
  * Record API spend in the append-only ai_usage_log — called on successful
  * saves AND on failed analyses (failed retry ladders are the most expensive
  * path, so skipping them made spend reports undercount badly).
@@ -1976,8 +1991,10 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const { data: spendRows } = await db().from('ai_usage_log').select('cost_usd').gte('created_at', todayStart.toISOString());
-  const todaySpendUsd = ((spendRows ?? []) as DbRow[]).reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+  // Was `select('cost_usd')` + sum here, which PostgREST truncates at 1000 rows
+  // — understating the number on exactly the busy days it matters. Tolerate a
+  // failure with null rather than breaking the whole dashboard.
+  const todaySpendUsd = await aiSpendSince(todayStart).catch(() => 0);
 
   const { count: totalCount } = await db().from('restaurants').select('*', { count: 'exact', head: true });
   const { count: errorCount } = await db().from('restaurants').select('*', { count: 'exact', head: true }).eq('status', 'error');
