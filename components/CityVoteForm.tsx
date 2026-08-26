@@ -306,7 +306,7 @@ export default function CityVoteForm() {
                   Nice pick. Make it official?
                 </h2>
                 <p className="mt-3 text-forest/70 leading-relaxed">
-                  Add your email to count your vote and hear if {selection.city} gets the Picky treatment.
+                  Add your email to count your vote and hear if {selection.city} gets the Platefully treatment.
                 </p>
 
                 <form onSubmit={submitVote} className="mt-6">

@@ -47,7 +47,7 @@ export const STORY = {
   ],
   pullQuote: 'One half-hearted vegetarian dish: Mushroom risotto. Pasta arrabbiata. €25, please.',
   paragraphsAfter: [
-    'They were so sick of it. So I built Picky — an app to find the best veggie-friendly places in town for vegetarians, and their friends and family.',
+    'They were so sick of it. So I built Platefully — an app to find the best veggie-friendly places in town for vegetarians, and their friends and family.',
   ],
   bylineName: 'Hilton',
   bylineRole: 'Loving boyfriend of a vegetarian in Dublin',
@@ -55,7 +55,7 @@ export const STORY = {
 
 export const PILLARS = {
   eyebrow: 'Behind the results',
-  headline: 'How does Picky work?',
+  headline: 'How does Platefully work?',
   cards: [
     {
       tag: 'AI',
@@ -81,12 +81,12 @@ export const PILLARS = {
 } as const;
 
 export const FEEDBACK_CTA = {
-  eyebrow: 'Help shape Picky',
+  eyebrow: 'Help shape Platefully',
   headline: 'Got an idea—or something we got wrong?',
-  body: 'Choose where Picky goes next, or tell us what needs fixing.',
+  body: 'Choose where Platefully goes next, or tell us what needs fixing.',
   city: {
     eyebrow: 'Next stop',
-    title: 'Put your city on Picky’s map.',
+    title: 'Put your city on Platefully’s map.',
     button: 'Vote for a city →',
   },
   general: {

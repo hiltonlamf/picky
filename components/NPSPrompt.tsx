@@ -7,7 +7,7 @@ import { captureError } from '@/lib/analytics';
 import { CloseIcon } from './icons';
 
 // Day 7+, not day 1: the score only means something once someone has had
-// a real chance to use (or abandon) Picky.
+// a real chance to use (or abandon) Platefully.
 const NPS_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default function NPSPrompt() {
@@ -73,7 +73,7 @@ export default function NPSPrompt() {
         <>
           <div className="flex items-start justify-between gap-2 mb-3">
             <p className="text-sm text-evergreen/80">
-              How likely are you to recommend Picky to a friend?
+              How likely are you to recommend Platefully to a friend?
             </p>
             <button
               onClick={dismiss}

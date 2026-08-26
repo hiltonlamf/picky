@@ -205,7 +205,7 @@ export default async function CityGuidePage({ params }: { params: { city: string
           About vegetarian dining in {guide.displayName}
         </h2>
         <p>
-          Picky helps you find which of {guide.displayName}&apos;s most popular restaurants are actually
+          Platefully helps you find which of {guide.displayName}&apos;s most popular restaurants are actually
           good for vegetarians, without ringing ahead or scanning menus yourself. The AI reads every dish
           and flags which are vegetarian or vegan — including hidden non-vegetarian ingredients like fish
           sauce, beef stock and anchovies that often appear in otherwise plant-friendly dishes. We sample

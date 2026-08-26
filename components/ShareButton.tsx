@@ -53,7 +53,7 @@ function buildShareMessage(
     (veganDishes.length > 0 ? ` (${veganDishes.length} vegan)` : '');
 
   const lines: string[] = [
-    `Good news about *${name}* — ${summary} 🌱`,
+    `*Platefully* found ${summary} at *${name}* 🌱`,
     ``,
   ];
 
@@ -77,7 +77,7 @@ function buildShareMessage(
 
   lines.push(
     // Same positioning as the site: AI-assisted, human-verified.
-    `Found with *Picky* — find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified. 🙌`,
+    `Found with *Platefully* — find veggie dishes in any restaurant, instantly. AI-assisted. Human-verified. 🙌`,
     ``,
     `See the full menu with prices → ${pageUrl}`
   );
@@ -109,7 +109,7 @@ export default function ShareButton({
   const pageUrl =
     typeof window !== 'undefined'
       ? window.location.origin + window.location.pathname
-      : `https://picky.ie/restaurant/${restaurant.id}`;
+      : `https://platefully.vercel.app/restaurant/${restaurant.id}`;
 
   async function handleNativeShare() {
     capture('share_clicked', { channel: 'native', restaurant_id: restaurant.id });

@@ -15,7 +15,7 @@ export async function GET() {
   const [log, feedback] = await Promise.all([getCorrectionLog(), getFeedbackInbox()]);
 
   const lines: string[] = [];
-  lines.push('# Picky — AI Error Log');
+  lines.push('# Platefully — AI Error Log');
   lines.push('');
   lines.push(`Generated: ${log.generatedAt}`);
   lines.push('');
@@ -117,7 +117,7 @@ export async function GET() {
   return new NextResponse(body, {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
-      'Content-Disposition': `attachment; filename="picky-ai-error-log-${new Date().toISOString().slice(0, 10)}.md"`,
+      'Content-Disposition': `attachment; filename="platefully-ai-error-log-${new Date().toISOString().slice(0, 10)}.md"`,
     },
   });
 }

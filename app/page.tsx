@@ -137,7 +137,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* ---------------- How Picky works: AI / human / you ---------------- */}
+      {/* ------------- How Platefully works: AI / human / you ------------- */}
       <section id="how" className="band plate plate-paper z-[4] bg-paper text-forest scroll-mt-[78px]">
         <div className="band-inner">
           <span className="eyebrow-pink">{PILLARS.eyebrow}</span>

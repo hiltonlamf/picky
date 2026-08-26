@@ -23,14 +23,14 @@ const display = Bricolage_Grotesque({
 export const metadata: Metadata = {
   title: {
     default: SITE_TITLE,
-    template: '%s | Picky',
+    template: '%s | Platefully',
   },
   description: SITE_DESCRIPTION,
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://picky.ie'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://platefully.vercel.app'),
   // Shared links (WhatsApp, iMessage, Slack) read these — without them the
   // preview falls back to whatever stale copy was in the page title.
   openGraph: {
-    siteName: 'Picky',
+    siteName: 'Platefully',
     type: 'website',
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,

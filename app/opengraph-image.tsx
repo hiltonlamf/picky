@@ -2,7 +2,7 @@ import { ImageResponse } from 'next/og';
 
 // Static card — generated at build time, so it never touches the DB and can't
 // break CI's credential-free build.
-export const alt = 'Picky — find veggie dishes in any restaurant, instantly';
+export const alt = 'Platefully — find veggie dishes in any restaurant, instantly';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -39,7 +39,7 @@ export default async function OpengraphImage() {
             }}
           />
           <div style={{ color: '#fff8f3', fontSize: 40, fontWeight: 700, letterSpacing: -1 }}>
-            Picky
+            Platefully
           </div>
         </div>
 

@@ -58,7 +58,7 @@ export async function GET() {
   return new NextResponse(lines.join('\n'), {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="picky-searches-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'Content-Disposition': `attachment; filename="platefully-searches-${new Date().toISOString().slice(0, 10)}.csv"`,
     },
   });
 }
