@@ -4,14 +4,16 @@ import { useState } from 'react';
 import Link from 'next/link';
 import type { Restaurant } from '@/types';
 import { guideInsights } from '@/lib/menu-insights';
+import { restaurantPath } from '@/lib/restaurant-url';
 import FeedbackModal from './FeedbackModal';
 import { FlagIcon } from './icons';
 
 interface Props {
   restaurant: Restaurant;
+  city?: string;
 }
 
-export default function RestaurantCard({ restaurant }: Props) {
+export default function RestaurantCard({ restaurant, city }: Props) {
   const { maxVegOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
     guideInsights(restaurant);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -41,7 +43,7 @@ export default function RestaurantCard({ restaurant }: Props) {
           real sibling outside that block, so it keeps its own clicks and
           never triggers navigation. */}
       <Link
-        href={`/restaurant/${restaurant.id}`}
+        href={restaurantPath(restaurant, city)}
         className="absolute inset-0"
         aria-label={`View menu for ${restaurant.name ?? 'this restaurant'}`}
       />

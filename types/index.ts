@@ -77,6 +77,8 @@ export interface RestaurantLocation {
 
 export interface Restaurant {
   id: string;
+  /** Permanent public URL segment; duplicate names receive -2, -3, etc. */
+  slug?: string | null;
   url: string;
   canonicalUrl?: string | null;
   name?: string | null;
