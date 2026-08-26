@@ -53,7 +53,7 @@ function buildShareMessage(
     (veganDishes.length > 0 ? ` (${veganDishes.length} vegan)` : '');
 
   const lines: string[] = [
-    `Good news about *${name}* — ${summary} 🌱`,
+    `*Platefully* found ${summary} at *${name}* 🌱`,
     ``,
   ];
 
@@ -109,7 +109,7 @@ export default function ShareButton({
   const pageUrl =
     typeof window !== 'undefined'
       ? window.location.origin + window.location.pathname
-      : `https://picky-seven.vercel.app/restaurant/${restaurant.id}`;
+      : `https://platefully.vercel.app/restaurant/${restaurant.id}`;
 
   async function handleNativeShare() {
     capture('share_clicked', { channel: 'native', restaurant_id: restaurant.id });

@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     template: '%s | Platefully',
   },
   description: SITE_DESCRIPTION,
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://picky-seven.vercel.app'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://platefully.vercel.app'),
   // Shared links (WhatsApp, iMessage, Slack) read these — without them the
   // preview falls back to whatever stale copy was in the page title.
   openGraph: {
