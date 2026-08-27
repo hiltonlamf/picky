@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import ParseProgress from './ParseProgress';
+import InlineFeedbackNote from './InlineFeedbackNote';
 import { capture } from '@/lib/posthog-client';
 import { EVENTS, captureError, classifyError } from '@/lib/analytics';
 import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
@@ -505,6 +506,18 @@ export default function HeroSearch({
           </button>
         </div>
         <p className="text-xs text-paper/70 font-mono">~20–40s per menu · narrated live</p>
+        {/* Multi-menu sites are where discovery most often gets it wrong, and
+            the person looking at this screen can see the real menu list. */}
+        <div className="pt-1">
+          <InlineFeedbackNote
+            surface="menu_picker"
+            tone="dark"
+            restaurantId={restaurantId || null}
+            prompt="Menus missing or wrong here? Tell us"
+            placeholder="e.g. the lunch menu is missing, or the wine list shouldn't be here"
+            context={`Offered: ${candidates.map((c) => `${c.label} (${c.type})`).join(' · ')}`}
+          />
+        </div>
       </div>
     );
   }
@@ -514,12 +527,24 @@ export default function HeroSearch({
       <div className="flex flex-col items-start gap-5 mt-7 w-full">
         <ParseProgress log={log} error={state === 'error' ? error : null} />
         {state === 'error' && (
-          <button
-            onClick={reset}
-            className="text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2"
-          >
-            ← Try a different restaurant
-          </button>
+          <>
+            {/* The person who just hit this knows what the site looks like. */}
+            <InlineFeedbackNote
+              surface="parse_error"
+              tone="dark"
+              restaurantId={restaurantId || null}
+              restaurantName={query.trim() || null}
+              prompt="Know where the menu is? Tell us"
+              placeholder="e.g. the menu is a PDF behind the 'Food' button, or it's only on their Instagram"
+              context={error ? `Error shown: ${error}` : null}
+            />
+            <button
+              onClick={reset}
+              className="text-sm text-paper/75 hover:text-paper transition-colors px-2 py-2"
+            >
+              ← Try a different restaurant
+            </button>
+          </>
         )}
       </div>
     );

@@ -32,6 +32,13 @@ export const EVENTS = {
   // --- transparency ---
   COUNTING_METHOD_EXPANDED: 'counting_method_expanded',
 
+  // Fired from the results page. These were raw string literals at the call
+  // site for a while: 'filter_changed' happened to match a dashboard by
+  // coincidence and 'menu_filter_changed' matched nothing at all. Named here
+  // so a rename is a compile error rather than a silently-zero chart.
+  FILTER_CHANGED: 'filter_changed',
+  MENU_FILTER_CHANGED: 'menu_filter_changed',
+
   // --- errors ---
   ERROR_SHOWN: 'error_shown',
   APP_CRASHED: 'app_crashed',
@@ -40,6 +47,10 @@ export const EVENTS = {
   // --- feedback & sharing ---
   FEEDBACK_MODAL_OPENED: 'feedback_modal_opened',
   FEEDBACK_SUBMITTED: 'feedback_submitted',
+  // Free-text note captured inline at the two moments the pipeline breaks:
+  // the menu picker, and the error / no-menu screens. `surface` says which.
+  INLINE_FEEDBACK_OPENED: 'inline_feedback_opened',
+  INLINE_FEEDBACK_SUBMITTED: 'inline_feedback_submitted',
   REPORT_MODAL_OPENED: 'report_modal_opened',
   DISH_REPORTED: 'dish_reported',
   SHARE_CLICKED: 'share_clicked',
