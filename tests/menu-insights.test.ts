@@ -196,6 +196,31 @@ describe('guideInsights', () => {
     expect(ins.highlightsAreThin).toBe(false);
   });
 
+  it('does not count, highlight or tally shared protein choices as sides', () => {
+    const r = restaurant([
+      section('Protein Customization Options', [
+        dish('Tofu', 'unknown', '€20.95'),
+        dish('Vegetable', 'unknown', '€20.95'),
+        dish('Chicken', 'neither', '€23.50'),
+      ]),
+      section('Curries', [
+        dish('Green Curry', 'vegan', '€20.95–€27.95'),
+        dish('Red Curry', 'vegan', '€20.95–€27.95'),
+        dish('Vegan Yellow Curry', 'vegan', '€20.95–€27.95'),
+      ]),
+    ]);
+
+    const ins = guideInsights(r);
+    expect(ins.maxVegOptions).toBe(3);
+    expect(ins.asideCount).toBe(0);
+    expect(ins.totalDishes).toBe(3);
+    expect(ins.highlights.map((highlight) => highlight.name)).toEqual([
+      'Green Curry',
+      'Red Curry',
+      'Vegan Yellow Curry',
+    ]);
+  });
+
   it('formats a bare numeric price with a currency symbol in highlights', () => {
     const r = restaurant([section('Mains', [dish('Bare price main', 'vegan', '18')])]);
     expect(guideInsights(r).highlights).toEqual([{ name: 'Bare price main', price: '€18' }]);

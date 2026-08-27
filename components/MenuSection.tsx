@@ -1,5 +1,6 @@
 import type { Dish, MenuSection as MenuSectionType } from '@/types';
 import DishCard from './DishCard';
+import { modifierDishes } from '@/lib/menu-modifiers';
 
 interface Props {
   section: MenuSectionType;
@@ -10,7 +11,9 @@ interface Props {
 }
 
 export default function MenuSection({ section, activeFilter, isAside }: Props) {
+  const modifiers = modifierDishes(section);
   const visibleDishes = section.dishes.filter((dish) => {
+    if (modifiers.has(dish)) return false;
     if (!activeFilter || activeFilter === 'all') return true;
     if (activeFilter === 'vegan') return dish.classification === 'vegan';
     // 'unknown' surfaces here (not under vegan — the higher-trust claim per

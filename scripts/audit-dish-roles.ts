@@ -19,6 +19,7 @@ import { getCityGuides, getFeaturedRestaurants } from '@/lib/db';
 import { classifyDishRole, type DishRole } from '@/lib/dish-role';
 import { parsePrice, headlineCounts, makeCountedTest } from '@/lib/menu-insights';
 import { formatPrice } from '@/lib/format-price';
+import { modifierDishes } from '@/lib/menu-modifiers';
 import type { Restaurant, MenuSection } from '@/types';
 
 interface DishRow {
@@ -113,9 +114,12 @@ function buildReport(city: string, r: Restaurant): RestaurantReport {
   const counts = makeCountedTest(r.sections);
 
   for (const s of r.sections) {
+    const modifiers = modifierDishes(s);
     for (const d of s.dishes) {
       if (d.deletedAt || !isVeg(d.classification)) continue;
-      const verdict = classifyDishRole(s.name, d);
+      const verdict = modifiers.has(d)
+        ? { role: 'modifier' as const, rule: 'protein/ingredient choice' }
+        : classifyDishRole(s.name, d);
       const numericPrice = parsePrice(d.price);
       const base = {
         section: s.name,
@@ -173,6 +177,7 @@ const ROLE_LABEL: Record<Exclude<DishRole, 'counted'>, string> = {
   dessert: 'Desserts',
   condiment: 'Sauces & condiments',
   staple: 'Breads, rice & bar staples',
+  modifier: 'Protein & ingredient choices',
 };
 
 function renderDishList(rows: DishRow[]): string {
@@ -201,7 +206,7 @@ function severity(rep: RestaurantReport): string {
 }
 
 function renderRestaurant(rep: RestaurantReport): string {
-  const byRole = (['dessert', 'condiment', 'staple'] as const)
+  const byRole = (['modifier', 'dessert', 'condiment', 'staple'] as const)
     .map((role) => {
       const rows = rep.excluded.filter((d) => d.role === role);
       if (!rows.length) return '';

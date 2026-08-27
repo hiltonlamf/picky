@@ -1,6 +1,7 @@
 import type { Restaurant, MenuSection, Dish } from '@/types';
 import { formatPrice } from '@/lib/format-price';
 import { classifyDishRole } from '@/lib/dish-role';
+import { modifierDishes } from '@/lib/menu-modifiers';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -71,7 +72,9 @@ const MIN_PRICES_FOR_TIEBREAK = 4;
 function medianPrice(sections: MenuSection[]): number | null {
   const prices: number[] = [];
   for (const s of sections) {
+    const modifiers = modifierDishes(s);
     for (const d of liveDishes(s)) {
+      if (modifiers.has(d)) continue;
       const p = parsePrice(d.price);
       if (p !== null && p > 0) prices.push(p);
     }
@@ -130,7 +133,12 @@ export function makeCountedTest(
   priceContext: MenuSection[]
 ): (sectionName: string | null | undefined, dish: Dish) => boolean {
   const priceTest = makePriceTest(priceContext);
-  return (sectionName, dish) => isCountedWithPrice(sectionName ?? '', dish, priceTest);
+  const modifiers = new Set<Dish>();
+  for (const section of priceContext) {
+    modifierDishes(section).forEach((dish) => modifiers.add(dish));
+  }
+  return (sectionName, dish) =>
+    !modifiers.has(dish) && isCountedWithPrice(sectionName ?? '', dish, priceTest);
 }
 
 /** Live (non-deleted) dishes of a section. */
@@ -184,7 +192,9 @@ export function menuTallies(
   const veganAside = new Set<string>();
   const priceTest = makePriceTest(priceContext);
   for (const section of sections) {
+    const modifiers = modifierDishes(section);
     for (const dish of liveDishes(section)) {
+      if (modifiers.has(dish)) continue;
       const key = dishKey(dish);
       all.add(key);
       if (!isVeg(dish)) continue;
@@ -233,7 +243,12 @@ export function isAsideDish(
   dish: Dish,
   priceContext: MenuSection[]
 ): boolean {
-  return isVeg(dish) && !makeCountedTest(priceContext)(sectionName, dish);
+  if (!isVeg(dish)) return false;
+  const section = priceContext.find((candidate) =>
+    candidate.name === (sectionName ?? '') && candidate.dishes.includes(dish)
+  );
+  if (section && modifierDishes(section).has(dish)) return false;
+  return !makeCountedTest(priceContext)(sectionName, dish);
 }
 
 /**
@@ -255,7 +270,9 @@ export function splitVegDishes(
   const asideOrder: string[] = [];
 
   for (const section of sections) {
+    const modifiers = modifierDishes(section);
     for (const dish of liveDishes(section)) {
+      if (modifiers.has(dish)) continue;
       if (!isVeg(dish)) continue;
       const key = dishKey(dish);
       if (seen[key]) continue;
@@ -402,7 +419,10 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
     vegetarian: (best?.counted ?? 0) - (best?.countedVegan ?? 0),
   };
 
-  const totalDishes = restaurant.sections.flatMap(liveDishes).length;
+  const totalDishes = restaurant.sections.reduce((total, section) => {
+    const modifiers = modifierDishes(section);
+    return total + liveDishes(section).filter((dish) => !modifiers.has(dish)).length;
+  }, 0);
 
   // Highlights: a few standout veg dishes, de-duped by normalized name so the
   // same dish on several menus counts once. Priced dishes are ranked priciest-
@@ -414,7 +434,9 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   const pricedVeg: Candidate[] = [];
   const unpricedVeg: Candidate[] = [];
   for (const section of restaurant.sections) {
+    const modifiers = modifierDishes(section);
     for (const dish of liveDishes(section)) {
+      if (modifiers.has(dish)) continue;
       // Counted dishes only — a card must never headline a naan or a sorbet.
       if (!isCountedVeg(section.name, dish)) continue;
       const key = normalizeDishName(dish.name);

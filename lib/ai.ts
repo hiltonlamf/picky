@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ClassifiedMenu, DietaryClassification } from '@/types';
+import { isModifierSectionName, modifierDishes } from '@/lib/menu-modifiers';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
 import { documentUrlCandidates } from './doc-url';
@@ -232,6 +233,8 @@ A menu is always WRITTEN TEXT — dish names, descriptions, and prices — even 
 
 CRITICAL — WHAT TO INCLUDE vs. EXCLUDE:
 - INCLUDE: all individual food dishes — starters, mains, sides, desserts, sharing plates, etc.
+- EXCLUDE selectable components and variation price lists. A shared ladder such as "Chicken €23.50 / Beef €24 / Tofu €20.95 / Vegetable €20.95" describes choices for the surrounding curries, stir-fries or noodles; Chicken, Beef, Tofu and Vegetable are NOT separate dishes. Never create a "Protein Options", "Protein Customization" or similar output section.
+- KEEP each real dish that uses the shared choices exactly once. State the vegetarian choice in that dish's description/reason, and put the visible price range or choice-dependent prices on the real dish rather than emitting the choices as dishes.
 - EXCLUDE completely (do not add to any section): ALL beverages — wines, beers, spirits, cocktails, soft drinks, juices, coffee, tea, water, smoothies, or any drink item. Most users assume drinks are vegetarian; listing them wastes space.
 - EXCLUDE: menu section headers used as dish names (e.g. "Daily Dim Sum Menu", "Today's Specials", "Set Menu €35 per person", "Starter Selection"). These are categories, not individual dishes.
 - EXCLUDE: non-dish text like opening hours, allergen notices, chef's notes, reservation policies.
@@ -767,26 +770,30 @@ function isDrinkSectionName(name: string): boolean {
 /** Strip out drink-only sections and any residual drink entries the AI may have included. */
 export function stripDrinksAndHeaders(menu: ClassifiedMenu): ClassifiedMenu {
   const cleaned = menu.sections
-    .filter((s) => !isDrinkSectionName(s.name))
-    .map((s) => ({
-      ...s,
-      dishes: s.dishes.filter((d) => {
-        const nameLower = d.name.toLowerCase();
-        // Reject obvious drink names the AI sometimes leaks through
-        const drinkKeywords = [
-          'wine', 'beer', 'lager', 'ale', 'stout', 'porter', 'cider',
-          'cocktail', 'spirit', 'whiskey', 'whisky', 'gin', 'vodka', 'rum',
-          'prosecco', 'champagne', 'sparkling', 'still water', 'mineral water',
-          'soft drink', 'cola', 'lemonade', 'juice', 'smoothie',
-          'coffee', 'espresso', 'cappuccino', 'latte', 'americano',
-          'tea', 'herbal tea', 'hot chocolate',
-        ];
-        if (drinkKeywords.some((k) => nameLower.includes(k))) return false;
-        // Reject category-header style entries (very short, no price, ends in "menu" or "selection")
-        if (/\b(menu|selection|platter|board|option)s?\b$/i.test(d.name) && !d.description && !d.price) return false;
-        return true;
-      }),
-    }))
+    .filter((s) => !isDrinkSectionName(s.name) && !isModifierSectionName(s.name))
+    .map((s) => {
+      const modifiers = modifierDishes(s);
+      return {
+        ...s,
+        dishes: s.dishes.filter((d) => {
+          if (modifiers.has(d)) return false;
+          const nameLower = d.name.toLowerCase();
+          // Reject obvious drink names the AI sometimes leaks through
+          const drinkKeywords = [
+            'wine', 'beer', 'lager', 'ale', 'stout', 'porter', 'cider',
+            'cocktail', 'spirit', 'whiskey', 'whisky', 'gin', 'vodka', 'rum',
+            'prosecco', 'champagne', 'sparkling', 'still water', 'mineral water',
+            'soft drink', 'cola', 'lemonade', 'juice', 'smoothie',
+            'coffee', 'espresso', 'cappuccino', 'latte', 'americano',
+            'tea', 'herbal tea', 'hot chocolate',
+          ];
+          if (drinkKeywords.some((k) => nameLower.includes(k))) return false;
+          // Reject category-header style entries (very short, no price, ends in "menu" or "selection")
+          if (/\b(menu|selection|platter|board|option)s?\b$/i.test(d.name) && !d.description && !d.price) return false;
+          return true;
+        }),
+      };
+    })
     .filter((s) => s.dishes.length > 0);
 
   return { ...menu, sections: cleaned };

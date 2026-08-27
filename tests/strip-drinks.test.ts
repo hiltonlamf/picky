@@ -53,4 +53,37 @@ describe('stripDrinksAndHeaders', () => {
     expect(cleaned.sections).toHaveLength(1);
     expect(countFoodItems(cleaned)).toBe(1);
   });
+
+  it('removes a shared protein-price section instead of treating choices as dishes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Protein Customization Options',
+        dishes: [
+          makeDish('Tofu', { price: '20.95', description: 'Customizable protein option' }),
+          makeDish('Vegetable', { price: '20.95', description: 'Customizable protein option' }),
+          makeDish('Chicken', { price: '23.50', classification: 'neither' }),
+        ],
+      },
+      { name: 'Curries', dishes: [makeDish('Green Curry')] },
+    ]);
+
+    expect(stripDrinksAndHeaders(menu).sections.map((section) => section.name)).toEqual(['Curries']);
+  });
+
+  it('removes a cluster of bare variations mixed into real dishes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Soups',
+        dishes: [
+          makeDish('Tom Yum Soup', { description: 'Hot and sour soup' }),
+          makeDish('Prawns', { price: '10', classification: 'neither' }),
+          makeDish('Chicken', { price: '10', classification: 'neither' }),
+          makeDish('Mushroom', { price: '9' }),
+          makeDish('Vegetables', { price: '9' }),
+        ],
+      },
+    ]);
+
+    expect(stripDrinksAndHeaders(menu).sections[0].dishes.map((dish) => dish.name)).toEqual(['Tom Yum Soup']);
+  });
 });
