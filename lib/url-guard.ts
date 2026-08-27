@@ -85,9 +85,12 @@ async function resolveCached(host: string): Promise<{ address: string }[]> {
   dnsCache.set(host, { at: Date.now(), addresses });
   // Unbounded growth would be a slow leak in a long-lived server process.
   if (dnsCache.size > 500) {
-    for (const [k, v] of dnsCache) {
-      if (Date.now() - v.at >= DNS_TTL_MS) dnsCache.delete(k);
-    }
+    // forEach rather than for..of: the project's tsconfig target needs
+    // downlevelIteration to iterate a Map directly.
+    const now = Date.now();
+    dnsCache.forEach((v, k) => {
+      if (now - v.at >= DNS_TTL_MS) dnsCache.delete(k);
+    });
   }
   return addresses;
 }
