@@ -1,5 +1,30 @@
-import { lookup } from 'node:dns/promises';
-import net from 'node:net';
+// Node builtins are NOT imported statically here. lib/url-guard is reachable
+// from lib/scraper → lib/init-dublin → instrumentation.ts, and instrumentation
+// is compiled for the Edge runtime as well as Node — where `node:dns` does not
+// exist and the build fails outright. The webpackIgnore hint below keeps the
+// import a real runtime import that webpack never tries to bundle; the Edge
+// build therefore never resolves it, and nothing on that runtime calls it.
+async function dnsLookupAll(host: string): Promise<{ address: string }[]> {
+  const dns = await import(/* webpackIgnore: true */ 'node:dns/promises');
+  return dns.lookup(host, { all: true });
+}
+
+/**
+ * IP-literal family detection, in plain JS rather than `node:net` — same
+ * reasoning as above, and the check is simple enough not to need a builtin.
+ * Returns 4, 6, or 0 for "not an IP literal".
+ */
+export function ipFamily(value: string): 0 | 4 | 6 {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) {
+    const octets = value.split('.').map(Number);
+    return octets.every((n) => n >= 0 && n <= 255) ? 4 : 0;
+  }
+  // A URL hostname never contains a colon (the port is a separate field, and
+  // IPv6 literals arrive bracketed and are unwrapped by the caller), so a
+  // colon here means an IPv6 literal.
+  if (value.includes(':')) return 6;
+  return 0;
+}
 
 /**
  * SSRF protection for every outbound fetch of a URL we did not choose.
@@ -30,7 +55,7 @@ const ALLOWED_PORTS = new Set(['', '80', '443', '8080', '8443']);
  * Covers the ranges an SSRF is actually aimed at, in both IP families.
  */
 export function isPrivateAddress(ip: string): boolean {
-  const type = net.isIP(ip);
+  const type = ipFamily(ip);
 
   if (type === 4) {
     const p = ip.split('.').map(Number);
@@ -81,7 +106,7 @@ async function resolveCached(host: string): Promise<{ address: string }[]> {
   const hit = dnsCache.get(host);
   if (hit && Date.now() - hit.at < DNS_TTL_MS) return hit.addresses;
 
-  const addresses = await lookup(host, { all: true });
+  const addresses = await dnsLookupAll(host);
   dnsCache.set(host, { at: Date.now(), addresses });
   // Unbounded growth would be a slow leak in a long-lived server process.
   if (dnsCache.size > 500) {
@@ -119,7 +144,7 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   const host = url.hostname.replace(/^\[|\]$/g, '');
 
   // An IP literal needs no DNS round trip.
-  if (net.isIP(host)) {
+  if (ipFamily(host)) {
     if (isPrivateAddress(host)) {
       throw new BlockedUrlError('That address is not publicly reachable.');
     }
