@@ -5,7 +5,16 @@
 // import a real runtime import that webpack never tries to bundle; the Edge
 // build therefore never resolves it, and nothing on that runtime calls it.
 async function dnsLookupAll(host: string): Promise<{ address: string }[]> {
-  const dns = await import(/* webpackIgnore: true */ 'node:dns/promises');
+  // The specifier is assembled at runtime so it never appears as a literal in
+  // the bundle. webpackIgnore alone was not enough: it stops webpack resolving
+  // the module but leaves the string in the output, and Vercel rejects an Edge
+  // Function that references an unsupported module even if it never runs it —
+  // which failed the middleware deploy. This module is reachable from
+  // instrumentation.ts, which is compiled for Edge as well as Node.
+  const mod = 'node:' + 'dns/promises';
+  const dns = (await import(/* webpackIgnore: true */ mod)) as {
+    lookup: (h: string, o: { all: true }) => Promise<{ address: string }[]>;
+  };
   return dns.lookup(host, { all: true });
 }
 
