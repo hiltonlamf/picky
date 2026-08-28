@@ -921,8 +921,31 @@ export async function getRestaurantByPublicPath(
  */
 export async function aiSpendSince(since: Date): Promise<number> {
   const { data, error } = await db().rpc('ai_spend_since', { since: since.toISOString() });
-  if (error) throw new Error(`ai_spend_since failed: ${error.message}`);
-  return Number(data) || 0;
+  if (!error) return Number(data) || 0;
+
+  // The function may not exist yet — code can deploy ahead of its migration,
+  // and the spend guard fails closed, so treating "function missing" as "query
+  // failed" would block every analysis site-wide until someone ran the SQL.
+  // That is far worse than briefly having no cap. Fall back to paging the rows.
+  const missing =
+    error.code === 'PGRST202' || /could not find the function|does not exist/i.test(error.message ?? '');
+  if (!missing) throw new Error(`ai_spend_since failed: ${error.message}`);
+
+  console.warn('[db] ai_spend_since RPC missing — falling back to a paged sum. Apply the migration.');
+  let total = 0;
+  // PostgREST caps a select at 1000 rows silently, so page explicitly rather
+  // than trusting one unbounded query (the exact trap this function exists for).
+  for (let offset = 0; ; offset += 1000) {
+    const { data: rows, error: pageError } = await db()
+      .from('ai_usage_log')
+      .select('cost_usd')
+      .gte('created_at', since.toISOString())
+      .range(offset, offset + 999);
+    if (pageError) throw new Error(`ai_usage_log page failed: ${pageError.message}`);
+    const batch = (rows ?? []) as DbRow[];
+    total += batch.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+    if (batch.length < 1000) return total;
+  }
 }
 
 /**
