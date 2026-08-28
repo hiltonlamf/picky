@@ -1,22 +1,26 @@
-// Node builtins are NOT imported statically here. lib/url-guard is reachable
-// from lib/scraper → lib/init-dublin → instrumentation.ts, and instrumentation
-// is compiled for the Edge runtime as well as Node — where `node:dns` does not
-// exist and the build fails outright. The webpackIgnore hint below keeps the
-// import a real runtime import that webpack never tries to bundle; the Edge
-// build therefore never resolves it, and nothing on that runtime calls it.
 async function dnsLookupAll(host: string): Promise<{ address: string }[]> {
-  // The specifier is assembled at runtime so it never appears as a literal in
-  // the bundle. webpackIgnore alone was not enough: it stops webpack resolving
-  // the module but leaves the string in the output, and Vercel rejects an Edge
-  // Function that references an unsupported module even if it never runs it —
-  // which failed the middleware deploy. This module is reachable from
-  // instrumentation.ts, which is compiled for Edge as well as Node.
-  const mod = 'node:' + 'dns/promises';
-  const dns = (await import(/* webpackIgnore: true */ mod)) as {
+  // No import statement, by necessity. This module is reachable from
+  // instrumentation.ts (via lib/scraper and lib/init-dublin), which Next
+  // compiles for the Edge runtime as well as Node, and Vercel refuses to
+  // deploy an Edge Function that *references* an unsupported module even when
+  // it never runs it. That failed the middleware deploy while GitHub CI passed.
+  //
+  // webpackIgnore was not enough: it stops webpack resolving the module but
+  // leaves the specifier in the output. Assembling the string at runtime did
+  // not help either, because the minifier folds the concatenation back into a
+  // literal. process.getBuiltinModule puts no specifier in the bundle at all,
+  // and exists only on Node — the sole runtime that ever calls this.
+  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (m: string) => unknown } })
+    .process?.getBuiltinModule;
+  if (typeof getBuiltin !== 'function') {
+    throw new Error('DNS lookup is unavailable on this runtime');
+  }
+  const dns = getBuiltin('dns/promises') as {
     lookup: (h: string, o: { all: true }) => Promise<{ address: string }[]>;
   };
   return dns.lookup(host, { all: true });
 }
+
 
 /**
  * IP-literal family detection, in plain JS rather than `node:net` — same
