@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ClassifiedMenu, DietaryClassification } from '@/types';
 import { isModifierSectionName, modifierDishes } from '@/lib/menu-modifiers';
+import { hasExplicitAnimalProduct } from '@/lib/dietary-overrides';
 import { DIETARY_FILTERS } from './dietary-config';
 import { recordSpend } from './ai-spend';
 import { documentUrlCandidates } from './doc-url';
@@ -274,6 +275,7 @@ CRITICAL — watch for hidden non-vegetarian ingredients:
 - Fish sauce, oyster sauce, worcestershire sauce (often in Asian, Italian dishes)
 - Beef/chicken/fish stock in soups, risottos, stews
 - Anchovies in Caesar dressing, puttanesca sauce, some salads
+- Caviar and fish roe (fish eggs), including Sevruga, Oscietra, ikura, tobiko, and masago
 - Gelatin in desserts, jellies, panna cotta
 - Lard or suet in pastry
 - Parmesan cheese is technically not vegetarian (uses animal rennet) — note this but classify as vegetarian unless explicitly stated
@@ -775,23 +777,27 @@ export function stripDrinksAndHeaders(menu: ClassifiedMenu): ClassifiedMenu {
       const modifiers = modifierDishes(s);
       return {
         ...s,
-        dishes: s.dishes.filter((d) => {
-          if (modifiers.has(d)) return false;
-          const nameLower = d.name.toLowerCase();
-          // Reject obvious drink names the AI sometimes leaks through
-          const drinkKeywords = [
-            'wine', 'beer', 'lager', 'ale', 'stout', 'porter', 'cider',
-            'cocktail', 'spirit', 'whiskey', 'whisky', 'gin', 'vodka', 'rum',
-            'prosecco', 'champagne', 'sparkling', 'still water', 'mineral water',
-            'soft drink', 'cola', 'lemonade', 'juice', 'smoothie',
-            'coffee', 'espresso', 'cappuccino', 'latte', 'americano',
-            'tea', 'herbal tea', 'hot chocolate',
-          ];
-          if (drinkKeywords.some((k) => nameLower.includes(k))) return false;
-          // Reject category-header style entries (very short, no price, ends in "menu" or "selection")
-          if (/\b(menu|selection|platter|board|option)s?\b$/i.test(d.name) && !d.description && !d.price) return false;
-          return true;
-        }),
+        dishes: s.dishes
+          .filter((d) => {
+            if (modifiers.has(d)) return false;
+            const nameLower = d.name.toLowerCase();
+            // Reject obvious drink names the AI sometimes leaks through
+            const drinkKeywords = [
+              'wine', 'beer', 'lager', 'ale', 'stout', 'porter', 'cider',
+              'cocktail', 'spirit', 'whiskey', 'whisky', 'gin', 'vodka', 'rum',
+              'prosecco', 'champagne', 'sparkling', 'still water', 'mineral water',
+              'soft drink', 'cola', 'lemonade', 'juice', 'smoothie',
+              'coffee', 'espresso', 'cappuccino', 'latte', 'americano',
+              'tea', 'herbal tea', 'hot chocolate',
+            ];
+            if (drinkKeywords.some((k) => nameLower.includes(k))) return false;
+            // Reject category-header style entries (very short, no price, ends in "menu" or "selection")
+            if (/\b(menu|selection|platter|board|option)s?\b$/i.test(d.name) && !d.description && !d.price) return false;
+            return true;
+          })
+          .map((d) => hasExplicitAnimalProduct(s.name, d)
+            ? { ...d, classification: 'neither' as const, confidence: 1, reason: 'Explicit fish or seafood ingredient' }
+            : d),
       };
     })
     .filter((s) => s.dishes.length > 0);
@@ -1230,7 +1236,7 @@ export function buildVerifyPrompt(
 - "neither": contains meat, poultry, fish, or seafood — including hidden animal ingredients
 - "unknown": genuinely unclear from the name and description
 
-Watch for hidden animal ingredients: fish sauce, oyster sauce, or worcestershire sauce (Asian and Italian dishes); meat or fish stock in soups, risottos, and stews; anchovies in Caesar dressing or puttanesca; gelatin in desserts and panna cotta; lard or suet in pastry; prawn crackers or prawn toast. Be conservative: if a dish very likely contains one of these, downgrade the label and lower the confidence rather than giving it the benefit of the doubt.
+Watch for hidden animal ingredients: fish sauce, oyster sauce, or worcestershire sauce (Asian and Italian dishes); meat or fish stock in soups, risottos, and stews; anchovies in Caesar dressing or puttanesca; caviar and fish roe (fish eggs), including Sevruga, Oscietra, ikura, tobiko, and masago; gelatin in desserts and panna cotta; lard or suet in pastry; prawn crackers or prawn toast. Be conservative: if a dish very likely contains one of these, downgrade the label and lower the confidence rather than giving it the benefit of the doubt.
 
 ONE EXCEPTION to that conservatism — dishes where the DINER CHOOSES the protein or topping ("Pad Thai — choice of tofu, chicken or prawn", "roll with a choice of cheese, ham or salami", "toastie, optional ham"). If a vegetarian option is genuinely selectable, KEEP the vegetarian/vegan label rather than downgrading: the diner can order it without meat. Say which choice makes it work in the "reason" (e.g. "veg if ordered with tofu"). Downgrade to "neither" only when every available option contains meat, poultry or fish.
 

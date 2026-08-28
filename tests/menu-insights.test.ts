@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePrice, guideInsights } from '@/lib/menu-insights';
+import { parsePrice, guideInsights, isVeg } from '@/lib/menu-insights';
 import type { Restaurant, MenuSection, Dish, DietaryClassification } from '@/types';
 
 let idCounter = 0;
@@ -314,6 +314,41 @@ describe('guideInsights', () => {
       'Second curry',
       'Budget noodles',
     ]);
+  });
+
+  it('keeps Momo below recognised main-course sections', () => {
+    const r = restaurant([
+      section('Momo', [dish('Momo Chili - Vegetables', 'vegetarian', '€18.75')]),
+      section('Chowmein', [dish('Chowmein - Mix Vegetables', 'vegetarian', '€17.75')]),
+    ]);
+    expect(guideInsights(r).highlights[0]?.name).toBe('Chowmein - Mix Vegetables');
+  });
+
+  it('excludes animal caviar from counts and highlights despite a vegetarian AI label', () => {
+    const r = restaurant([
+      section('Caviar - Individual Options', [
+        dish('Sevruga Royal', 'vegetarian', '€66'),
+        dish('Oscietra Royal', 'vegetarian', '€61'),
+      ]),
+      section('Entrées - From the Land', [dish('Pappardelle V', 'vegetarian', '€27.50')]),
+      section('Appetisers', [
+        dish('Burrata', 'vegetarian', '€15.50'),
+        dish('West Cork Rope Mussels', 'vegetarian', '€15.00'),
+        dish('Watercress & Potato Soup', 'vegetarian', '€11.50'),
+      ]),
+    ]);
+
+    const insights = guideInsights(r);
+    expect(insights.maxVegOptions).toBe(3);
+    expect(insights.highlights).toEqual([
+      { name: 'Pappardelle V', price: '€27.50' },
+      { name: 'Burrata', price: '€15.50' },
+      { name: 'Watercress & Potato Soup', price: '€11.50' },
+    ]);
+  });
+
+  it('does not reject explicitly plant-based caviar alternatives', () => {
+    expect(isVeg(dish('Seaweed caviar', 'vegan'), 'Caviar alternatives')).toBe(true);
   });
 
   it('formats a bare numeric price with a currency symbol in highlights', () => {

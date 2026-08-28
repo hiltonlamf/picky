@@ -2,6 +2,7 @@ import type { Restaurant, MenuSection, Dish } from '@/types';
 import { formatPrice } from '@/lib/format-price';
 import { classifyDishRole } from '@/lib/dish-role';
 import { modifierDishes } from '@/lib/menu-modifiers';
+import { effectiveDietaryClassification } from '@/lib/dietary-overrides';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -42,18 +43,22 @@ export function parsePrice(price: string | null | undefined): number | null {
  *  on purpose — when the AI can't tell (a "soup of the day" with no ingredients
  *  listed), the dish is shown as a maybe-please-confirm rather than dropped, and
  *  the count must match the list. Founder's rule: when in doubt, count it. */
-export function isVeg(dish: Pick<Dish, 'classification'>): boolean {
+export function isVeg(
+  dish: Pick<Dish, 'name' | 'description' | 'classification'>,
+  sectionName?: string | null
+): boolean {
+  const classification = effectiveDietaryClassification(sectionName, dish);
   return (
-    dish.classification === 'vegan' ||
-    dish.classification === 'vegetarian' ||
-    dish.classification === 'unknown'
+    classification === 'vegan' ||
+    classification === 'vegetarian' ||
+    classification === 'unknown'
   );
 }
 
 /** A veg dish that belongs in the headline figure — i.e. not a dessert, sauce,
  *  condiment or plain bread/rice. */
 export function isCountedVeg(sectionName: string | null | undefined, dish: Dish): boolean {
-  return isVeg(dish) && classifyDishRole(sectionName, dish).role === 'counted';
+  return isVeg(dish, sectionName) && classifyDishRole(sectionName, dish).role === 'counted';
 }
 
 // A dish in a bar-snack section priced below this share of the restaurant's
@@ -199,7 +204,7 @@ export function menuTallies(
       if (modifiers.has(dish)) continue;
       const key = dishKey(dish);
       all.add(key);
-      if (!isVeg(dish)) continue;
+      if (!isVeg(dish, section.name)) continue;
       const vegan = dish.classification === 'vegan';
       if (isCountedWithPrice(section.name, dish, priceTest)) {
         counted.add(key);
@@ -245,7 +250,7 @@ export function isAsideDish(
   dish: Dish,
   priceContext: MenuSection[]
 ): boolean {
-  if (!isVeg(dish)) return false;
+  if (!isVeg(dish, sectionName)) return false;
   const section = priceContext.find((candidate) =>
     candidate.name === (sectionName ?? '') && candidate.dishes.includes(dish)
   );
@@ -275,7 +280,7 @@ export function splitVegDishes(
     const modifiers = modifierDishes(section);
     for (const dish of liveDishes(section)) {
       if (modifiers.has(dish)) continue;
-      if (!isVeg(dish)) continue;
+      if (!isVeg(dish, section.name)) continue;
       const key = dishKey(dish);
       if (seen[key]) continue;
       if (isCountedWithPrice(section.name, dish, priceTest)) {

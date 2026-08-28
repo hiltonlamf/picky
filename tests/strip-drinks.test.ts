@@ -86,4 +86,36 @@ describe('stripDrinksAndHeaders', () => {
 
     expect(stripDrinksAndHeaders(menu).sections[0].dishes.map((dish) => dish.name)).toEqual(['Tom Yum Soup']);
   });
+
+  it('corrects caviar rows the classifier marked vegetarian', () => {
+    const menu = makeMenu([
+      {
+        name: 'Caviar - Individual Options',
+        dishes: [
+          makeDish('Sevruga Royal', { classification: 'vegetarian' }),
+          makeDish('Oscietra Royal', { classification: 'unknown' }),
+        ],
+      },
+    ]);
+
+    const dishes = stripDrinksAndHeaders(menu).sections[0].dishes;
+    expect(dishes.map((dish) => dish.classification)).toEqual(['neither', 'neither']);
+    expect(dishes.every((dish) => dish.reason === 'Explicit fish or seafood ingredient')).toBe(true);
+  });
+
+  it('corrects explicit seafood while preserving plant-based lookalikes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Appetisers',
+        dishes: [
+          makeDish('West Cork Rope Mussels', { classification: 'vegetarian' }),
+          makeDish('Oyster Mushroom Tempura', { classification: 'vegan' }),
+          makeDish('Plant-based tuna tostada', { classification: 'vegan' }),
+        ],
+      },
+    ]);
+
+    const dishes = stripDrinksAndHeaders(menu).sections[0].dishes;
+    expect(dishes.map((dish) => dish.classification)).toEqual(['neither', 'vegan', 'vegan']);
+  });
 });
