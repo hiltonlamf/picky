@@ -29,6 +29,8 @@ import {
   hashIp,
   MAX_SEARCHES_PER_HOUR,
 } from '@/lib/rate-limit';
+import { checkDailySpend, AT_CAPACITY_MESSAGE } from '@/lib/spend-guard';
+import { assertPublicUrl, BlockedUrlError } from '@/lib/url-guard';
 import { STALENESS_DAYS } from '@/lib/dietary-config';
 import { GooglePlacesError, resolveGoogleRestaurant } from '@/lib/google-places';
 import { captureGooglePlacesFailure, trackGooglePlacesIssue } from '@/lib/google-places-observability';
@@ -162,6 +164,25 @@ export async function POST(request: NextRequest) {
           send({ type: 'error', error: parsed.error.issues[0]?.message ?? 'Invalid URL' });
           return close();
         }
+
+        // SSRF gate at the door. The scraper and reader guard themselves too,
+        // but rejecting here means the visitor gets one clean message instead
+        // of a confusing failure several layers down. `z.string().url()` alone
+        // accepts anything URL-parseable, including internal hosts.
+        if ('url' in parsed.data) {
+          try {
+            await assertPublicUrl(parsed.data.url);
+          } catch (err) {
+            send({
+              type: 'error',
+              error:
+                err instanceof BlockedUrlError
+                  ? err.message
+                  : 'That does not look like a valid web address.',
+            });
+            return close();
+          }
+        }
         let url: string;
         let discoveryCity = 'unassigned';
         let selectedGooglePlaceId: string | null = null;
@@ -280,6 +301,19 @@ export async function POST(request: NextRequest) {
         // stale reparse), so enforce and consume ONE rate-limit slot here — one
         // per new restaurant. The downstream /analyze step deliberately does not
         // consume another, so the whole flow costs the user a single slot.
+        // Global daily ceiling, checked BEFORE the per-IP slot so a capped day
+        // doesn't burn the visitor's hourly budget on a request we won't run.
+        const spend = await checkDailySpend();
+        if (!spend.allowed) {
+          await captureServer(request, distinctId, 'spend_cap_hit', {
+            stage: 'discover',
+            spent_usd: spend.spentUsd,
+            cap_usd: spend.capUsd,
+          });
+          send({ type: 'error', error: AT_CAPACITY_MESSAGE });
+          return close();
+        }
+
         const { allowed } = await checkRateLimit(ip);
         if (!allowed) {
           await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'discover' });

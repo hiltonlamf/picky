@@ -29,6 +29,17 @@ import {
 import { sumUsage, BLOCKED_MENU_MESSAGE, ExtractionError } from '@/lib/menu-extract';
 import { isNonFoodMenu } from '@/lib/menu-discovery';
 
+// The SSRF guard (lib/url-guard) resolves DNS before every outbound fetch.
+// That is real network I/O, which vi.useFakeTimers() cannot coordinate with —
+// runAllTimersAsync() returns before the lookup settles, so the retry backoff
+// never advances and the test times out. Resolve to a public address instead:
+// these tests are about the reader fallback, not about the guard, which has
+// its own coverage in tests/url-guard.test.ts. A plain function (not vi.fn)
+// so beforeEach's resetAllMocks cannot strip the implementation.
+vi.mock('@/lib/dns-lookup', () => ({
+  dnsLookupAll: async () => [{ address: '93.184.216.34' }],
+}));
+
 describe('Google Drive / Dropbox menu links (waterkantamsterdam.nl)', () => {
   it('rewrites a Drive share link to a direct download', () => {
     // Preferred form is the post-consent endpoint: the plain uc?export=download

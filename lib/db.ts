@@ -911,6 +911,44 @@ export async function getRestaurantByPublicPath(
 }
 
 /**
+ * Total AI spend (USD) since `since`, summed in Postgres.
+ *
+ * Uses the `ai_spend_since` DB function rather than selecting cost_usd and
+ * summing here: PostgREST silently truncates at 1000 rows, which at ~11 calls
+ * per restaurant means any day busier than ~90 restaurants would under-report
+ * with no error. Throws on failure — callers decide the policy (the spend
+ * guard fails closed; the admin dashboard tolerates it).
+ */
+export async function aiSpendSince(since: Date): Promise<number> {
+  const { data, error } = await db().rpc('ai_spend_since', { since: since.toISOString() });
+  if (!error) return Number(data) || 0;
+
+  // The function may not exist yet — code can deploy ahead of its migration,
+  // and the spend guard fails closed, so treating "function missing" as "query
+  // failed" would block every analysis site-wide until someone ran the SQL.
+  // That is far worse than briefly having no cap. Fall back to paging the rows.
+  const missing =
+    error.code === 'PGRST202' || /could not find the function|does not exist/i.test(error.message ?? '');
+  if (!missing) throw new Error(`ai_spend_since failed: ${error.message}`);
+
+  console.warn('[db] ai_spend_since RPC missing — falling back to a paged sum. Apply the migration.');
+  let total = 0;
+  // PostgREST caps a select at 1000 rows silently, so page explicitly rather
+  // than trusting one unbounded query (the exact trap this function exists for).
+  for (let offset = 0; ; offset += 1000) {
+    const { data: rows, error: pageError } = await db()
+      .from('ai_usage_log')
+      .select('cost_usd')
+      .gte('created_at', since.toISOString())
+      .range(offset, offset + 999);
+    if (pageError) throw new Error(`ai_usage_log page failed: ${pageError.message}`);
+    const batch = (rows ?? []) as DbRow[];
+    total += batch.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+    if (batch.length < 1000) return total;
+  }
+}
+
+/**
  * Record API spend in the append-only ai_usage_log — called on successful
  * saves AND on failed analyses (failed retry ladders are the most expensive
  * path, so skipping them made spend reports undercount badly).
@@ -1989,8 +2027,10 @@ export async function getAdminDashboardStats(): Promise<AdminDashboardStats> {
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const { data: spendRows } = await db().from('ai_usage_log').select('cost_usd').gte('created_at', todayStart.toISOString());
-  const todaySpendUsd = ((spendRows ?? []) as DbRow[]).reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+  // Was `select('cost_usd')` + sum here, which PostgREST truncates at 1000 rows
+  // — understating the number on exactly the busy days it matters. Tolerate a
+  // failure with null rather than breaking the whole dashboard.
+  const todaySpendUsd = await aiSpendSince(todayStart).catch(() => 0);
 
   const { count: totalCount } = await db().from('restaurants').select('*', { count: 'exact', head: true });
   const { count: errorCount } = await db().from('restaurants').select('*', { count: 'exact', head: true }).eq('status', 'error');

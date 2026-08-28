@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { addMenuFromUrl, addMenuFromUpload, getRestaurantMeta, restaurantHasLiveDishes, submitFeedback } from '@/lib/db';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
+import { checkDailySpend, AT_CAPACITY_MESSAGE } from '@/lib/spend-guard';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { ANON_ID_COOKIE } from '@/lib/telemetry';
@@ -73,6 +74,16 @@ export async function POST(request: NextRequest) {
 
     // Consume a rate slot BEFORE spending any tokens (this attempt costs money
     // whether or not it succeeds).
+    const spend = await checkDailySpend();
+    if (!spend.allowed) {
+      await captureServer(request, distinctId, 'spend_cap_hit', {
+        stage: 'submit_menu',
+        spent_usd: spend.spentUsd,
+        cap_usd: spend.capUsd,
+      });
+      return NextResponse.json({ error: AT_CAPACITY_MESSAGE }, { status: 503 });
+    }
+
     const { allowed } = await checkRateLimit(ip);
     if (!allowed) {
       await captureServer(request, distinctId, 'rate_limit_hit', { stage: 'submit_menu' });

@@ -1,3 +1,4 @@
+import { assertPublicUrl } from './url-guard';
 /**
  * Provider-abstracted page reader.
  *
@@ -497,6 +498,14 @@ function cacheSet(url: string, result: ReaderResult | null, timeoutMs: number): 
 }
 
 export async function readPage(url: string, timeoutMs = READER_TIMEOUT_MS): Promise<ReaderResult | null> {
+  // The reader hands `url` to Jina/Firecrawl, which fetch it on our behalf and
+  // bill us for it. Guarding here keeps us from paying a third party to probe
+  // internal addresses on an attacker's behalf.
+  try {
+    await assertPublicUrl(url);
+  } catch {
+    return null;
+  }
   // Never outlive the request. DOCUMENT_TIMEOUT_MS is 90s, which is longer than
   // a Vercel function is allowed to exist — asking for it inside one killed the
   // whole analysis instead of just this read.
