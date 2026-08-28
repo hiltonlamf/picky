@@ -14,8 +14,8 @@ import type { ReaderResult } from '@/lib/reader';
 // these tests are about the reader fallback, not about the guard, which has
 // its own coverage in tests/url-guard.test.ts. A plain function (not vi.fn)
 // so beforeEach's resetAllMocks cannot strip the implementation.
-vi.mock('node:dns/promises', () => ({
-  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+vi.mock('@/lib/dns-lookup', () => ({
+  dnsLookupAll: async () => [{ address: '93.184.216.34' }],
 }));
 
 vi.mock('@/lib/reader', async (importOriginal) => {

@@ -1,26 +1,4 @@
-async function dnsLookupAll(host: string): Promise<{ address: string }[]> {
-  // No import statement, by necessity. This module is reachable from
-  // instrumentation.ts (via lib/scraper and lib/init-dublin), which Next
-  // compiles for the Edge runtime as well as Node, and Vercel refuses to
-  // deploy an Edge Function that *references* an unsupported module even when
-  // it never runs it. That failed the middleware deploy while GitHub CI passed.
-  //
-  // webpackIgnore was not enough: it stops webpack resolving the module but
-  // leaves the specifier in the output. Assembling the string at runtime did
-  // not help either, because the minifier folds the concatenation back into a
-  // literal. process.getBuiltinModule puts no specifier in the bundle at all,
-  // and exists only on Node — the sole runtime that ever calls this.
-  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (m: string) => unknown } })
-    .process?.getBuiltinModule;
-  if (typeof getBuiltin !== 'function') {
-    throw new Error('DNS lookup is unavailable on this runtime');
-  }
-  const dns = getBuiltin('dns/promises') as {
-    lookup: (h: string, o: { all: true }) => Promise<{ address: string }[]>;
-  };
-  return dns.lookup(host, { all: true });
-}
-
+import { dnsLookupAll } from './dns-lookup';
 
 /**
  * IP-literal family detection, in plain JS rather than `node:net` — same
