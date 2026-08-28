@@ -1637,6 +1637,19 @@ export async function getCityGuides(): Promise<
   );
 }
 
+/** Published guide slugs only — a light query for the sitemap, which does not
+ *  need the per-guide restaurant counts getCityGuides() loads. */
+export async function getPublishedGuideSlugs(): Promise<Array<{ slug: string; publishedAt: string | null }>> {
+  const { data } = await db()
+    .from('city_guides')
+    .select('slug, published_at')
+    .eq('status', 'published');
+  return ((data ?? []) as DbRow[]).map((r) => ({
+    slug: r.slug as string,
+    publishedAt: (r.published_at as string | null) ?? null,
+  }));
+}
+
 export async function getCityGuideBySlug(slug: string): Promise<CityGuide | null> {
   const { data } = await db().from('city_guides').select('*').eq('slug', slug).maybeSingle();
   return data ? mapCityGuide(data as DbRow) : null;

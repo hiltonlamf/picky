@@ -199,7 +199,7 @@ export async function POST(request: NextRequest) {
           selectedGooglePlaceId = parsed.data.googlePlaceId;
           discoveryCity = 'dublin';
 
-          // A previously selected Google branch is just another Picky cache
+          // A previously selected Google branch is just another Platefully cache
           // lookup. Resolve its stored URL without another paid Places call.
           const linkedId = await findRestaurantIdByProviderPlace('google', selectedGooglePlaceId).catch(() => null);
           const linked = linkedId ? await getRestaurantSearchTarget(linkedId).catch(() => null) : null;

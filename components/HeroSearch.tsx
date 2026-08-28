@@ -84,7 +84,7 @@ export default function HeroSearch({
     return await response.json() as RestaurantSearchResponse;
   }, [sessionToken]);
 
-  // Picky is always asked first. Google is called only when Picky has no
+  // Our own database is always asked first. Google is called only when it has no
   // matching Dublin restaurant; a visible control lets the user broaden an
   // existing result list deliberately.
   useEffect(() => {
@@ -633,7 +633,7 @@ export default function HeroSearch({
                         </span>
                         {candidate.source === 'picky' && (
                           <span className="shrink-0 rounded-full bg-forest px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-paper">
-                            On Picky
+                            On Platefully
                           </span>
                         )}
                       </button>
@@ -654,8 +654,8 @@ export default function HeroSearch({
               {providerError && (
                 <p className="border-t border-forest/10 px-4 py-3 text-xs text-forest/65">
                   {providerError === 'rate_limited'
-                    ? 'Restaurant lookup limit reached. Pick a Picky result or paste the website link.'
-                    : 'Live Dublin lookup is unavailable. Picky results and website links still work.'}
+                    ? 'Restaurant lookup limit reached. Pick a Platefully result or paste the website link.'
+                    : 'Live Dublin lookup is unavailable. Platefully results and website links still work.'}
                 </p>
               )}
               {attributionRequired && (

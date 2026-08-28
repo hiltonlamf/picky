@@ -73,10 +73,13 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ['var(--font-sora)', 'system-ui', 'sans-serif'],
+        // 'Twemoji Country Flags' is first in every stack on purpose: it is
+        // unicode-range-scoped to flag codepoints, so it only ever supplies
+        // flags (which Windows' emoji font lacks) and never affects text.
+        sans: ['Twemoji Country Flags', 'var(--font-sora)', 'system-ui', 'sans-serif'],
         // Bricolage Grotesque — headlines and buttons only.
-        display: ['var(--font-display)', 'var(--font-sora)', 'system-ui', 'sans-serif'],
-        mono: ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        display: ['Twemoji Country Flags', 'var(--font-display)', 'var(--font-sora)', 'system-ui', 'sans-serif'],
+        mono: ['Twemoji Country Flags', 'var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       backgroundImage: {
         // The signature Solar gradient: green → lime → aqua

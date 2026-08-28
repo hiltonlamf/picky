@@ -32,11 +32,13 @@ const MAX_PENDING_POLLS = 75;
 /** Raw dish counts, kept ONLY for the results_viewed event so the funnel stays
  *  comparable across this change. Everything on screen uses menuTallies. */
 function countDishes(sections: MenuSectionType[], filter: DietaryClassification | 'all') {
-  const dishes = sections.flatMap((s) => s.dishes).filter((d) => !d.deletedAt);
+  const dishes = sections.flatMap((section) =>
+    section.dishes.filter((dish) => !dish.deletedAt).map((dish) => ({ dish, sectionName: section.name }))
+  );
   if (filter === 'all') return dishes.length;
-  return dishes.filter((d) => {
-    if (filter === 'vegan') return d.classification === 'vegan';
-    if (filter === 'vegetarian') return isVeg(d);
+  return dishes.filter(({ dish, sectionName }) => {
+    if (filter === 'vegan') return dish.classification === 'vegan' && isVeg(dish, sectionName);
+    if (filter === 'vegetarian') return isVeg(dish, sectionName);
     return false;
   }).length;
 }
@@ -384,7 +386,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
   // something to point at. Same price context as the tally above.
   const countedTest = makeCountedTest(restaurant.sections);
   const isAsideDish = (sectionName: string, dish: DishType) =>
-    isVeg(dish) && !countedTest(sectionName, dish);
+    isVeg(dish, sectionName) && !countedTest(sectionName, dish);
 
   // One order everywhere: broadest first, narrowest last.
   const filters: { value: Filter; label: string; tally: CategoryTally }[] = [
