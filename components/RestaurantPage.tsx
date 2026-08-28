@@ -10,6 +10,7 @@ import ShareButton from '@/components/ShareButton';
 import FeedbackModal from '@/components/FeedbackModal';
 import FlagOutdatedButton from '@/components/FlagOutdatedButton';
 import SubmitMenuForm from '@/components/SubmitMenuForm';
+import InlineFeedbackNote from '@/components/InlineFeedbackNote';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { captureError, EVENTS } from '@/lib/analytics';
@@ -320,6 +321,18 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
           <p className="text-evergreen/80">{copy.body}</p>
         </div>
         <SubmitMenuForm restaurantId={restaurant.id} />
+        {/* Uploading the menu is the ask; this is for people who can tell us
+            something useful but don't have the file to hand. */}
+        <div className="mt-5">
+          <InlineFeedbackNote
+            surface="no_menu"
+            restaurantId={restaurant.id}
+            restaurantName={name}
+            prompt="Know where the menu is? Tell us"
+            placeholder="e.g. it's a photo album on their Facebook page, or only on Deliveroo"
+            context={`Outcome: ${reason ?? 'no_menu'}`}
+          />
+        </div>
         <div className="text-center mt-6">
           <Link href="/" className="btn-ghost text-sm">
             ← Try a different restaurant
@@ -340,6 +353,17 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
         <p className="text-sm text-evergreen/80 mb-6">
           The menu may be temporarily unavailable, or this website may require JavaScript to load.
         </p>
+        {/* This screen previously offered no way to tell us anything at all. */}
+        <div className="max-w-md mx-auto mb-6 text-left">
+          <InlineFeedbackNote
+            surface="parse_error"
+            restaurantId={restaurant.id}
+            restaurantName={restaurant.name ?? null}
+            prompt="Know where the menu is? Tell us"
+            placeholder="e.g. the menu is a PDF behind the 'Food' button"
+            context={restaurant.errorMessage ? `Error: ${restaurant.errorMessage}` : null}
+          />
+        </div>
         <Link href="/" className="btn-cta inline-block">
           ← Try a different link
         </Link>
@@ -533,7 +557,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
           <select
             id="menu-select"
             value={menuFilter}
-            onChange={(e) => { menuChosen.current = true; reportEngagement('menu_filter'); setMenuFilter(e.target.value); capture('menu_filter_changed', { menu_label: e.target.value, restaurant_id: restaurantId }); }}
+            onChange={(e) => { menuChosen.current = true; reportEngagement('menu_filter'); setMenuFilter(e.target.value); capture(EVENTS.MENU_FILTER_CHANGED, { menu_label: e.target.value, restaurant_id: restaurantId }); }}
             className="glass-light w-full sm:w-auto px-4 py-2.5 rounded-full text-sm font-medium text-forest focus:outline-none focus:ring-4 focus:ring-azalea-500/25"
           >
             {menuLabels.map((label) => (
@@ -552,7 +576,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
         {filters.map((f) => (
           <button
             key={f.value}
-            onClick={() => { reportEngagement('diet_filter'); setFilter(f.value); capture('filter_changed', { filter: f.value, restaurant_id: restaurantId }); }}
+            onClick={() => { reportEngagement('diet_filter'); setFilter(f.value); capture(EVENTS.FILTER_CHANGED, { filter: f.value, restaurant_id: restaurantId }); }}
             className={`flex-shrink-0 px-4 py-2.5 rounded-full text-sm font-semibold transition-colors duration-150 ${
               filter === f.value
                 ? 'bg-forest text-paper border-2 border-forest'
