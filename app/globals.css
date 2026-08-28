@@ -2,11 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Country flags on Windows.
+
+   Windows ships Segoe UI Emoji, which deliberately contains NO country-flag
+   glyphs — Microsoft's font renders a regional-indicator pair as its two
+   letters instead, so 🇮🇪 shows as a boxed "IE" in Chrome and Edge on Windows.
+   It is a font/OS policy decision, not a browser bug, and no CSS colour or
+   size rule can work around it: the glyphs simply are not in the font.
+
+   The fix is to supply a font that does contain them. This face is scoped by
+   `unicode-range` to the flag codepoints only, so the browser downloads the
+   78KB file solely when a flag is actually rendered, and every other character
+   on the page still uses Sora exactly as before.
+
+   Ranges:
+     U+1F1E6–1F1FF  regional indicator symbols (all two-letter country flags)
+     U+1F3F4        waving black flag — base of the subdivision sequences
+     U+E0060–E007F  tag characters, for 🏴󠁧󠁢󠁳󠁣󠁴󠁿 / 🏴󠁧󠁢󠁷󠁬󠁳󠁿 (Scotland, Wales)
+
+   Artwork: Twemoji by Twitter, CC-BY 4.0. Bundled via
+   country-flag-emoji-polyfill (MIT). Attribution is in README.md.
+--------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Twemoji Country Flags';
+  src: url('/fonts/TwemojiCountryFlags.woff2') format('woff2');
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0060-E007F;
+  font-display: swap;
+}
+
 @layer base {
   :root {
-    --font-sora: 'Sora', system-ui, sans-serif;
-    --font-display: 'Bricolage Grotesque', 'Sora', system-ui, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --font-sora: 'Twemoji Country Flags', 'Sora', system-ui, sans-serif;
+    --font-display: 'Twemoji Country Flags', 'Bricolage Grotesque', 'Sora', system-ui, sans-serif;
+    --font-mono: 'Twemoji Country Flags', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
     /* How far each section plate slides over the one above it. Section padding
        adds this back at the bottom, or the last line looks squashed. */
     --overlap: 46px;

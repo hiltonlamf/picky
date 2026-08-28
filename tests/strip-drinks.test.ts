@@ -53,4 +53,69 @@ describe('stripDrinksAndHeaders', () => {
     expect(cleaned.sections).toHaveLength(1);
     expect(countFoodItems(cleaned)).toBe(1);
   });
+
+  it('removes a shared protein-price section instead of treating choices as dishes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Protein Customization Options',
+        dishes: [
+          makeDish('Tofu', { price: '20.95', description: 'Customizable protein option' }),
+          makeDish('Vegetable', { price: '20.95', description: 'Customizable protein option' }),
+          makeDish('Chicken', { price: '23.50', classification: 'neither' }),
+        ],
+      },
+      { name: 'Curries', dishes: [makeDish('Green Curry')] },
+    ]);
+
+    expect(stripDrinksAndHeaders(menu).sections.map((section) => section.name)).toEqual(['Curries']);
+  });
+
+  it('removes a cluster of bare variations mixed into real dishes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Soups',
+        dishes: [
+          makeDish('Tom Yum Soup', { description: 'Hot and sour soup' }),
+          makeDish('Prawns', { price: '10', classification: 'neither' }),
+          makeDish('Chicken', { price: '10', classification: 'neither' }),
+          makeDish('Mushroom', { price: '9' }),
+          makeDish('Vegetables', { price: '9' }),
+        ],
+      },
+    ]);
+
+    expect(stripDrinksAndHeaders(menu).sections[0].dishes.map((dish) => dish.name)).toEqual(['Tom Yum Soup']);
+  });
+
+  it('corrects caviar rows the classifier marked vegetarian', () => {
+    const menu = makeMenu([
+      {
+        name: 'Caviar - Individual Options',
+        dishes: [
+          makeDish('Sevruga Royal', { classification: 'vegetarian' }),
+          makeDish('Oscietra Royal', { classification: 'unknown' }),
+        ],
+      },
+    ]);
+
+    const dishes = stripDrinksAndHeaders(menu).sections[0].dishes;
+    expect(dishes.map((dish) => dish.classification)).toEqual(['neither', 'neither']);
+    expect(dishes.every((dish) => dish.reason === 'Explicit fish or seafood ingredient')).toBe(true);
+  });
+
+  it('corrects explicit seafood while preserving plant-based lookalikes', () => {
+    const menu = makeMenu([
+      {
+        name: 'Appetisers',
+        dishes: [
+          makeDish('West Cork Rope Mussels', { classification: 'vegetarian' }),
+          makeDish('Oyster Mushroom Tempura', { classification: 'vegan' }),
+          makeDish('Plant-based tuna tostada', { classification: 'vegan' }),
+        ],
+      },
+    ]);
+
+    const dishes = stripDrinksAndHeaders(menu).sections[0].dishes;
+    expect(dishes.map((dish) => dish.classification)).toEqual(['neither', 'vegan', 'vegan']);
+  });
 });

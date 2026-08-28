@@ -1,5 +1,7 @@
 import type { Dish, MenuSection as MenuSectionType } from '@/types';
 import DishCard from './DishCard';
+import { modifierDishes } from '@/lib/menu-modifiers';
+import { effectiveDietaryClassification } from '@/lib/dietary-overrides';
 
 interface Props {
   section: MenuSectionType;
@@ -10,15 +12,22 @@ interface Props {
 }
 
 export default function MenuSection({ section, activeFilter, isAside }: Props) {
-  const visibleDishes = section.dishes.filter((dish) => {
-    if (!activeFilter || activeFilter === 'all') return true;
-    if (activeFilter === 'vegan') return dish.classification === 'vegan';
-    // 'unknown' surfaces here (not under vegan — the higher-trust claim per
-    // CLAUDE.md) as a "maybe, please confirm" option instead of being hidden.
-    if (activeFilter === 'vegetarian')
-      return dish.classification === 'vegan' || dish.classification === 'vegetarian' || dish.classification === 'unknown';
-    return true;
-  });
+  const modifiers = modifierDishes(section);
+  const visibleDishes = section.dishes
+    .filter((dish) => !modifiers.has(dish))
+    .map((dish) => {
+      const classification = effectiveDietaryClassification(section.name, dish);
+      return classification === dish.classification ? dish : { ...dish, classification };
+    })
+    .filter((dish) => {
+      if (!activeFilter || activeFilter === 'all') return true;
+      if (activeFilter === 'vegan') return dish.classification === 'vegan';
+      // 'unknown' surfaces here (not under vegan — the higher-trust claim per
+      // CLAUDE.md) as a "maybe, please confirm" option instead of being hidden.
+      if (activeFilter === 'vegetarian')
+        return dish.classification === 'vegan' || dish.classification === 'vegetarian' || dish.classification === 'unknown';
+      return true;
+    });
 
   if (visibleDishes.length === 0) return null;
 

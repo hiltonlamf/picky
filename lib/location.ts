@@ -520,7 +520,7 @@ async function fetchStaticHtml(url: string): Promise<string | null> {
       signal: controller.signal,
       headers: {
         // An ordinary browser-like request, deliberately not Jina or Firecrawl.
-        'User-Agent': 'Picky location verifier (+https://picky-app.com)',
+        'User-Agent': 'Platefully location verifier (+https://platefully.vercel.app)',
         Accept: 'text/html,application/xhtml+xml',
       },
     });

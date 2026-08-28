@@ -52,6 +52,17 @@ describe('classifyDishRole', () => {
     });
   });
 
+  describe('shared protein choices', () => {
+    it('does not treat a customization price row as a dish or side', () => {
+      expect(role('Protein Customization Options', 'Tofu')).toBe('modifier');
+      expect(role('Choice of protein', 'Vegetable')).toBe('modifier');
+    });
+
+    it('does not blacklist a real dish with the same short name', () => {
+      expect(role('Wood Fired Pizzas', 'Mushroom')).toBe('counted');
+    });
+  });
+
   describe('the simple-name guard', () => {
     it('drops bread-and-butter but keeps a composed sourdough starter', () => {
       expect(role('Snacks + Starters', 'Bread + Butter')).toBe('staple');

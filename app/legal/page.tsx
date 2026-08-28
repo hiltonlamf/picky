@@ -7,9 +7,9 @@ export default function LegalPage() {
   return (
     <PolicyPage title="Terms of use" updated="18 August 2026">
       <section>
-        <h2>What Picky provides</h2>
+        <h2>What Platefully provides</h2>
         <p>
-          Picky uses automated menu reading and human review to help people explore vegetarian and
+          Platefully uses automated menu reading and human review to help people explore vegetarian and
           vegan options. Results are informational, may be incomplete, and are not medical or allergy
           advice. Menus and ingredients change, so always confirm dietary requirements directly with
           the restaurant.
@@ -36,7 +36,7 @@ export default function LegalPage() {
       <section>
         <h2>Availability and changes</h2>
         <p>
-          We may change, suspend, or withdraw parts of Picky and update these terms as the service
+          We may change, suspend, or withdraw parts of Platefully and update these terms as the service
           develops. The service is provided without a guarantee that every restaurant or menu can be
           found, read, or classified correctly.
         </p>
