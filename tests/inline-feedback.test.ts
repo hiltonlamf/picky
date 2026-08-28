@@ -10,7 +10,9 @@ const results = readFileSync('components/RestaurantPage.tsx', 'utf8');
 describe('inline feedback capture', () => {
   it('every surface it can post has a label in the admin inbox', () => {
     // A note that lands as a raw slug in the inbox is a note nobody reads.
-    const posted = [...component.matchAll(/'(\w+_note)'/g)].map((m) => m[1]);
+    // match() rather than spreading matchAll(): the project's tsconfig target
+    // needs downlevelIteration to spread an iterator.
+    const posted = (component.match(/'\w+_note'/g) ?? []).map((m) => m.slice(1, -1));
     expect(posted.length).toBeGreaterThan(0);
     const labelled = new Set(INLINE_FEEDBACK_TYPES.map((t) => t.value));
     for (const type of posted) expect(labelled.has(type), type).toBe(true);
