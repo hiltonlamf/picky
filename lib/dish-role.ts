@@ -1,4 +1,5 @@
 import type { Dish } from '@/types';
+import { isModifierSectionName } from '@/lib/menu-modifiers';
 
 // What a dish IS, as far as a hungry vegetarian is concerned — no LLM, pure
 // string heuristics (same spirit as menuAsDishReason in lib/review-flags.ts).
@@ -24,10 +25,12 @@ import type { Dish } from '@/types';
 //
 // When in doubt we COUNT the dish. Over-counting slightly is acceptable;
 // under-counting makes a good restaurant look hostile to vegetarians, which is
-// the worse failure. Every excluded dish is still shown on the menu — this
-// decides what goes in the headline number, never what a diner gets to see.
+// the worse failure. Every excluded FOOD dish is still shown on the menu —
+// this decides what goes in the headline number, never what a diner gets to
+// see. Modifier rows are the exception because they are ordering metadata, not
+// dishes; those are intentionally hidden by lib/menu-modifiers.ts.
 
-export type DishRole = 'counted' | 'dessert' | 'condiment' | 'staple';
+export type DishRole = 'counted' | 'dessert' | 'condiment' | 'staple' | 'modifier';
 
 export interface DishRoleVerdict {
   role: DishRole;
@@ -309,6 +312,10 @@ export function classifyDishRole(
   const section = normalize(sectionName ?? '');
   const name = normalize(dish.name ?? '');
   if (!name) return COUNTED;
+
+  // A shared protein/ingredient price ladder describes how to order the real
+  // dishes around it; none of its rows is a dish or an aside in its own right.
+  if (isModifierSectionName(section)) return { role: 'modifier', rule: 'protein/ingredient choice' };
 
   // A dessert section is a dessert section regardless of how elaborate the
   // dish name is — "Burnt Basque Cheesecake, Caramelised Banana" is still pud.

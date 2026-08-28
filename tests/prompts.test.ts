@@ -24,6 +24,17 @@ describe('SYSTEM_PROMPT', () => {
     expect(SYSTEM_PROMPT).toMatch(/section headers used as dish names/i);
   });
 
+  it('keeps protein price ladders attached to real dishes instead of inventing dishes', () => {
+    expect(SYSTEM_PROMPT).toMatch(/shared ladder/i);
+    expect(SYSTEM_PROMPT).toMatch(/Tofu and Vegetable are NOT separate dishes/i);
+    expect(SYSTEM_PROMPT).toMatch(/KEEP each real dish/i);
+  });
+
+  it('identifies caviar and fish roe as non-vegetarian animal products', () => {
+    expect(SYSTEM_PROMPT).toMatch(/Caviar and fish roe \(fish eggs\)/i);
+    expect(SYSTEM_PROMPT).toMatch(/Sevruga, Oscietra, ikura, tobiko, and masago/i);
+  });
+
   // A Pad Thai offered with tofu, chicken or prawn is one menu line a
   // vegetarian CAN eat — labelling it "neither" hides a real option from them.
   it('treats a diner-chosen protein as vegetarian when a veg choice exists', () => {
@@ -94,6 +105,7 @@ describe('buildVerifyPrompt (Sonnet audit that makes Haiku extraction safe)', ()
     expect(prompt).toMatch(/fish sauce/i);
     expect(prompt).toMatch(/gelatin/i);
     expect(prompt).toMatch(/stock/i);
+    expect(prompt).toMatch(/caviar and fish roe \(fish eggs\)/i);
   });
 
   it('instructs conservative downgrading rather than benefit of the doubt', () => {
