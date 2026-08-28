@@ -124,6 +124,16 @@ export const SITE_FEEDBACK_TYPES = [
   { value: 'other', label: 'Something else' },
 ];
 
+// Free-text notes captured inline at the moments the pipeline breaks: the
+// menu picker, the no-menu screen and the parse-error screen. Not a chooser —
+// these have no options, so the value is set by the surface. Listed here so
+// the admin inbox labels them instead of showing a raw slug.
+export const INLINE_FEEDBACK_TYPES = [
+  { value: 'menu_choice_note', label: 'Menu picker — wrong or missing menus' },
+  { value: 'no_menu_note', label: 'No menu found — reader knows where it is' },
+  { value: 'parse_error_note', label: 'Analysis failed — reader knows where it is' },
+];
+
 // Guide-level feedback (not tied to one restaurant) — shown on the city guide.
 export const GUIDE_FEEDBACK_TYPES = [
   { value: 'suggest_restaurant', label: 'Suggest a restaurant to add to this guide' },

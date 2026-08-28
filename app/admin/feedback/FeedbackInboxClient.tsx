@@ -12,10 +12,17 @@ import {
   FEEDBACK_RESOLUTION,
   PROPOSED_CLASSIFICATION_OPTIONS,
   type FeedbackResolveAction,
+  INLINE_FEEDBACK_TYPES,
 } from '@/lib/dietary-config';
 
 const ISSUE_LABELS: Record<string, string> = Object.fromEntries(
-  [...REPORT_ISSUE_TYPES, ...GENERAL_FEEDBACK_TYPES, ...GUIDE_FEEDBACK_TYPES, ...SITE_FEEDBACK_TYPES].map(
+  [
+    ...REPORT_ISSUE_TYPES,
+    ...GENERAL_FEEDBACK_TYPES,
+    ...GUIDE_FEEDBACK_TYPES,
+    ...SITE_FEEDBACK_TYPES,
+    ...INLINE_FEEDBACK_TYPES,
+  ].map(
     (t) => [t.value, t.label]
   )
 );

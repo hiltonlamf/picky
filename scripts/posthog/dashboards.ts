@@ -319,6 +319,17 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
         [ev('$rageclick')],
         { breakdownFilter: { breakdown: '$pathname', breakdown_type: 'event' } }
       ),
+      trend(
+        'Name search that found nothing',
+        'How often the Dublin name search comes up empty. Fires but was on no dashboard, so a search feature that never finds anything would have looked like silence.',
+        [ev('restaurant_search_no_results')]
+      ),
+      trend(
+        'Guide filter usage',
+        'Area and cuisine filters on the city guide — whether the filtering added in #31 is used at all.',
+        [ev('guide_filter_changed')],
+        { breakdownFilter: { breakdown: 'filter', breakdown_type: 'event' } }
+      ),
     ],
   },
   {
@@ -342,6 +353,41 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
         [ev('dish_reported')],
         { breakdownFilter: { breakdown: 'issue_type', breakdown_type: 'event' } }
       ),
+      {
+        // The voting feature shipped in #34 with all three events wired and
+        // CITY_VOTE_FUNNEL exported, but nothing on any dashboard referenced
+        // them — so the one thing the launch post asks people to do had no
+        // visibility at all.
+        name: 'City vote funnel: CTA → started → submitted',
+        description:
+          'Where the "vote for the next city" ask loses people. A big drop from started to submitted means the form is too much work; a low CTA count means the ask is buried.',
+        query: {
+          kind: 'InsightVizNode',
+          source: {
+            kind: 'FunnelsQuery',
+            series: [
+              ev('city_vote_cta_clicked'),
+              ev('city_vote_started'),
+              ev('city_vote_submitted'),
+            ],
+            dateRange: { date_from: '-30d' },
+            properties: NOT_INTERNAL,
+            funnelsFilter: { funnelVizType: 'steps' },
+          },
+        },
+      },
+      trend(
+        'Votes by city — what to build next',
+        'The actual product-direction signal from /vote.',
+        [ev('city_vote_submitted')],
+        { breakdownFilter: { breakdown: 'city', breakdown_type: 'event' } }
+      ),
+      trend(
+        'Inline feedback — notes at the moments we break',
+        'Free-text notes left on the menu picker and the error screens. These are the highest-signal reports we get: the person could see the real menu when we could not.',
+        [ev('inline_feedback_submitted')],
+        { breakdownFilter: { breakdown: 'surface', breakdown_type: 'event' } }
+      ),
       trend('Share rate', 'Shares vs results seen — the organic-growth read.', [
         ev('share_clicked'),
         ev('results_viewed'),
@@ -353,7 +399,7 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
       }),
       {
         name: 'Retention — do they come back and search again?',
-        description: 'Weekly retention on search_submitted. The honest read on whether Picky is useful more than once.',
+        description: 'Weekly retention on search_submitted. The honest read on whether Platefully is useful more than once.',
         query: {
           kind: 'InsightVizNode',
           source: {
