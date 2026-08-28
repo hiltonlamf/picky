@@ -8,8 +8,10 @@ import { modifierDishes } from '@/lib/menu-modifiers';
 // A diner only sees ONE menu per visit, so a restaurant that sums 44 veg dishes
 // across breakfast/lunch/dinner really offers ~11 at any sitting. We therefore
 // rank and headline by the BEST SINGLE MENU's veg count, show the per-menu
-// breakdown, and highlight a few example dishes (the priciest veg dishes — the
-// most expensive item is usually the most substantial, i.e. a "main").
+// breakdown, and highlight a few example dishes. Section meaning comes first:
+// mains/curries/stir-fries/noodles outrank starters and sides even when the
+// extractor could not attach a price. Price ranks dishes WITHIN that semantic
+// tier; it is evidence of substance, not the definition of it.
 //
 // The headline count is COUNTED dishes only — desserts, sauces, plain breads
 // and rice are tallied separately as "sides & sweets" (see lib/dish-role.ts).
@@ -329,8 +331,8 @@ export interface GuideInsights {
   perMenu: PerMenuVeg[];
   /** All live dishes across every menu (sides included). */
   totalDishes: number;
-  /** Up to 3 example veg dishes — priciest first (≈ the mains); falls back to
-   *  veg dishes in menu order for tasting/prix-fixe menus with no prices. */
+  /** Up to 3 example veg dishes — known main sections first, then price within
+   *  that tier. Other courses fill any slots left after the mains. */
   highlights: HighlightDish[];
   /** True when the highlight list isn't a real showcase: fewer than 3 veg
    *  dishes were found at all, or every highlighted dish comes from a
@@ -357,6 +359,101 @@ const NON_MAIN_SECTION_KEYWORDS = [
 function isNonMainSectionName(name: string): boolean {
   const lower = name.toLowerCase();
   return NON_MAIN_SECTION_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+// Strong menu-language signals that a section contains the core of the meal.
+// These beat price when choosing highlights: an unpriced curry is still a more
+// representative Thai dinner than a €10 spring roll. Kept to section names,
+// never dish names, so "side of curry sauce" cannot promote itself.
+const EXPLICIT_MAIN_SECTION_RE =
+  /\b(?:mains?|main courses?|large(?:r)? (?:dishes|plates)|principal dishes?|signature dishes?|chef'?s specials?)\b/i;
+
+const CUISINE_MAIN_SECTION_PATTERNS = [
+  // Generic course headings, including the languages seen in our Dublin and
+  // Amsterdam menus. "Entrée" is deliberately absent: it means a starter on
+  // French menus and a main on American ones, so it is not a safe signal.
+  /\b(?:hoofdgerechten?|hoofd|plats? principaux?|les plats|platos? principales?|piatti principali|hauptgerichte?)\b/i,
+
+  // Asian and South Asian main formats.
+  /\b(?:curr(?:y|ies)|stir[\s-]?fr(?:y|ies)|wok|noodles?|fried rice|rice (?:dishes?|bowls?|plates?|tables?)|ramen|udon|soba|pho|laksa|biryani|thalis?|tandoor(?:i)?|bibimbap|chowmein|thukpa|sushi|sashimi)\b/i,
+  /^\s*rice\s*$/i,
+
+  // Italian and broadly European main formats.
+  /\b(?:pasta|risotto|pizzas?|secondi|grills?|barbecue|bbq|roasts?|pies?)\b/i,
+
+  // Protein-led headings. These help mixed menus whose sections are named for
+  // the centre of the plate rather than the course (for example "Fish" or
+  // "From the Grill"). Only vegetarian candidates inside them are considered.
+  /^(?:steaks?|meats?|fish|seafood|chicken|poultry|beef|lamb|pork)$/i,
+  /^(?:meats?|fish|seafood)(?:\s*(?:&|and|\/)\s*(?:meats?|fish|seafood))+$/i,
+  /\b(?:steaks?|meats?|fish|seafood|chicken|poultry|beef|lamb|pork) (?:dishes|selection|specials?)\b/i,
+  /\b(?:from|on) the (?:grill|sea|shell|land)\b/i,
+  /\bfish\s*(?:&|\+|and)\s*chips\b/i,
+
+  // Some menus collect their meat-free mains under a dietary heading rather
+  // than repeating the cuisine format (for example "Veggies - Shakahari").
+  /^(?:vegetarian|vegan|veggie|veggies)(?:\s*(?:\/|&|and|-)\s*(?:vegetarian|vegan|veggie|veggies|shakahari))?(?:\s+(?:dishes|options?))?$/i,
+  /\bvegetarian dishes?\b/i,
+
+  // Common full-meal formats on American, Mexican and café menus.
+  /\b(?:burgers?|sandwiches?|tacos?|tostadas?|burritos?|quesadillas?|kebabs?)\b/i,
+];
+
+// Explicitly smaller courses. They remain valid fallbacks when a restaurant
+// has no main-like section; they simply do not displace a known main because
+// they happen to carry a price while that main does not.
+const SMALL_SECTION_RE =
+  /\b(?:starters?|appeti[sz]ers?|little dishes?|small(?:er)? (?:plates?|bites?)|bar bites?|snacks?|nibbles?|sides?|side orders?|accompaniments?|extras?|supplements?|desserts?|sweets?|puddings?|breads?|bakery|pastries|salads?|soups?|dips?|sauces?|condiments?)\b/i;
+
+function highlightSectionPriority(name: string): number {
+  // An explicit course label wins in compound headings such as "Vegetarian
+  // Mains". Otherwise accompaniment language wins over a format keyword, so
+  // "Rice & Breads" is not mistaken for the same course as "Rice Bowls".
+  if (EXPLICIT_MAIN_SECTION_RE.test(name)) return 0;
+  if (SMALL_SECTION_RE.test(name)) return 2;
+  if (CUISINE_MAIN_SECTION_PATTERNS.some((pattern) => pattern.test(name))) return 0;
+  return 1;
+}
+
+const SHARED_PRICE_CATEGORIES = [
+  /\bcurr(?:y|ies)\b/i,
+  /\bstir[\s-]?fr(?:y|ies)\b/i,
+  /\bnoodles?\b/i,
+  /\brice(?:\s+dishes?)?\b/i,
+];
+
+/**
+ * Recover a shared choice-price ladder for an unpriced main section.
+ *
+ * Existing Baan Thai rows already say "Customizable protein option for
+ * Curries, Stir Fries, Noodles & Rice", but the old extractor stored the
+ * €20.95–€27.95 prices on those option rows instead of their real dishes. We
+ * use that explicit description as the join: no description naming the target
+ * section means no inferred price.
+ */
+function sharedModifierPriceForSection(sections: MenuSection[], sectionName: string): string | null {
+  if (highlightSectionPriority(sectionName) !== 0) return null;
+  const matchingCategories = SHARED_PRICE_CATEGORIES.filter((pattern) => pattern.test(sectionName));
+  if (matchingCategories.length === 0) return null;
+
+  const prices: number[] = [];
+  let explicitlyApplies = false;
+  for (const section of sections) {
+    const modifiers = modifierDishes(section);
+    modifiers.forEach((dish) => {
+      const description = dish.description ?? '';
+      if (!matchingCategories.some((pattern) => pattern.test(description))) return;
+      explicitlyApplies = true;
+      const price = parsePrice(dish.price);
+      if (price !== null && price > 0) prices.push(price);
+    });
+  }
+  if (!explicitlyApplies || prices.length < 2) return null;
+
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const number = (value: number) => String(Number(value.toFixed(2)));
+  return min === max ? number(min) : `${number(min)}–${number(max)}`;
 }
 
 /** Compute the guide card's numbers from a restaurant's sections. Groups by
@@ -425,16 +522,25 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   }, 0);
 
   // Highlights: a few standout veg dishes, de-duped by normalized name so the
-  // same dish on several menus counts once. Priced dishes are ranked priciest-
-  // first (most expensive ≈ most substantial ≈ a main); tasting/prix-fixe menus
-  // have no per-dish price, so we fall back to veg dishes in menu order rather
-  // than showing nothing.
+  // same dish on several menus counts once. A human reads the section first:
+  // curries, stir-fries and noodles are mains whether or not each row repeats a
+  // price. Price sorts within that semantic tier; when main prices tie, prefer
+  // different sections so the card can showcase the breadth of the menu rather
+  // than three adjacent curries.
   const seen = new Set<string>();
-  type Candidate = { name: string; price: number; displayPrice: string | null; sectionName: string };
-  const pricedVeg: Candidate[] = [];
-  const unpricedVeg: Candidate[] = [];
+  type Candidate = {
+    name: string;
+    price: number | null;
+    displayPrice: string | null;
+    sectionName: string;
+    sectionPriority: number;
+    order: number;
+  };
+  const candidates: Candidate[] = [];
+  let candidateOrder = 0;
   for (const section of restaurant.sections) {
     const modifiers = modifierDishes(section);
+    const inheritedPrice = sharedModifierPriceForSection(restaurant.sections, section.name);
     for (const dish of liveDishes(section)) {
       if (modifiers.has(dish)) continue;
       // Counted dishes only — a card must never headline a naan or a sorbet.
@@ -442,21 +548,49 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
       const key = normalizeDishName(dish.name);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      const price = parsePrice(dish.price);
-      const candidate = {
+      const effectivePrice = dish.price ?? inheritedPrice;
+      candidates.push({
         name: dish.name.trim(),
-        price: price ?? 0,
-        displayPrice: formatPrice(dish.price),
+        price: parsePrice(effectivePrice),
+        displayPrice: formatPrice(effectivePrice),
         sectionName: section.name,
-      };
-      if (price === null) unpricedVeg.push(candidate);
-      else pricedVeg.push(candidate);
+        sectionPriority: highlightSectionPriority(section.name),
+        order: candidateOrder++,
+      });
     }
   }
-  const topHighlights = [...pricedVeg.sort((a, b) => b.price - a.price), ...unpricedVeg].slice(
-    0,
-    MAX_HIGHLIGHTS
+
+  const ranked = candidates.sort(
+    (a, b) =>
+      Number(a.sectionPriority !== 0) - Number(b.sectionPriority !== 0) ||
+      Number(b.price !== null) - Number(a.price !== null) ||
+      (b.price ?? 0) - (a.price ?? 0) ||
+      a.order - b.order
   );
+
+  const topHighlights: Candidate[] = [];
+  const selected = new Set<Candidate>();
+  const representedSections = new Set<string>();
+  while (topHighlights.length < MAX_HIGHLIGHTS) {
+    const first = ranked.find((candidate) => !selected.has(candidate));
+    if (!first) break;
+
+    // Section breadth is only a tiebreak. It gives Baan Thai one curry, one
+    // stir-fry and one noodle/rice dish because all share the same price range,
+    // without replacing a €16.95 noodle elsewhere with a €12.45 one merely to
+    // reach another section.
+    const tied = ranked.filter((candidate) =>
+      !selected.has(candidate) &&
+      (candidate.sectionPriority === 0) === (first.sectionPriority === 0) &&
+      candidate.price === first.price
+    );
+    const candidate = first.sectionPriority === 0
+      ? (tied.find((item) => !representedSections.has(item.sectionName.toLowerCase().trim())) ?? first)
+      : first;
+    selected.add(candidate);
+    representedSections.add(candidate.sectionName.toLowerCase().trim());
+    topHighlights.push(candidate);
+  }
   const highlights: HighlightDish[] = topHighlights.map((h) => ({ name: h.name, price: h.displayPrice }));
   const highlightsAreThin =
     highlights.length < MAX_HIGHLIGHTS || topHighlights.every((h) => isNonMainSectionName(h.sectionName));

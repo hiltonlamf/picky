@@ -199,25 +199,120 @@ describe('guideInsights', () => {
   it('does not count, highlight or tally shared protein choices as sides', () => {
     const r = restaurant([
       section('Protein Customization Options', [
-        dish('Tofu', 'unknown', '€20.95'),
-        dish('Vegetable', 'unknown', '€20.95'),
-        dish('Chicken', 'neither', '€23.50'),
+        {
+          ...dish('Tofu', 'unknown', '€20.95'),
+          description: 'Customizable protein option for Curries, Stir Fries, Noodles & Rice',
+        },
+        {
+          ...dish('Vegetable', 'unknown', '€20.95'),
+          description: 'Customizable protein option for Curries, Stir Fries, Noodles & Rice',
+        },
+        {
+          ...dish('Chicken', 'neither', '€23.50'),
+          description: 'Customizable protein option for Curries, Stir Fries, Noodles & Rice',
+        },
+        {
+          ...dish('Jumbo Prawns', 'neither', '€27.95'),
+          description: 'Customizable protein option for Curries, Stir Fries, Noodles & Rice',
+        },
       ]),
       section('Curries', [
-        dish('Green Curry', 'vegan', '€20.95–€27.95'),
-        dish('Red Curry', 'vegan', '€20.95–€27.95'),
-        dish('Vegan Yellow Curry', 'vegan', '€20.95–€27.95'),
+        dish('Green Curry', 'vegan'),
+        dish('Red Curry', 'vegan'),
+      ]),
+      section('Stir-Fry', [
+        dish('Basil & Fresh Chillies', 'vegan'),
+      ]),
+      section('Noodles & Rice Dishes', [
+        dish('Pad Thai', 'vegetarian'),
+      ]),
+      section('Little Dishes', [
+        dish("'Som Tam' Carrot Salad", 'vegan', '€17'),
+        dish('Vegetarian Spring Rolls', 'vegetarian', '€10'),
       ]),
     ]);
 
     const ins = guideInsights(r);
-    expect(ins.maxVegOptions).toBe(3);
+    expect(ins.maxVegOptions).toBe(6);
     expect(ins.asideCount).toBe(0);
-    expect(ins.totalDishes).toBe(3);
-    expect(ins.highlights.map((highlight) => highlight.name)).toEqual([
-      'Green Curry',
-      'Red Curry',
-      'Vegan Yellow Curry',
+    expect(ins.totalDishes).toBe(6);
+    expect(ins.highlights).toEqual([
+      { name: 'Green Curry', price: '€20.95–€27.95' },
+      { name: 'Basil & Fresh Chillies', price: '€20.95–€27.95' },
+      { name: 'Pad Thai', price: '€20.95–€27.95' },
+    ]);
+  });
+
+  it('prefers an unpriced main over a more expensive starter', () => {
+    const r = restaurant([
+      section('Little Dishes', [dish('Expensive starter', 'vegan', '€18')]),
+      section('Curries', [dish('Unpriced curry', 'vegan')]),
+    ]);
+    expect(guideInsights(r).highlights.map((highlight) => highlight.name)).toEqual([
+      'Unpriced curry',
+      'Expensive starter',
+    ]);
+  });
+
+  it.each([
+    'Rice & Noodles',
+    'Steaks and Grills',
+    'Meat & Fish',
+    'Pasta e Risotto',
+    'Burgers',
+    'Veggies - Shakahari',
+    'Hoofdgerechten',
+  ])('recognises cuisine-specific main section %s', (mainSection) => {
+    const r = restaurant([
+      section('Starters', [dish('Priced starter', 'vegan', '€19')]),
+      section(mainSection, [dish('Representative main', 'vegan')]),
+    ]);
+    expect(guideInsights(r).highlights[0]?.name).toBe('Representative main');
+  });
+
+  it('does not treat the ambiguous French course heading Entrées as a main', () => {
+    const r = restaurant([
+      section('Entrées', [dish('French starter', 'vegan', '€14')]),
+      section('Plats principaux', [dish('French main', 'vegan')]),
+    ]);
+    expect(guideInsights(r).highlights[0]?.name).toBe('French main');
+  });
+
+  it('keeps Rice & Breads in the accompaniment tier', () => {
+    const r = restaurant([
+      section('Rice & Breads', [dish('Sweet Peshawari', 'vegetarian', '€5')]),
+      section('Vegetarian Mains', [dish('Paneer main', 'vegetarian')]),
+    ]);
+    expect(guideInsights(r).highlights[0]?.name).toBe('Paneer main');
+  });
+
+  it('does not diversify across unrecognised sections', () => {
+    const r = restaurant([
+      section('Seasonal Menu', [
+        dish('First substantial plate', 'vegan', '€22'),
+        dish('Second substantial plate', 'vegan', '€20'),
+      ]),
+      section('House Selection', [dish('Bread from Louf', 'vegetarian', '€6')]),
+    ]);
+    expect(guideInsights(r).highlights.map((highlight) => highlight.name)).toEqual([
+      'First substantial plate',
+      'Second substantial plate',
+      'Bread from Louf',
+    ]);
+  });
+
+  it('uses section breadth only to break equal-price main ties', () => {
+    const r = restaurant([
+      section('Curries', [
+        dish('Premium curry', 'vegan', '€22'),
+        dish('Second curry', 'vegan', '€20'),
+      ]),
+      section('Noodles', [dish('Budget noodles', 'vegan', '€12')]),
+    ]);
+    expect(guideInsights(r).highlights.map((highlight) => highlight.name)).toEqual([
+      'Premium curry',
+      'Second curry',
+      'Budget noodles',
     ]);
   });
 
