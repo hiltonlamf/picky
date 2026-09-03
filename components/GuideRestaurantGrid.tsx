@@ -147,7 +147,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
 
   return (
     <section aria-label="Restaurant filters" aria-busy={isPending} className="mb-6">
-      {isPending && <PlatefullyLoader overlay message="Freshening your guide…" />}
+      {isPending && <PlatefullyLoader overlay message="Tofu-analysing now" />}
       {(areas.length > 0 || cuisines.length > 0) && (
         <div className="mb-5">
           <p className="text-sm text-forest/75 mb-4">{filterPrompt}</p>
