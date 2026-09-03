@@ -356,6 +356,122 @@
   animation: progress-pulse 1.5s ease-in-out infinite;
 }
 
+/* Branded route/filter loader. The illustrations are inline SVG so the first
+   loading state never waits for a separate image request of its own. */
+.platefully-loader {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(134, 220, 171, 0.2), transparent 32rem),
+    #fff8f3;
+  color: #12352a;
+}
+
+.platefully-loader--page {
+  min-height: calc(100vh - 62px);
+  padding: 4rem 1.5rem;
+}
+
+.platefully-loader--overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  padding: 2rem 1.25rem;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(134, 220, 171, 0.24), transparent 30rem),
+    rgba(255, 248, 243, 0.96);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+}
+
+.platefully-loader-content {
+  width: min(100%, 34rem);
+  text-align: center;
+}
+
+.platefully-loader-pieces {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: clamp(0.1rem, 1.2vw, 0.65rem);
+  min-height: 7.5rem;
+}
+
+.platefully-loader-piece {
+  position: relative;
+  width: clamp(3.2rem, 12vw, 4.65rem);
+  padding-bottom: 0.7rem;
+  transform-origin: 50% 100%;
+  animation: platefully-bounce 1.35s cubic-bezier(0.45, 0.05, 0.25, 1) infinite;
+}
+
+.platefully-loader-piece--plate-left { animation-delay: -0.72s; }
+.platefully-loader-piece--tofu { animation-delay: -0.54s; }
+.platefully-loader-piece--broccoli { animation-delay: -0.36s; }
+.platefully-loader-piece--tomatoes { animation-delay: -0.18s; }
+.platefully-loader-piece--plate-right { animation-delay: 0s; }
+
+.platefully-loader-icon {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 5px 3px rgba(18, 53, 42, 0.12));
+}
+
+.platefully-loader-shadow {
+  position: absolute;
+  left: 22%;
+  right: 22%;
+  bottom: 0.3rem;
+  height: 0.38rem;
+  border-radius: 999px;
+  background: rgba(18, 53, 42, 0.18);
+  animation: platefully-shadow 1.35s ease-in-out infinite;
+}
+
+.platefully-loader-piece--plate-left .platefully-loader-shadow { animation-delay: -0.72s; }
+.platefully-loader-piece--tofu .platefully-loader-shadow { animation-delay: -0.54s; }
+.platefully-loader-piece--broccoli .platefully-loader-shadow { animation-delay: -0.36s; }
+.platefully-loader-piece--tomatoes .platefully-loader-shadow { animation-delay: -0.18s; }
+
+.platefully-loader-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  font-family: var(--font-display), var(--font-sora), system-ui, sans-serif;
+  font-size: clamp(1.65rem, 5vw, 2.1rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.platefully-loader-brand svg {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  color: #00a35a;
+}
+
+.platefully-loader-message {
+  margin-top: 0.45rem;
+  color: rgba(18, 53, 42, 0.72);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+@keyframes platefully-bounce {
+  0%, 100% { transform: translateY(0) scaleX(1.04) scaleY(0.96); }
+  42% { transform: translateY(-1.75rem) scaleX(0.98) scaleY(1.03); }
+  58% { transform: translateY(-1.75rem) scaleX(0.98) scaleY(1.03); }
+}
+
+@keyframes platefully-shadow {
+  0%, 100% { opacity: 0.28; transform: scaleX(1); }
+  50% { opacity: 0.1; transform: scaleX(0.58); }
+}
+
 /* Respect the OS-level reduce-motion preference: the AI trace panel and
    several loading indicators otherwise animate indefinitely. */
 @media (prefers-reduced-motion: reduce) {

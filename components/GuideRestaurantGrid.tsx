@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { Restaurant } from '@/types';
 import { EVENTS } from '@/lib/analytics';
 import { capture } from '@/lib/posthog-client';
+import PlatefullyLoader from './PlatefullyLoader';
 import RestaurantCard from './RestaurantCard';
 
 function selectedValues(current: URLSearchParams, key: string): string[] {
@@ -105,6 +106,7 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
   const selectedCuisines = selectedValues(searchParams, 'cuisine');
   const [draftAreas, setDraftAreas] = useState(selectedAreas);
   const [draftCuisines, setDraftCuisines] = useState(selectedCuisines);
+  const [isPending, startTransition] = useTransition();
   const areas = useMemo(
     () => Array.from(new Set(restaurants.flatMap(restaurantAreas))).sort(),
     [restaurants]
@@ -138,11 +140,14 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
       area_count: draftAreas.length,
       cuisine_count: draftCuisines.length,
     });
-    router.replace(updateUrl(pathname, searchParams, draftAreas, draftCuisines), { scroll: false });
+    startTransition(() => {
+      router.replace(updateUrl(pathname, searchParams, draftAreas, draftCuisines), { scroll: false });
+    });
   };
 
   return (
-    <section aria-label="Restaurant filters" className="mb-6">
+    <section aria-label="Restaurant filters" aria-busy={isPending} className="mb-6">
+      {isPending && <PlatefullyLoader overlay message="Tofu-analysing now" />}
       {(areas.length > 0 || cuisines.length > 0) && (
         <div className="mb-5">
           <p className="text-sm text-forest/75 mb-4">{filterPrompt}</p>
@@ -155,10 +160,10 @@ export default function GuideRestaurantGrid({ restaurants }: { restaurants: Rest
             )}
             <button
               onClick={applyFilters}
-              disabled={!filtersChanged}
+              disabled={!filtersChanged || isPending}
               className="inline-flex min-h-[42px] items-center justify-center rounded-xl bg-azalea-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-azalea-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-azalea-500/35 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Apply filters
+              {isPending ? 'Applying…' : 'Apply filters'}
             </button>
             {(draftAreas.length > 0 || draftCuisines.length > 0) && <button onClick={() => { setDraftAreas([]); setDraftCuisines([]); }} className="text-sm text-picky-700 underline">Clear selections</button>}
           </div>
