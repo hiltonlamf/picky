@@ -1,15 +1,15 @@
 import { NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { extractMenuResumable, mergeMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE, DEFAULT_ESCALATION_BUDGET } from '@/lib/menu-extract';
+import { extractCandidatesResumable, mergeMenus, mergePartialMenus, selectSubstantialMenus, sumUsage, ExtractContext, BLOCKED_MENU_MESSAGE, DEFAULT_ESCALATION_BUDGET, MIN_FOOD_ITEMS } from '@/lib/menu-extract';
 import { getMenuCandidates, saveMenuCandidates, saveClassifiedMenu, markRestaurantError, markRestaurantNoMenu, logParseAttempt } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
 import { withSpendContext, updateSpendContext } from '@/lib/ai-spend';
 import { menuCategory, ANON_ID_COOKIE, classifyError, domainOf } from '@/lib/telemetry';
 import { checkRateLimit, getClientIp, hashIp, MAX_SEARCHES_PER_HOUR } from '@/lib/rate-limit';
 import { checkDailySpend, AT_CAPACITY_MESSAGE } from '@/lib/spend-guard';
-import type { AnalysisState, ParseEvent } from '@/types';
-import { verifyVegClassifications, VERIFY_VEG_ENABLED, type AIUsage } from '@/lib/ai';
+import type { AnalysisState, ClassifiedMenu, ParseEvent } from '@/types';
+import { countFoodItems, verifyVegClassifications, VERIFY_VEG_ENABLED, type AIUsage } from '@/lib/ai';
 import { withDeadline } from '@/lib/deadline';
 
 // Fits the Vercel Hobby 60s cap: each request analyses within TIME_BUDGET_MS
@@ -56,8 +56,40 @@ export async function POST(request: NextRequest) {
       // Telemetry — logged at terminal outcomes only ('continue' hand-backs
       // are one analysis spread over several requests, not several attempts).
       const startedAt = Date.now();
+      let analysisStartedAt = startedAt;
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
+      let activeState: AnalysisState | null = null;
+      const requestTimingMs: Record<string, number> = {};
+      let timingsFlushed = false;
+      const measure = async <T,>(name: string, fn: () => Promise<T>): Promise<T> => {
+        const stepStartedAt = Date.now();
+        try {
+          return await fn();
+        } finally {
+          requestTimingMs[name] = (requestTimingMs[name] ?? 0) + Date.now() - stepStartedAt;
+        }
+      };
+      const flushTimings = () => {
+        if (!activeState || timingsFlushed) return;
+        activeState.timingMs ??= {};
+        for (const [name, durationMs] of Object.entries(requestTimingMs)) {
+          activeState.timingMs[name] = (activeState.timingMs[name] ?? 0) + durationMs;
+        }
+        timingsFlushed = true;
+      };
+      const reportTiming = (outcome: string) => {
+        flushTimings();
+        if (!activeState || !attemptUrl) return;
+        console.info('[pipeline-timing]', JSON.stringify({
+          stage: 'analyze',
+          outcome,
+          domain: domainOf(attemptUrl),
+          durationMs: Date.now() - analysisStartedAt,
+          requestCount: activeState.requestCount ?? 1,
+          stepsMs: activeState.timingMs ?? {},
+        }));
+      };
       // outcome/dishCount default from `success`, so existing two-argument
       // callers keep working; the analyse-success path passes them explicitly.
       const logAttempt = (
@@ -67,13 +99,17 @@ export async function POST(request: NextRequest) {
         outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
       ) => {
         if (!attemptUrl) return Promise.resolve();
+        reportTiming(outcome ?? (success ? 'menu' : 'error'));
         return logParseAttempt({
           url: attemptUrl,
           stage: 'analyze',
           category: attemptCategory,
           success,
           errorMessage: errorMessage ?? null,
-          durationMs: Date.now() - startedAt,
+          // `analysisStartedAt` survives every continue hop. Previously this
+          // stored only the final request (always <60s), hiding the 2–3 minute
+          // waits this telemetry was meant to reveal.
+          durationMs: Date.now() - analysisStartedAt,
           anonId: request.cookies.get(ANON_ID_COOKIE)?.value ?? null,
           dishCount: dishCount ?? null,
           errorCode: success ? null : classifyError(errorMessage),
@@ -99,7 +135,7 @@ export async function POST(request: NextRequest) {
         captureServer(request, distinctId, 'analysis_completed', {
           success,
           category: attemptCategory,
-          duration_ms: Date.now() - startedAt,
+          duration_ms: Date.now() - analysisStartedAt,
           dish_count: dishCount ?? 0,
           domain: attemptUrl ? domainOf(attemptUrl) : null,
           // success:false alone gave no clue why. The stable code is what the
@@ -124,7 +160,7 @@ export async function POST(request: NextRequest) {
         const { restaurantId, candidateIds } = parsed.data;
         updateSpendContext({ restaurantId });
 
-        const payload = await getMenuCandidates(restaurantId).catch(() => null);
+        const payload = await measure('candidate_load', () => getMenuCandidates(restaurantId).catch(() => null));
         if (!payload || !payload.candidates?.length) {
           send({ type: 'error', error: 'This selection expired — please search the restaurant again.' });
           return close();
@@ -163,13 +199,42 @@ export async function POST(request: NextRequest) {
             send({ type: 'error', error: 'None of the selected menus could be found — please try again.' });
             return close();
           }
-          state = { queue: selected.map((c) => c.id), done: [], category: menuCategory(selected) };
+          state = {
+            queue: selected.map((c) => c.id),
+            done: [],
+            category: menuCategory(selected),
+            totalCandidates: selected.length,
+          };
         } else if (payload.analysis) {
           state = payload.analysis;
         } else {
           send({ type: 'error', error: 'Nothing to resume — please search the restaurant again.' });
           return close();
         }
+        activeState = state;
+        state.startedAtMs ??= startedAt;
+        analysisStartedAt = state.startedAtMs;
+        state.requestCount = (state.requestCount ?? 0) + 1;
+
+        // Migrate an in-flight payload written by the old one-candidate-at-a-time
+        // route. No paid work is repeated: its checkpoint becomes the first
+        // entry in the new per-candidate map.
+        state.candidateStates ??= {};
+        if (state.currentId) {
+          state.candidateStates[state.currentId] = {
+            attemptIndex: state.attemptIndex ?? 0,
+            bestSoFar: state.bestSoFar ?? null,
+            usage: state.candidateUsage ?? null,
+            evidence: state.evidence ?? null,
+          };
+          state.queue = [state.currentId, ...state.queue.filter((id) => id !== state.currentId)];
+          state.currentId = null;
+          state.attemptIndex = 0;
+          state.bestSoFar = null;
+          state.candidateUsage = null;
+          state.evidence = null;
+        }
+        state.totalCandidates ??= state.queue.length + state.done.length;
         attemptUrl = payload.finalUrl;
         updateSpendContext({ url: payload.finalUrl });
         attemptCategory = state.category ?? menuCategory(payload.candidates);
@@ -205,73 +270,120 @@ export async function POST(request: NextRequest) {
           anyCandidateValid: { value: state.done.length > 0 },
         };
 
-        const byId = new Map(payload.candidates.map((c) => [c.id, c]));
         const deadline = Date.now() + TIME_BUDGET_MS;
 
         try {
-          while (state.currentId || state.queue.length > 0) {
-            if (!state.currentId) {
-              state.currentId = state.queue.shift()!;
-              state.attemptIndex = 0;
-              state.bestSoFar = null;
-              state.candidateUsage = null;
-              // Evidence is per-candidate — a new candidate starts with none.
-              state.evidence = null;
+          const byId = new Map(payload.candidates.map((candidate) => [candidate.id, candidate]));
+          const pending = state.queue.map((id) => byId.get(id)).filter(Boolean) as typeof payload.candidates;
+          let partialPublishing = false;
+          const publishFirstMenu = async (
+            available: Array<{ label: string; menu: ClassifiedMenu }>,
+            usage?: AIUsage
+          ) => {
+            const remainingMenuCount = Math.max(0, (state.totalCandidates ?? available.length) - available.length);
+            if (
+              state.partialPublished ||
+              partialPublishing ||
+              remainingMenuCount === 0 ||
+              available.length === 0
+            ) return;
+
+            const partialMenu = mergePartialMenus(available);
+            if (countFoodItems(partialMenu) < MIN_FOOD_ITEMS) return;
+            if (!partialMenu.restaurantName && payload.title) partialMenu.restaurantName = payload.title;
+
+            partialPublishing = true;
+            try {
+              await measure('partial_persistence', () =>
+                saveClassifiedMenu(
+                  restaurantId,
+                  payload.finalUrl,
+                  payload.finalUrl,
+                  partialMenu,
+                  usage,
+                  { status: 'processing' }
+                )
+              );
+              state.partialPublished = true;
+              send({ type: 'partial_result', restaurantId, remainingMenuCount });
+            } catch (error) {
+              // Progressive display is an optimization. A failed partial save
+              // must not discard the extraction or prevent the final save.
+              Sentry.captureException(error);
+            } finally {
+              partialPublishing = false;
             }
-            const candidate = byId.get(state.currentId);
-            if (!candidate) {
-              state.currentId = null;
+          };
+
+          // A previous time-capped request may already have completed a menu
+          // before it had enough time left to publish it.
+          if (state.done.length > 0) {
+            await publishFirstMenu(state.done, state.usage ?? undefined);
+          }
+          const results = await measure('extraction', () =>
+            // withDeadline clamps every reader/fetch/model call to the request's
+            // remaining budget. Each candidate retains its own checkpoint when
+            // the batch cannot finish inside this request.
+            withDeadline(deadline, () =>
+              extractCandidatesResumable(
+                pending,
+                ctx,
+                state.candidateStates!,
+                deadline,
+                async ({ candidate, result }) => {
+                  if (result.nextIndex !== null || !result.best) return;
+                  await publishFirstMenu(
+                    [...state.done, { label: candidate.label, menu: result.best.menu }],
+                    sumUsage(state.usage ?? undefined, result.usage)
+                  );
+                }
+              )
+            )
+          );
+
+          state.escalationsUsed =
+            DEFAULT_ESCALATION_BUDGET - (ctx.escalationBudget?.remaining ?? DEFAULT_ESCALATION_BUDGET);
+
+          const stillPending: string[] = [];
+          for (const { candidate, result } of results) {
+            if (result.nextIndex !== null) {
+              stillPending.push(candidate.id);
+              state.candidateStates[candidate.id] = {
+                attemptIndex: result.nextIndex,
+                bestSoFar: result.best,
+                usage: result.usage ?? null,
+                evidence: result.evidence ?? null,
+              };
               continue;
             }
-
-            // withDeadline, not just the `deadline` argument: that argument is
-            // only consulted BETWEEN attempts, so one slow fetch/read/upload
-            // inside an attempt could still outlive the function and drop the
-            // connection. The context clamps every outbound call to the time
-            // actually left.
-            const r = await withDeadline(deadline, () =>
-              extractMenuResumable(
-                candidate,
-                ctx,
-                state.attemptIndex ?? 0,
-                deadline,
-                state.bestSoFar ?? null,
-                state.candidateUsage ?? undefined,
-                state.evidence ?? undefined
-              )
-            );
-
-            // Book escalations spent this request so the next one resumes with
-            // the reduced budget rather than a fresh allowance.
-            state.escalationsUsed =
-              DEFAULT_ESCALATION_BUDGET - (ctx.escalationBudget?.remaining ?? DEFAULT_ESCALATION_BUDGET);
-
-            if (r.nextIndex !== null) {
-              // Time budget reached mid-chain — persist and hand back to the client.
-              state.attemptIndex = r.nextIndex;
-              state.bestSoFar = r.best;
-              state.candidateUsage = r.usage ?? null;
-              state.evidence = r.evidence ?? null;
-              payload.analysis = state;
-              await saveMenuCandidates(restaurantId, payload);
-              send({ type: 'progress', step: 'Still reading the menu — continuing...', stepNumber: 1, totalSteps: 2 });
-              send({ type: 'continue', restaurantId });
-              return close();
+            delete state.candidateStates[candidate.id];
+            if (result.best && result.best.menu.sections.length > 0) {
+              state.done.push({ label: candidate.label, menu: result.best.menu });
             }
+            if (result.blocked) state.blocked = true;
+            state.usage = sumUsage(state.usage ?? undefined, result.usage);
+          }
+          state.queue = stillPending;
 
-            // Candidate finished.
-            if (r.best && r.best.menu.sections.length > 0) {
-              state.done.push({ label: candidate.label, menu: r.best.menu });
-            }
-            // Remember a refusal across the resumable requests this analysis
-            // may be split into, so the final message can be the honest one.
-            if (r.blocked) state.blocked = true;
-            state.usage = sumUsage(state.usage ?? undefined, r.usage);
-            state.currentId = null;
-            state.attemptIndex = 0;
-            state.bestSoFar = null;
-            state.candidateUsage = null;
-            state.evidence = null;
+          if (state.queue.length > 0) {
+            payload.analysis = state;
+            await measure('checkpoint_save', () => saveMenuCandidates(restaurantId, payload));
+            // Include persistence in this request's timing event. The aggregate
+            // duration remains authoritative across hops; persisting this one
+            // just-finished duration would itself require another DB write.
+            flushTimings();
+            console.info('[pipeline-timing]', JSON.stringify({
+              stage: 'analyze',
+              outcome: 'continue',
+              domain: domainOf(payload.finalUrl),
+              durationMs: Date.now() - analysisStartedAt,
+              requestCount: state.requestCount,
+              remainingCandidates: state.queue.length,
+              stepsMs: state.timingMs ?? {},
+            }));
+            send({ type: 'progress', step: 'Still reading the menu — continuing...', stepNumber: 1, totalSteps: 2 });
+            send({ type: 'continue', restaurantId });
+            return close();
           }
         } catch (err) {
           Sentry.captureException(err);
@@ -279,9 +391,8 @@ export async function POST(request: NextRequest) {
           // Failed attempts still spent tokens — record them before erroring.
           // (spend already recorded by callClaude when the API call returned)
           await markRestaurantError(restaurantId, msg);
-          await logAttempt(false, msg);
-          await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'error', error: msg });
+          await Promise.all([logAttempt(false, msg), emitAnalysisCompleted(false, 0, msg)]);
           return close();
         }
 
@@ -299,9 +410,11 @@ export async function POST(request: NextRequest) {
           const blockedRun = state.blocked === true;
           const failureMsg = blockedRun ? BLOCKED_MENU_MESSAGE : NO_MENU_MSG;
           await markRestaurantNoMenu(restaurantId, blockedRun ? 'blocked' : 'not_listed', failureMsg);
-          await logAttempt(false, failureMsg, undefined, 'no_menu');
-          await emitAnalysisCompleted(false, 0, failureMsg);
           send({ type: 'no_menu', restaurantId });
+          await Promise.all([
+            logAttempt(false, failureMsg, undefined, 'no_menu'),
+            emitAnalysisCompleted(false, 0, failureMsg),
+          ]);
           return close();
         }
 
@@ -315,23 +428,32 @@ export async function POST(request: NextRequest) {
         if (VERIFY_VEG_ENABLED) {
           send({ type: 'progress', step: 'Double-checking the vegetarian and vegan labels...', stepNumber: 2, totalSteps: 2 });
         }
-        const verified = await withDeadline(deadline, () => verifyVegClassifications(merged, payload.title));
+        const verified = await measure('verification', () =>
+          withDeadline(deadline, () => verifyVegClassifications(merged, payload.title))
+        );
         const menu = verified.menu;
         state.usage = sumUsage(state.usage ?? undefined, verified.usage);
         if (!menu.restaurantName && payload.title) menu.restaurantName = payload.title;
 
         send({ type: 'progress', step: 'Saving your results...', stepNumber: 2, totalSteps: 2 });
         const usage: AIUsage = state.usage ?? { model: 'unknown', tokensIn: 0, tokensOut: 0, costUsd: 0 };
-        await saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage);
-        await logAttempt(true, undefined, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
-        await emitAnalysisCompleted(true, menu.sections.reduce((n, s) => n + s.dishes.length, 0));
+        await measure('persistence', () =>
+          saveClassifiedMenu(restaurantId, payload.finalUrl, payload.finalUrl, menu, usage)
+        );
+        const dishCount = menu.sections.reduce((n, s) => n + s.dishes.length, 0);
+        // The result is durable now. Let the browser navigate immediately while
+        // best-effort operational/product telemetry flushes concurrently.
         send({ type: 'result', restaurantId });
+        await Promise.all([
+          logAttempt(true, undefined, dishCount),
+          emitAnalysisCompleted(true, dishCount),
+        ]);
       } catch (err) {
         Sentry.captureException(err);
         const msg = err instanceof Error ? err.message : 'An unexpected error occurred';
         await logAttempt(false, msg);
-        await emitAnalysisCompleted(false, 0, msg);
         send({ type: 'error', error: msg });
+        await emitAnalysisCompleted(false, 0, msg);
       }
       close();
       });

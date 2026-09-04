@@ -545,14 +545,23 @@ export async function findLocationOnContactPage(homepageHtml: string, pageUrl: s
 
 /** Read every linked first-party contact/location page and retain every branch. */
 export async function findLocationsOnContactPages(homepageHtml: string, pageUrl: string): Promise<LocationCandidate[]> {
-  const candidates: LocationCandidate[] = [];
-  for (const contactUrl of contactPageUrls(homepageHtml, pageUrl)) {
-    const contactHtml = await fetchStaticHtml(contactUrl);
-    if (!contactHtml) continue;
-    candidates.push(...extractLocationsFromHtml(contactHtml, contactUrl)
-      .filter((candidate) => candidate.address)
-      .map((candidate) => ({ ...candidate, source: 'website_contact_page' as const, sourceUrl: contactUrl })));
-  }
+  // These are independent same-site pages. Serial 12-second budgets meant a
+  // dead Contact link could delay an otherwise healthy menu by up to 36s.
+  // Promise.all preserves URL order, so the preferred-address behavior stays
+  // deterministic while wall time is bounded by the slowest page, not the sum.
+  const pages = await Promise.all(
+    contactPageUrls(homepageHtml, pageUrl).map(async (contactUrl) => ({
+      contactUrl,
+      html: await fetchStaticHtml(contactUrl),
+    }))
+  );
+  const candidates = pages.flatMap(({ contactUrl, html }) =>
+    html
+      ? extractLocationsFromHtml(html, contactUrl)
+          .filter((candidate) => candidate.address)
+          .map((candidate) => ({ ...candidate, source: 'website_contact_page' as const, sourceUrl: contactUrl }))
+      : []
+  );
   return dedupeLocationCandidates(candidates);
 }
 

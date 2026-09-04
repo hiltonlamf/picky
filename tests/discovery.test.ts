@@ -206,7 +206,9 @@ describe('coherent picker lists (jaru.ie bug)', () => {
       linkLabels: { [pdf]: 'Dinner Menu' },
     });
     const res = await discoverMenus(scrape);
-    expect(captured[0].hint).toBe('Dinner Menu');
+    // One source never opens the picker, so no paid labeler call is needed;
+    // the deterministic anchor hint is already the exact label we want.
+    expect(captured).toHaveLength(0);
     expect(res.candidates[0].label).toBe('Dinner Menu');
   });
 
@@ -356,6 +358,23 @@ describe('content-validated subpage survives a generic label (kickys.ie bug)', (
     expect(res.candidates).toHaveLength(1);
     expect(res.candidates[0].type).toBe('subpage');
     expect(res.candidates[0].ref).toBe(subpageUrl);
+  });
+
+  it('uses a followed menu page as the hint instead of the non-food nav page that led to it', async () => {
+    const menuUrl = 'https://example-restaurant.ie/our-menus/';
+    const groupBookingUrl = 'https://example-restaurant.ie/group-bookings-at-example/';
+    mockScrape.mockResolvedValue(
+      makeScrape({ canonicalUrl: menuUrl, menuText: MENU_LIKE_TEXT })
+    );
+    const res = await discoverMenus(makeScrape({
+      menuText: 'Welcome. Monday: 5.30-9.30. Book a table today.',
+      menuLinks: [menuUrl],
+      navLinks: [groupBookingUrl],
+      linkLabels: { [menuUrl]: 'Menus' },
+    }));
+
+    expect(res.candidates.some((candidate) => candidate.ref === menuUrl)).toBe(true);
+    expect(res.candidates.some((candidate) => /group bookings/i.test(candidate.label))).toBe(false);
   });
 });
 
@@ -552,7 +571,12 @@ describe('discovery carries its billed cost out (cost-accounting regression)', (
       usage: { model: 'claude-haiku-4-5-20251001', tokensIn: 632, tokensOut: 140, costUsd: 0.0013 },
     }));
     const res = await discoverMenus(
-      makeScrape({ menuPdfUrls: ['https://example-restaurant.ie/food-menu.pdf'] })
+      makeScrape({
+        menuPdfUrls: [
+          'https://example-restaurant.ie/lunch-menu.pdf',
+          'https://example-restaurant.ie/dinner-menu.pdf',
+        ],
+      })
     );
     expect(res.usage?.costUsd).toBe(0.0013);
   });
@@ -589,8 +613,8 @@ describe('the homepage teaser is never a menu we named ourselves (Rasam)', () =>
     const res = await discoverMenus(makeScrape({ menuText: MENU_LIKE_TEXT }));
     expect(res.candidates).toHaveLength(1);
     expect(res.candidates[0].type).toBe('text');
-    // The hint reaching the AI is empty: there is nothing for it to echo.
-    expect(captured[0].hint).toBe('');
+    // There is no picker to label, so the paid labeler is skipped entirely.
+    expect(captured).toHaveLength(0);
     expect(res.candidates[0].label).toBe('Menu');
     expect(res.candidates[0].label).not.toMatch(/main/i);
   });

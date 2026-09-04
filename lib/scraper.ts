@@ -467,6 +467,21 @@ function extractText($: cheerio.CheerioAPI): string {
   return $clone('body').text().replace(/\s+/g, ' ').trim().slice(0, 40000);
 }
 
+const CONSENT_TEXT_RE = /\b(manage cookie consent|cookie preferences|privacy preferences)\b/i;
+
+/**
+ * Some consent plugins append their complete settings form after the real page
+ * text. Trim it only when it begins in the final 30% and the retained prefix is
+ * independently a menu; those guards prevent a cookie phrase in restaurant copy
+ * from removing real dishes.
+ */
+function trimTrailingConsentText(text: string): string {
+  const match = CONSENT_TEXT_RE.exec(text);
+  if (!match || match.index < text.length * 0.7) return text;
+  const prefix = text.slice(0, match.index).trim();
+  return looksLikeMenu(prefix) ? prefix : text;
+}
+
 // Gift cards / vouchers are never menus, even on ordering platforms
 // (e.g. order.toasttab.com/egiftcards/...).
 const GIFT_LINK_RE = /\b(gift|giftcard|egift|voucher)/i;
@@ -1258,14 +1273,25 @@ async function scrapeHtmlPage(url: string, depth = 0, allowLangSwitch = true): P
   const readerText = reader?.markdown ?? '';
   const readerIsMenu = readerText.length > 200 && looksLikeMenu(readerText);
   const cheerioIsMenu = looksLikeMenu(cheerioText);
-  const text =
+  // Firecrawl occasionally prepends a full cookie-settings wall before the
+  // menu (Kicky's: 27k noisy chars versus a clean static 20k menu). When both
+  // sources independently pass the menu test, prefer the one that does not
+  // START with consent boilerplate instead of blindly choosing the longer one.
+  const readerStartsWithConsent = CONSENT_TEXT_RE.test(readerText.slice(0, 500));
+  const cheerioStartsWithConsent = CONSENT_TEXT_RE.test(cheerioText.slice(0, 500));
+  const selectedText =
     readerIsMenu !== cheerioIsMenu
       ? readerIsMenu
         ? readerText
         : cheerioText
+      : readerIsMenu && readerStartsWithConsent !== cheerioStartsWithConsent
+        ? readerStartsWithConsent
+          ? cheerioText
+          : readerText
       : readerText.length > cheerioText.length && readerText.length > 200
         ? readerText
         : cheerioText;
+  const text = trimTrailingConsentText(selectedText);
 
   // "Menu | Uno Mas" → take last part if first is a generic section name
   const GENERIC_PAGE_WORDS = new Set([

@@ -19,7 +19,7 @@ import './_preload-env'; // MUST be first — loads env before lib modules evalu
 import { readFileSync } from 'fs';
 import path from 'path';
 import { scrapeRestaurant } from '../lib/scraper';
-import { discoverMenus, DRINK_SOURCE_RE, MAX_PICKER_CANDIDATES } from '../lib/menu-discovery';
+import { discoverMenus, DRINK_SOURCE_RE, isNonFoodMenu, MAX_PICKER_CANDIDATES } from '../lib/menu-discovery';
 import { extractAndMerge, ExtractionError, ExtractContext, looksLikeHeaderItems, MIN_FOOD_ITEMS } from '../lib/menu-extract';
 import { countFoodItems } from '../lib/ai';
 import { isReaderEnabled } from '../lib/reader';
@@ -27,6 +27,62 @@ import { withSpendContext } from '../lib/ai-spend';
 import type { ClassifiedMenu } from '../types';
 
 type Category = 'text' | 'pdf' | 'image' | 'multilang' | 'js' | 'multi';
+
+/**
+ * Optional live timing probe. Enable with PIPELINE_TIMING=1 when investigating
+ * latency; ordinary QA output and behavior stay unchanged. This wraps the
+ * process fetch rather than individual providers, so the report proves which
+ * services actually ran (including Jina followed by Firecrawl) and also counts
+ * direct site/PDF/image requests and spend-ledger writes.
+ */
+type NetworkKind = 'jina' | 'firecrawl' | 'anthropic' | 'supabase' | 'site';
+type NetworkTiming = { kind: NetworkKind; durationMs: number; ok: boolean };
+const TIMING_ENABLED = process.env.PIPELINE_TIMING === '1';
+const networkTimings: NetworkTiming[] = [];
+
+function networkKind(input: string | URL | Request): NetworkKind {
+  let hostname = '';
+  try {
+    const raw = input instanceof Request ? input.url : String(input);
+    hostname = new URL(raw).hostname.toLowerCase();
+  } catch {}
+  if (hostname === 'r.jina.ai') return 'jina';
+  if (hostname === 'api.firecrawl.dev') return 'firecrawl';
+  if (hostname === 'api.anthropic.com') return 'anthropic';
+  if (hostname.endsWith('.supabase.co')) return 'supabase';
+  return 'site';
+}
+
+if (TIMING_ENABLED) {
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const startedAt = performance.now();
+    const kind = networkKind(input);
+    try {
+      const response = await originalFetch(input, init);
+      networkTimings.push({ kind, durationMs: performance.now() - startedAt, ok: response.ok });
+      return response;
+    } catch (error) {
+      networkTimings.push({ kind, durationMs: performance.now() - startedAt, ok: false });
+      throw error;
+    }
+  };
+}
+
+function formatNetworkTiming(startIndex: number): string {
+  const rows = networkTimings.slice(startIndex);
+  const kinds: NetworkKind[] = ['jina', 'firecrawl', 'anthropic', 'supabase', 'site'];
+  return kinds
+    .map((kind) => {
+      const matching = rows.filter((row) => row.kind === kind);
+      if (!matching.length) return null;
+      const totalMs = matching.reduce((sum, row) => sum + row.durationMs, 0);
+      const failed = matching.filter((row) => !row.ok).length;
+      return `${kind} ${matching.length} calls/${(totalMs / 1000).toFixed(1)}s${failed ? `/${failed} failed` : ''}`;
+    })
+    .filter(Boolean)
+    .join(' | ');
+}
 
 interface Case {
   name: string;
@@ -121,12 +177,21 @@ function runCase(c: Case): Promise<CaseResult> {
 async function runCaseInner(c: Case): Promise<CaseResult> {
   cur = { pass: 0, fail: 0, skip: 0, row: '' };
   console.log(`\n=== ${c.name} [${c.category}] — ${c.url} ===`);
+  const caseStartedAt = performance.now();
+  const networkStartIndex = networkTimings.length;
+  let scrapeMs = 0;
+  let discoverMs = 0;
+  let extractMs = 0;
   // Declared outside the try so the catch paths below can include it too: a
   // case that fails during extraction still paid for discovery.
   let discoveryCost = 0;
   try {
+    const scrapeStartedAt = performance.now();
     const scrape = await withTimeout(scrapeRestaurant(c.url), 60000, 'scrape');
+    scrapeMs = performance.now() - scrapeStartedAt;
+    const discoverStartedAt = performance.now();
     const discovery = await withTimeout(discoverMenus(scrape), 90000, 'discover');
+    discoverMs = performance.now() - discoverStartedAt;
     // Discovery's candidate-labelling call is billed. Counting only extraction
     // is why this script printed $0.3601 for run #49 while ai_usage_log — the
     // authoritative ledger — recorded $0.3692 for the same seven cases.
@@ -145,6 +210,10 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
     check(
       'no drink-menu candidate (wine list etc.)',
       !discovery.candidates.some((x) => DRINK_SOURCE_RE.test(x.label))
+    );
+    check(
+      'no non-dining candidate (bookings/preferences/etc.)',
+      !discovery.candidates.some((x) => isNonFoodMenu(x.label))
     );
     check(
       `<=${MAX_PICKER_CANDIDATES} candidates (got ${discovery.candidates.length})`,
@@ -178,7 +247,9 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
 
     // Generous: image-board menus (90+ dishes over 6 photos) on slow CI
     // runners, plus reader 429 backoffs, can exceed 3 minutes legitimately.
+    const extractStartedAt = performance.now();
     const { menu, usage } = await withTimeout(extractAndMerge(discovery.candidates, ctx), 300000, 'extract');
+    extractMs = performance.now() - extractStartedAt;
     totalCostUsd += usage.costUsd;
     const count = countFoodItems(menu);
     console.log(`    food items: ${count} | cost: $${(usage.costUsd + discoveryCost).toFixed(4)}`);
@@ -235,6 +306,14 @@ async function runCaseInner(c: Case): Promise<CaseResult> {
       // Only infrastructure flakiness is worth a paid second attempt.
       cur.transient = TRANSIENT_RE.test(msg);
     }
+  }
+  if (TIMING_ENABLED) {
+    console.log(
+      `    timing: total ${((performance.now() - caseStartedAt) / 1000).toFixed(1)}s | ` +
+      `scrape ${(scrapeMs / 1000).toFixed(1)}s | discover ${(discoverMs / 1000).toFixed(1)}s | ` +
+      `extract ${(extractMs / 1000).toFixed(1)}s`
+    );
+    console.log(`    network: ${formatNetworkTiming(networkStartIndex) || 'no fetch calls recorded'}`);
   }
   return cur;
 }

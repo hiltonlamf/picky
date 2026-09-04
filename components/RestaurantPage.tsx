@@ -113,6 +113,11 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
   // re-fetches every few seconds while the AI is still working.
   const reportedOutcome = useRef(false);
   const pollCount = useRef(0);
+  const [analysisDelayed, setAnalysisDelayed] = useState(false);
+  // A progressive result should stay on the menu the visitor first received
+  // when later menus arrive. This is separate from menuChosen, which records a
+  // deliberate interaction for analytics.
+  const progressiveMenuPinned = useRef(false);
   // Fired once when the visitor first actually engages with the menu, so
   // "saw a result" and "used a result" stay distinguishable.
   const reportedEngagement = useRef(false);
@@ -142,6 +147,10 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
       })
       .then((data: Restaurant) => {
         setRestaurant(data);
+        const hasRenderableMenu = data.sections.some((section) =>
+          section.dishes.some((dish) => !dish.deletedAt)
+        );
+        const isStillAnalyzing = data.status === 'pending' || data.status === 'processing';
         // The default menu is chosen in an effect below (the one the guide card
         // headlines), not here — this used to pick labels[0], which is why the
         // page opened on Sunday Menu while the card talked about the Main one.
@@ -153,42 +162,62 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
 
         // While the AI is still working, keep checking without asking the
         // user to refresh manually — DB reads only, no extra AI cost.
-        if (data.status === 'pending' || data.status === 'processing') {
+        if (isStillAnalyzing) {
+          // Keep the first completed source selected after the final poll adds
+          // the remaining menu labels. Otherwise the normal "best menu"
+          // default can switch the dishes underneath someone already reading.
+          if (hasRenderableMenu && !progressiveMenuPinned.current) {
+            const availableLabels = distinctMenuLabels(data);
+            if (availableLabels.length > 0) {
+              progressiveMenuPinned.current = true;
+              setMenuFilter(availableLabels[0]);
+            }
+          }
           if (pollCount.current < MAX_PENDING_POLLS) {
             pollCount.current += 1;
             pollTimer.current = setTimeout(load, PENDING_POLL_MS);
-            return;
+          } else {
+            // Give up rather than poll forever. A partial menu remains useful,
+            // so keep it visible and downgrade this to an inline delayed state;
+            // only a page with no dishes needs the former blocking error.
+            if (!reportedOutcome.current || hasRenderableMenu) {
+              captureError({
+                surface: 'results_stuck_pending',
+                code: 'timeout',
+                message: `Still ${data.status} after ${Math.round((MAX_PENDING_POLLS * PENDING_POLL_MS) / 1000)}s`,
+                restaurantId,
+                extra: { source: arrivalSource(), has_partial_menu: hasRenderableMenu },
+              });
+            }
+            if (hasRenderableMenu) setAnalysisDelayed(true);
+            else {
+              reportedOutcome.current = true;
+              setError(
+                "This is taking much longer than usual. The analysis may still finish — try reloading in a minute."
+              );
+            }
           }
-          // Give up rather than spin forever, and say so — a silent permanent
-          // spinner is the worst version of this for the visitor, and it was
-          // also invisible to us.
-          if (!reportedOutcome.current) {
-            reportedOutcome.current = true;
-            captureError({
-              surface: 'results_stuck_pending',
-              code: 'timeout',
-              message: `Still ${data.status} after ${Math.round((MAX_PENDING_POLLS * PENDING_POLL_MS) / 1000)}s`,
-              restaurantId,
-              extra: { source: arrivalSource() },
-            });
-          }
-          setError(
-            "This is taking much longer than usual. The analysis may still finish — try reloading in a minute."
-          );
-          return;
+          if (!hasRenderableMenu) return;
+        } else {
+          setAnalysisDelayed(false);
         }
 
         // The single most important event in the funnel: it's what turns
         // "someone searched" into "someone actually got a menu", and it closes
-        // the search, guide and share funnels alike. Fired only on a terminal
-        // status, once per visit — firing on each poll tick would inflate the
-        // step and break every conversion rate built on it.
+        // the search, guide and share funnels alike. A progressive first menu
+        // qualifies because it is already usable; still fire only once per
+        // visit so later polls cannot inflate the conversion rate.
         if (!reportedOutcome.current) {
           reportedOutcome.current = true;
           const dishCount = countDishes(data.sections, 'all');
           capture(EVENTS.RESULTS_VIEWED, {
             restaurant_id: restaurantId,
-            outcome: data.status === 'done' ? 'menu' : data.status,
+            outcome:
+              hasRenderableMenu && data.status !== 'done'
+                ? 'partial_menu'
+                : data.status === 'done'
+                  ? 'menu'
+                  : data.status,
             dish_count: dishCount,
             vegan_count: countDishes(data.sections, 'vegan'),
             // Kept on the OLD definition (every veg dish, sides included) so
@@ -204,7 +233,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
             no_menu_reason: data.noMenuReason ?? null,
             // The thin-menu tripwire, on live user traffic rather than only in
             // admin review: a real menu with 3 dishes is a bug, not a result.
-            is_thin: data.status === 'done' && dishCount > 0 && dishCount < 7,
+            is_thin: (data.status === 'done' || hasRenderableMenu) && dishCount > 0 && dishCount < 7,
           });
         }
       })
@@ -241,7 +270,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
    * away for anyone who wants the whole picture.
    */
   useEffect(() => {
-    if (!restaurant || menuChosen.current) return;
+    if (!restaurant || menuChosen.current || progressiveMenuPinned.current) return;
     if (distinctMenuLabels(restaurant).length <= 1) return;
     const best = guideInsights(restaurant).bestMenu.label;
     if (best) setMenuFilter(best);
@@ -321,7 +350,11 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
     );
   }
 
-  if (restaurant.status === 'error') {
+  const hasRenderableMenu = restaurant.sections.some((section) =>
+    section.dishes.some((dish) => !dish.deletedAt)
+  );
+
+  if (restaurant.status === 'error' && !hasRenderableMenu) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <AlertIcon className="w-12 h-12 mx-auto mb-4 text-sun-400" />
@@ -353,7 +386,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
     );
   }
 
-  if (restaurant.status === 'pending' || restaurant.status === 'processing') {
+  if ((restaurant.status === 'pending' || restaurant.status === 'processing') && !hasRenderableMenu) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16 text-center">
         <SproutIcon className="w-12 h-12 mx-auto mb-4 text-picky-500 animate-pulse-gentle" />
@@ -493,6 +526,27 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
           <FlagOutdatedButton restaurantId={restaurant.id} restaurantName={restaurant.name ?? null} />
         </div>
       </div>
+
+      {(restaurant.status === 'pending' || restaurant.status === 'processing' || restaurant.status === 'error') && (
+        <div
+          role="status"
+          className="relative z-[2] glass-light flex items-start gap-3 rounded-2xl px-4 py-3.5 mb-6 text-sm text-forest/90"
+        >
+          {restaurant.status === 'error' ? (
+            <AlertIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-sun-500" />
+          ) : (
+            <SproutIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-picky-600 animate-pulse-gentle" />
+          )}
+          <span>
+            <strong className="font-semibold text-forest">This menu is ready.</strong>{' '}
+            {restaurant.status === 'error'
+              ? 'We couldn’t finish the other menus, but you can keep using this one.'
+              : analysisDelayed
+              ? 'The other menus are taking longer than expected. You can keep using this one and reload later.'
+              : 'We’re still analysing the other menus you selected. They’ll appear here automatically.'}
+          </span>
+        </div>
+      )}
 
       {/* How this page was produced — honest about the AI's fallibility. */}
       <div className="glass-light flex items-start gap-3 rounded-2xl px-4 py-3.5 mb-6 text-sm text-forest/90">

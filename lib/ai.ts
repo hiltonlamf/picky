@@ -180,10 +180,23 @@ export async function callClaude(
   // to reach for the raw client to get one.
   options?: { headers?: Record<string, string> }
 ): Promise<Anthropic.Message> {
-  const message = await anthropic().messages.create(params, {
-    ...options,
-    timeout: clampTimeout(DEFAULT_CALL_TIMEOUT_MS),
-  });
+  const modelStartedAt = Date.now();
+  let message: Anthropic.Message;
+  try {
+    message = await anthropic().messages.create(params, {
+      ...options,
+      timeout: clampTimeout(DEFAULT_CALL_TIMEOUT_MS),
+    });
+  } catch (error) {
+    console.info('[ai-timing]', JSON.stringify({
+      model: String(params.model),
+      success: false,
+      modelDurationMs: Date.now() - modelStartedAt,
+      errorType: error instanceof Error ? error.name : 'unknown',
+    }));
+    throw error;
+  }
+  const modelDurationMs = Date.now() - modelStartedAt;
 
   // Cache tokens are priced differently from fresh input: writes at 1.25× and
   // reads at 0.1×. The extraction calls now mark a cache breakpoint (see
@@ -207,6 +220,7 @@ export async function callClaude(
     calcCost(model, u.input_tokens, tokensOut) +
     calcCost(model, Math.round(cacheWrite * 1.25 + cacheRead * 0.1), 0);
 
+  const spendStartedAt = Date.now();
   await recordSpend({
     model,
     tokensIn,
@@ -215,6 +229,14 @@ export async function callClaude(
     cacheWriteTokens: cacheWrite,
     cacheReadTokens: cacheRead,
   });
+  console.info('[ai-timing]', JSON.stringify({
+    model,
+    success: true,
+    modelDurationMs,
+    spendRecordDurationMs: Date.now() - spendStartedAt,
+    tokensIn,
+    tokensOut,
+  }));
   return message;
 }
 
@@ -448,21 +470,37 @@ export async function classifyMenuWithAI(
     const menus: ClassifiedMenu[] = [];
     let usage: AIUsage | undefined;
     let truncatedUsage: AIUsage | undefined;
-    for (const piece of pieces) {
-      try {
-        const res = await classifyMenuChunk(piece, model, restaurantName);
+    let firstFailure: unknown;
+
+    // Each chunk is an independent slice of one oversized menu. Running them
+    // serially made a two-part menu pay two complete model round-trips in wall
+    // time. The fan-out is capped at MAX_CHUNKS, and all-settled accounting
+    // keeps every billed call in the usage total even when one result is bad.
+    const results = await Promise.allSettled(
+      pieces.map((piece) => classifyMenuChunk(piece, model, restaurantName))
+    );
+    for (const settled of results) {
+      if (settled.status === 'fulfilled') {
+        const res = settled.value;
         menus.push(res.menu);
         usage = addUsage(usage, res.usage);
-      } catch (err) {
+      } else {
+        const err = settled.reason;
         // Keep every billed call in the total, whatever the outcome.
         if (err instanceof AICallError) {
           usage = addUsage(usage, err.usage);
           if (err.truncated) truncatedUsage = usage;
-          else throw new AICallError(err.message, usage, false);
+          else firstFailure ??= err;
         } else {
-          throw err;
+          firstFailure ??= err;
         }
       }
+    }
+    if (firstFailure) {
+      if (firstFailure instanceof AICallError) {
+        throw new AICallError(firstFailure.message, usage, false);
+      }
+      throw firstFailure;
     }
     if (truncatedUsage && parts < MAX_CHUNKS) {
       // Still too big even split this way — split finer and try again. The

@@ -99,6 +99,16 @@ export async function POST(request: NextRequest) {
       const startedAt = Date.now();
       let attemptUrl: string | null = null;
       let attemptCategory: string | null = null;
+      const timingMs: Record<string, number> = {};
+      let timingLogged = false;
+      const measure = async <T,>(name: string, fn: () => Promise<T>): Promise<T> => {
+        const stepStartedAt = Date.now();
+        try {
+          return await fn();
+        } finally {
+          timingMs[name] = (timingMs[name] ?? 0) + Date.now() - stepStartedAt;
+        }
+      };
       // outcome/dishCount default from `success`, so existing two-argument
       // callers keep working; the analyse-success path passes them explicitly.
       const logAttempt = (
@@ -108,6 +118,16 @@ export async function POST(request: NextRequest) {
         outcome?: 'menu' | 'no_menu' | 'error' | 'thin'
       ) => {
         if (!attemptUrl) return Promise.resolve();
+        if (!timingLogged) {
+          timingLogged = true;
+          console.info('[pipeline-timing]', JSON.stringify({
+            stage: 'discover',
+            outcome: outcome ?? (success ? 'handoff' : 'error'),
+            domain: domainOf(attemptUrl),
+            durationMs: Date.now() - startedAt,
+            stepsMs: timingMs,
+          }));
+        }
         return logParseAttempt({
           url: attemptUrl,
           stage: 'discover',
@@ -269,7 +289,7 @@ export async function POST(request: NextRequest) {
         // fresh is served with ZERO LLM calls, so it must NOT count against the
         // rate limit — the limit exists only to cap the cost of NEW analyses.
         send({ type: 'progress', step: 'Checking our database...', stepNumber: 1, totalSteps: 4 });
-        const existing = await findExistingRestaurant(url).catch(() => null);
+        const existing = await measure('cache_lookup', () => findExistingRestaurant(url).catch(() => null));
         if (existing && selectedGooglePlaceId) {
           await linkRestaurantProviderPlace(existing.id, 'google', selectedGooglePlaceId);
         }
@@ -323,25 +343,33 @@ export async function POST(request: NextRequest) {
 
         let restaurantId = existing?.id ?? '';
         if (!restaurantId) {
-          restaurantId = await createRestaurantRecord(url, discoveryCity);
+          restaurantId = await measure('restaurant_record', () => createRestaurantRecord(url, discoveryCity));
           updateSpendContext({ restaurantId });
           if (selectedGooglePlaceId) {
             await linkRestaurantProviderPlace(restaurantId, 'google', selectedGooglePlaceId);
           }
         } else {
-          await resetRestaurantForReparse(restaurantId);
+          await measure('restaurant_record', () => resetRestaurantForReparse(restaurantId));
         }
 
         // Scrape
         send({ type: 'progress', step: 'Fetching the restaurant page...', stepNumber: 2, totalSteps: 4 });
         let scrapeResult;
+        let locationSave: Promise<void> = Promise.resolve();
         try {
-          scrapeResult = await scrapeRestaurant(url);
+          scrapeResult = await measure('scrape', () => scrapeRestaurant(url));
           // A best-effort side effect of the page fetch we already performed.
           // Location extraction is deterministic and adds no LLM/reader calls;
           // a location failure must never make menu analysis fail.
           const locations = scrapeResult.locations ?? (scrapeResult.location ? [scrapeResult.location] : []);
-          if (locations.length) await saveRestaurantLocations(restaurantId, locations).catch(() => undefined);
+          if (locations.length) {
+            // Persistence does not feed menu discovery, so overlap these DB
+            // writes with the candidate-labeling work instead of serializing
+            // them in front of it.
+            locationSave = measure('location_save', () =>
+              saveRestaurantLocations(restaurantId, locations).catch(() => undefined)
+            );
+          }
         } catch (err) {
           const rawMsg = err instanceof Error ? err.message : 'Could not fetch this page';
           // A fetch that never returned a page: treat as "site down / not live"
@@ -368,7 +396,10 @@ export async function POST(request: NextRequest) {
           const msg =
             scrapeResult.warning ??
             "We opened the website but couldn't find a menu on it — some restaurants don't list their menu online. If you found a menu link we missed, paste that directly and we'll try again.";
-          await markRestaurantNoMenu(restaurantId, 'not_listed', msg);
+          await Promise.all([
+            locationSave,
+            markRestaurantNoMenu(restaurantId, 'not_listed', msg),
+          ]);
           await logAttempt(false, msg, undefined, 'no_menu');
           await emitAnalysisCompleted(false, 0, msg);
           send({ type: 'no_menu', restaurantId });
@@ -377,7 +408,8 @@ export async function POST(request: NextRequest) {
 
         // Discover candidate menus
         send({ type: 'progress', step: 'Finding the menus...', stepNumber: 3, totalSteps: 4 });
-        const discovery = await discoverMenus(scrapeResult);
+        const discovery = await measure('menu_discovery', () => discoverMenus(scrapeResult));
+        await locationSave;
 
         // The page had content but none of it is a menu (e.g. a booking-only
         // site, or only a drinks list): say so honestly instead of failing
@@ -409,7 +441,7 @@ export async function POST(request: NextRequest) {
         // If we can't persist state (e.g. the menu_candidates column hasn't
         // been migrated yet), degrade gracefully to analysing inline.
         try {
-          await saveMenuCandidates(restaurantId, {
+          await measure('candidate_save', () => saveMenuCandidates(restaurantId, {
             candidates: discovery.candidates,
             finalUrl: discovery.finalUrl,
             title: ctx.title,
@@ -418,18 +450,25 @@ export async function POST(request: NextRequest) {
             pdfUrls: ctx.pdfUrls,
             imageUrls: ctx.imageUrls,
             ...(discovery.candidates.length === 1 && {
-              analysis: { queue: discovery.candidates.map((c) => c.id), done: [], category: attemptCategory ?? undefined },
+              analysis: {
+                queue: discovery.candidates.map((c) => c.id),
+                done: [],
+                category: attemptCategory ?? undefined,
+                totalCandidates: discovery.candidates.length,
+              },
             }),
-          });
+          }));
           // Discovery succeeded — analysis continues in /analyze, which logs
           // its own terminal outcome (hence no analysis_completed here, and no
           // outcome on this row: there are no dishes yet to judge).
-          await logAttempt(true);
           if (discovery.candidates.length >= 2) {
             send({ type: 'candidates', restaurantId, candidates: discovery.candidates });
           } else {
             send({ type: 'continue', restaurantId });
           }
+          // Candidate state is durable; do not hold the next user-visible phase
+          // behind a best-effort telemetry insert.
+          await logAttempt(true);
           return close();
         } catch {
           // fall through to inline analysis of all discovered menus

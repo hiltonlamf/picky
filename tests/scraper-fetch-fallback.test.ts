@@ -130,6 +130,21 @@ describe('menu text hidden in tabs and overlays (newking.nl, linastores.co.uk)',
     expect(result.menuText).toContain('Mapo tofu');
     expect(result.menuText).toContain('Mango pudding');
   });
+
+  it('prefers clean static menu text over longer reader text that starts with a consent wall', async () => {
+    const menu = `<main>${MENU_LIKE_TEXT.repeat(8)}</main>`;
+    const trailingConsent = `<section>${'Manage Cookie Consent. Functional storage preferences. '.repeat(12)}</section>`;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlResponse(`<html><body>${menu}${trailingConsent}</body></html>`)));
+    mockReadPage.mockResolvedValue(readerResult({
+      markdown: `${'Manage Cookie Consent. Functional storage preferences. '.repeat(40)}\n${MENU_LIKE_TEXT.repeat(8)}`,
+    }));
+
+    const result = await scrapeRestaurant('https://example-restaurant.ie');
+
+    expect(result.menuText).toContain('Starters');
+    expect(result.menuText.startsWith('Manage Cookie Consent')).toBe(false);
+    expect(result.menuText).not.toContain('Functional storage preferences');
+  });
 });
 
 describe('a "Menus" page that is only buttons (neni-amsterdam.nl, tofuvegan.com)', () => {

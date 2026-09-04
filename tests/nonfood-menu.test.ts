@@ -22,6 +22,8 @@ describe('isNonFoodMenu', () => {
       'Kids Activity Book',
       'Gift Vouchers',
       'Group Booking',
+      'Group Bookings',
+      'Opt-out Preferences',
     ]) {
       expect(isNonFoodMenu(label), label).toBe(true);
     }
@@ -36,6 +38,7 @@ describe('isNonFoodMenu', () => {
       'Sunday Menu',
       'Tasting Menu',
       'Set Menu',
+      'Group Menu',
       'Brunch',
       'Neighbourhood Menu',
       'Main Menu',
