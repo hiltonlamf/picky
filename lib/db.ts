@@ -1997,6 +1997,153 @@ export async function getNoMenuQueue(): Promise<NoMenuQueueItem[]> {
   }));
 }
 
+// ------------------------------------------------------------- dead ends
+//
+// A "dead end" is a search that ended with nothing on screen: the site was
+// unreachable, the menu was refused us, the site publishes no menu, or the
+// analysis errored. This is quality priority #2 ("actually fetching the menu"),
+// and until now it was only visible as scattered rows — a URL in
+// /admin/searches with an error code, a reason on the restaurant row, and a
+// visitor's note in the feedback inbox, with nothing tying the three together.
+
+export interface DeadEndNote {
+  id: string;
+  createdAt: string;
+  feedbackType: string;
+  notes: string | null;
+  status: string;
+}
+
+export interface DeadEndItem {
+  id: string;
+  name: string | null;
+  url: string;
+  city: string | null;
+  /** 'no_menu' or 'error' — which of the two dead-end screens they saw. */
+  status: RestaurantStatus;
+  reason: NoMenuReason | null;
+  errorMessage: string | null;
+  lastScrapedAt: string | null;
+  createdAt: string;
+  /** Admin has already signed off "yes, genuinely no menu". */
+  confirmed: boolean;
+  /**
+   * Visitor analyse attempts that ended here within HIT_WINDOW_DAYS — i.e. how
+   * many people walked into this wall recently. A prioritisation hint only:
+   * see the truncation note on DeadEndReport.
+   */
+  hits: number;
+  /** Most recent attempt against this URL, which outlives a re-scrape. */
+  lastHitAt: string | null;
+  /** What visitors typed into the box on the dead-end screen. */
+  notes: DeadEndNote[];
+}
+
+export interface DeadEndReport {
+  items: DeadEndItem[];
+  hitWindowDays: number;
+  /**
+   * PostgREST silently caps a select at 1000 rows, so past that the `hits`
+   * counts under-report. Surfaced rather than swallowed — a number that
+   * quietly stops counting is worse than one labelled as partial.
+   */
+  hitsTruncated: boolean;
+}
+
+/** How far back the visitor-hit counts look. */
+const HIT_WINDOW_DAYS = 30;
+const HIT_ROW_CAP = 1000;
+
+/**
+ * Every restaurant a search dead-ended on, newest first, with the reason and
+ * whatever the visitor told us at that moment.
+ *
+ * Notes join on restaurant_id, which is exact. Hit counts join on the
+ * restaurant's own url/canonical_url, because parse_attempts records the final
+ * URL rather than a restaurant id — so a hit count is a close estimate, never
+ * a denominator for a rate.
+ */
+export async function getDeadEnds(limit = 100): Promise<DeadEndReport> {
+  const { data } = await db()
+    .from('restaurants')
+    .select('id, name, url, canonical_url, city, status, no_menu_reason, no_menu_confirmed_at, error_message, last_scraped_at, created_at')
+    .in('status', ['no_menu', 'error'])
+    .order('last_scraped_at', { ascending: false, nullsFirst: false })
+    .limit(limit);
+  const rows = (data ?? []) as DbRow[];
+  if (rows.length === 0) return { items: [], hitWindowDays: HIT_WINDOW_DAYS, hitsTruncated: false };
+
+  const ids = rows.map((r) => r.id as string);
+  const since = new Date(Date.now() - HIT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const [{ data: feedbackRaw }, { data: attemptRaw }] = await Promise.all([
+    db()
+      .from('restaurant_feedback')
+      .select('id, restaurant_id, feedback_type, notes, status, created_at')
+      .in('restaurant_id', ids)
+      .order('created_at', { ascending: false }),
+    // Filtered by time rather than by `.in('url', …)`: 150 restaurants means up
+    // to 300 URLs in a query string, which blows past PostgREST's URL length
+    // and fails as a 414 rather than as a visible error. Matching happens below.
+    db()
+      .from('parse_attempts')
+      .select('url, created_at')
+      .eq('stage', 'analyze')
+      .in('outcome', ['no_menu', 'error'])
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(HIT_ROW_CAP),
+  ]);
+
+  const notesByRestaurant = new Map<string, DeadEndNote[]>();
+  for (const f of (feedbackRaw ?? []) as DbRow[]) {
+    const key = f.restaurant_id as string;
+    const list = notesByRestaurant.get(key) ?? [];
+    list.push({
+      id: f.id as string,
+      createdAt: f.created_at as string,
+      feedbackType: f.feedback_type as string,
+      notes: (f.notes as string | null) ?? null,
+      status: (f.status as string | null) ?? 'open',
+    });
+    notesByRestaurant.set(key, list);
+  }
+
+  const attempts = (attemptRaw ?? []) as DbRow[];
+  const hitsByUrl = new Map<string, { count: number; last: string | null }>();
+  for (const a of attempts) {
+    const key = a.url as string;
+    if (!key) continue;
+    const prev = hitsByUrl.get(key) ?? { count: 0, last: null };
+    const at = a.created_at as string;
+    hitsByUrl.set(key, { count: prev.count + 1, last: !prev.last || at > prev.last ? at : prev.last });
+  }
+
+  const items = rows.map((r) => {
+    const canonical = (r.canonical_url as string | null) ?? null;
+    const a = hitsByUrl.get(r.url as string);
+    const b = canonical && canonical !== r.url ? hitsByUrl.get(canonical) : undefined;
+    const last = [a?.last, b?.last].filter(Boolean).sort().pop() ?? null;
+    return {
+      id: r.id as string,
+      name: (r.name as string | null) ?? null,
+      url: r.url as string,
+      city: (r.city as string | null) ?? null,
+      status: r.status as RestaurantStatus,
+      reason: (r.no_menu_reason as NoMenuReason | null) ?? null,
+      errorMessage: (r.error_message as string | null) ?? null,
+      lastScrapedAt: (r.last_scraped_at as string | null) ?? null,
+      createdAt: r.created_at as string,
+      confirmed: Boolean(r.no_menu_confirmed_at),
+      hits: (a?.count ?? 0) + (b?.count ?? 0),
+      lastHitAt: (last as string | null) ?? null,
+      notes: notesByRestaurant.get(r.id as string) ?? [],
+    };
+  });
+
+  return { items, hitWindowDays: HIT_WINDOW_DAYS, hitsTruncated: attempts.length >= HIT_ROW_CAP };
+}
+
 export interface AdminDashboardStats {
   recentRestaurants: RestaurantListItem[];
   todaySpendUsd: number;

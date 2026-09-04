@@ -7,6 +7,7 @@ import InlineFeedbackNote from './InlineFeedbackNote';
 import { capture } from '@/lib/posthog-client';
 import { EVENTS, captureError, classifyError } from '@/lib/analytics';
 import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
+import { DEAD_END_FEEDBACK } from '@/lib/site-copy';
 import { looksLikeRestaurantUrl, normalizeRestaurantName } from '@/lib/restaurant-search-utils';
 import type {
   ParseEvent,
@@ -528,14 +529,19 @@ export default function HeroSearch({
         <ParseProgress log={log} error={state === 'error' ? error : null} />
         {state === 'error' && (
           <>
-            {/* The person who just hit this knows what the site looks like. */}
+            {/* The person who just hit this is disappointed and about to leave.
+                Open by default and open-ended: one click of friction is enough
+                to lose the note entirely. */}
             <InlineFeedbackNote
               surface="parse_error"
+              variant="expanded"
               tone="dark"
               restaurantId={restaurantId || null}
               restaurantName={query.trim() || null}
-              prompt="Know where the menu is? Tell us"
-              placeholder="e.g. the menu is a PDF behind the 'Food' button, or it's only on their Instagram"
+              prompt={DEAD_END_FEEDBACK.heading}
+              description={DEAD_END_FEEDBACK.body}
+              placeholder={DEAD_END_FEEDBACK.placeholder}
+              thanks={DEAD_END_FEEDBACK.thanks}
               context={error ? `Error shown: ${error}` : null}
             />
             <button

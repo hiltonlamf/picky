@@ -14,7 +14,7 @@ import InlineFeedbackNote from '@/components/InlineFeedbackNote';
 import { useHeader } from '@/lib/header-context';
 import { capture } from '@/lib/posthog-client';
 import { captureError, EVENTS } from '@/lib/analytics';
-import { SITE_TITLE } from '@/lib/site-copy';
+import { SITE_TITLE, noMenuCopy, DEAD_END_FEEDBACK } from '@/lib/site-copy';
 import CountingMethod from '@/components/CountingMethod';
 import { isVeg, headlineCounts, menuTallies, makeCountedTest, guideInsights, type CategoryTally } from '@/lib/menu-insights';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
@@ -287,32 +287,7 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
   if (restaurant.status === 'no_menu') {
     const name = restaurant.name ?? 'this restaurant';
     const reason = restaurant.noMenuReason ?? 'not_listed';
-    const copy =
-      reason === 'unavailable'
-        ? {
-            heading: 'This website looks down',
-            body: `We couldn't reach ${name}'s website — it may be down or not live yet.`,
-          }
-        : reason === 'closed'
-        ? {
-            heading: 'This restaurant looks closed',
-            body: `${name} appears to be permanently closed, so there's no menu to show.`,
-          }
-        : // 'blocked' means we FOUND the menu and were refused it — a fact about
-          // the host, not about the restaurant. Saying "no menu listed" here
-          // would be simply untrue, and it hides the one thing that fixes it.
-          reason === 'blocked'
-          ? {
-              heading: "We found the menu — but we can't open it",
-              body:
-                'Some things on the web are off-limits to AI agents: either we cannot read them, or ' +
-                'we are not permitted to. Can you give us a hand by uploading the menu, or pasting a ' +
-                "direct link? We'll read it right away.",
-            }
-          : {
-              heading: 'No menu listed on this site',
-              body: `We looked, but ${name}'s website doesn't seem to publish a menu online.`,
-            };
+    const copy = noMenuCopy(reason, name);
     return (
       <div className="max-w-lg mx-auto px-4 py-16">
         <div className="text-center mb-6">
@@ -321,16 +296,20 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
           <p className="text-evergreen/80">{copy.body}</p>
         </div>
         <SubmitMenuForm restaurantId={restaurant.id} />
-        {/* Uploading the menu is the ask; this is for people who can tell us
-            something useful but don't have the file to hand. */}
+        {/* Open by default, and open-ended. The card above already asks "know
+            where the menu is?"; asking it a second time behind a link got us a
+            near-empty inbox at the one moment someone is motivated to talk. */}
         <div className="mt-5">
           <InlineFeedbackNote
             surface="no_menu"
+            variant="expanded"
             restaurantId={restaurant.id}
             restaurantName={name}
-            prompt="Know where the menu is? Tell us"
-            placeholder="e.g. it's a photo album on their Facebook page, or only on Deliveroo"
-            context={`Outcome: ${reason ?? 'no_menu'}`}
+            prompt={DEAD_END_FEEDBACK.heading}
+            description={DEAD_END_FEEDBACK.body}
+            placeholder={DEAD_END_FEEDBACK.placeholder}
+            thanks={DEAD_END_FEEDBACK.thanks}
+            context={`Wall: ${copy.heading} (${reason})`}
           />
         </div>
         <div className="text-center mt-6">
@@ -357,10 +336,13 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
         <div className="max-w-md mx-auto mb-6 text-left">
           <InlineFeedbackNote
             surface="parse_error"
+            variant="expanded"
             restaurantId={restaurant.id}
             restaurantName={restaurant.name ?? null}
-            prompt="Know where the menu is? Tell us"
-            placeholder="e.g. the menu is a PDF behind the 'Food' button"
+            prompt={DEAD_END_FEEDBACK.heading}
+            description={DEAD_END_FEEDBACK.body}
+            placeholder={DEAD_END_FEEDBACK.placeholder}
+            thanks={DEAD_END_FEEDBACK.thanks}
             context={restaurant.errorMessage ? `Error: ${restaurant.errorMessage}` : null}
           />
         </div>
