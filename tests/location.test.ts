@@ -252,6 +252,33 @@ describe('first-party location extraction', () => {
     fetchMock.mockRestore();
   });
 
+  it('fetches independent contact pages concurrently while preserving page order', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active -= 1;
+      const north = String(input).includes('north');
+      return new Response(
+        `<address>${north ? '1 North Street, Dublin 1' : '2 South Street, Dublin 2'}</address>`,
+        { status: 200, headers: { 'content-type': 'text/html' } }
+      );
+    });
+    const candidates = await findLocationsOnContactPages(
+      '<a href="/locations/north">North location</a><a href="/locations/south">South location</a>',
+      'https://restaurant.example'
+    );
+
+    expect(maxActive).toBe(2);
+    expect(candidates.map((candidate) => candidate.address)).toEqual([
+      '1 North Street, Dublin 1',
+      '2 South Street, Dublin 2',
+    ]);
+    fetchMock.mockRestore();
+  });
+
   it('treats www and bare-domain contact links as the same first-party site', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response('<p>4 Example Street, Dublin 2</p>', { status: 200, headers: { 'content-type': 'text/html' } })

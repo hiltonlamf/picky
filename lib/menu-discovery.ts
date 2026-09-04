@@ -102,7 +102,7 @@ export const DRINK_SOURCE_RE =
  * home; only ORDERING channels (delivery/collection/takeaway) are excluded.
  */
 export const NON_FOOD_MENU_RE =
-  /\b(allergens?|allerg(y|ies)|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?booking|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack)\b/i;
+  /\b(allergens?|allerg(y|ies)|catering|collection|click\s?[&+and]*\s?collect|delivery|take\s?away|take\s?out|kids?|childrens?|children'?s|gift|voucher|group\s?bookings?|sample\s?menu|private\s?dining|pdr|hire|christmas\s?party|function\s?pack|opt[-\s]?out|preferences?)\b/i;
 
 /**
  * A menu source whose name says WHICH menu it is — a meal, a sitting, or a
@@ -275,7 +275,12 @@ async function deepDiscoverRaw(navLinks: string[]): Promise<Raw[]> {
       raw.push({
         type: 'subpage',
         ref: sub.canonicalUrl || targets[i],
-        hint: hintFromUrl(targets[i]),
+        // scrapeRestaurant may follow a nav page's first real menu link and
+        // return that menu as its canonical result. Name the source we actually
+        // kept, not the page we started from: Kicky's /group-bookings... resolves
+        // to /our-menus, and carrying the old hint made the labeler call the real
+        // 31-dish menu "Group Bookings" and the non-food filter delete it.
+        hint: hintFromUrl(sub.canonicalUrl || targets[i]),
         source: 'subpage',
         contentValidated: true,
       });
@@ -547,18 +552,13 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
 
   if (deduped.length > 0) {
     // Label + distinctness/drink/duplicate detection via Haiku.
-    // Failures degrade to keeping everything.
+    // A single candidate never reaches the picker, and this label cannot make
+    // extraction better: homepage text is pinned to "Menu", and obvious
+    // drink/non-food sources were already removed deterministically. Skipping
+    // that no-op removes a complete model round-trip from the common path.
+    // Failures on the multi-candidate path degrade to keeping everything.
     let labeled: LabeledCandidate[];
-    try {
-      const result = await labelMenuCandidates(
-        deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, hint: r.hint, type: r.type, url: r.ref || undefined })),
-        scrape.title
-      );
-      labeled = result.candidates;
-      // This call is billed. Carry its cost out so callers' totals include it —
-      // see the note on labelMenuCandidates.
-      labelUsage = result.usage;
-    } catch {
+    if (deduped.length === 1) {
       labeled = deduped.map((r) => ({
         ref: `${r.type}|${r.ref}`,
         label: r.hint || 'Menu',
@@ -566,6 +566,25 @@ export async function discoverMenus(scrape: ScrapeResult): Promise<DiscoveryResu
         isDrinkOnly: false,
         duplicateOf: null,
       }));
+    } else {
+      try {
+        const result = await labelMenuCandidates(
+          deduped.map((r) => ({ ref: `${r.type}|${r.ref}`, hint: r.hint, type: r.type, url: r.ref || undefined })),
+          scrape.title
+        );
+        labeled = result.candidates;
+        // This call is billed. Carry its cost out so callers' totals include it —
+        // see the note on labelMenuCandidates.
+        labelUsage = result.usage;
+      } catch {
+        labeled = deduped.map((r) => ({
+          ref: `${r.type}|${r.ref}`,
+          label: r.hint || 'Menu',
+          isDistinctMenu: true,
+          isDrinkOnly: false,
+          duplicateOf: null,
+        }));
+      }
     }
 
     type Judged = { raw: Raw; verdict: LabeledCandidate; index: number };

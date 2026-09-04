@@ -1052,16 +1052,20 @@ export async function saveClassifiedMenu(
   url: string,
   menuUrl: string | null,
   menu: ClassifiedMenu,
-  usage?: AIUsage
+  usage?: AIUsage,
+  options: { status?: 'processing' | 'done' } = {}
 ): Promise<void> {
+  const status = options.status ?? 'done';
   await db()
     .from('restaurants')
     .update({
       name: menu.restaurantName || null,
       canonical_url: url,
       menu_url: menuUrl,
-      status: 'done',
-      last_scraped_at: new Date().toISOString(),
+      status,
+      // A progressive first menu is useful but not the completed scrape. Do
+      // not start the freshness clock until every selected menu is durable.
+      ...(status === 'done' ? { last_scraped_at: new Date().toISOString() } : {}),
       // Only overwrite cuisine when this run actually detected one, so a reparse
       // that omits it doesn't wipe a good existing value.
       ...(menu.cuisine ? { cuisine: menu.cuisine } : {}),
@@ -1088,20 +1092,27 @@ export async function saveClassifiedMenu(
   // --- human_verified preservation (the saveClassifiedMenu "landmine" fix) ---
   // Snapshot section names BEFORE anything is deleted, so we can key each
   // verified dish by (name, section name) the way an admin would recognise it.
-  const { data: oldSectionRows } = await db()
-    .from('menu_sections')
-    .select('id, name')
-    .eq('restaurant_id', restaurantId);
+  // Both snapshots are independent. Waiting for them serially added two full
+  // database round-trips to the user's final "Saving" step.
+  const [oldSectionsResult, oldDishesResult] = await Promise.all([
+    db()
+      .from('menu_sections')
+      .select('id, name')
+      .eq('restaurant_id', restaurantId),
+    db()
+      .from('dishes')
+      .select('*')
+      .eq('restaurant_id', restaurantId),
+  ]);
+  const oldSectionRows = oldSectionsResult.data;
   const oldSectionNameById = new Map<string, string>(
     ((oldSectionRows ?? []) as DbRow[]).map((s) => [s.id as string, s.name as string])
   );
 
-  const { data: verifiedRows } = await db()
-    .from('dishes')
-    .select('*')
-    .eq('restaurant_id', restaurantId)
-    .eq('human_verified', true);
-  const verifiedDishes = ((verifiedRows ?? []) as DbRow[]).map((d) => ({
+  // Reuse the all-dishes snapshot for verified-dish and report preservation.
+  // The old implementation queried this table twice back-to-back.
+  const oldDishes = ((oldDishesResult.data ?? []) as DbRow[]);
+  const verifiedDishes = oldDishes.filter((d) => d.human_verified === true).map((d) => ({
     name: d.name as string,
     sectionName: d.section_id ? (oldSectionNameById.get(d.section_id as string) ?? null) : null,
     classification: d.classification as DietaryClassification,
@@ -1124,13 +1135,6 @@ export async function saveClassifiedMenu(
   // along with the old rows. Snapshot both now, keyed by (name, section) like
   // the verified dishes, and re-home them onto the fresh rows after the insert
   // so a menu refresh never loses a user trust signal.
-  const { data: oldDishRows } = await db()
-    .from('dishes')
-    .select(
-      'id, name, section_id, report_count, warning_flagged, classification, confidence, description, price, origin, ai_classification'
-    )
-    .eq('restaurant_id', restaurantId);
-  const oldDishes = (oldDishRows ?? []) as DbRow[];
   const oldDishKey = (d: DbRow) => ({
     name: d.name as string,
     sectionName: d.section_id ? (oldSectionNameById.get(d.section_id as string) ?? null) : null,
@@ -1170,45 +1174,46 @@ export async function saveClassifiedMenu(
   await db().from('dishes').delete().eq('restaurant_id', restaurantId);
   await db().from('menu_sections').delete().eq('restaurant_id', restaurantId);
 
-  for (let i = 0; i < menu.sections.length; i++) {
-    const section: RawSection = menu.sections[i];
+  const sectionInputs = menu.sections.map((section, displayOrder) => ({
+    restaurant_id: restaurantId,
+    name: section.name,
+    display_order: displayOrder,
+    menu_label: section.menuLabel ?? null,
+  }));
+  let { data: insertedSections } = sectionInputs.length
+    ? await db().from('menu_sections').insert(sectionInputs).select('id, display_order')
+    : { data: [] as DbRow[] };
 
-    let { data: sectionRow } = await db()
+  // Degrade gracefully when the menu_label column is unmigrated, preserving the
+  // rolling-deploy behavior of the former per-section inserts.
+  if (sectionInputs.length && !insertedSections) {
+    const retry = await db()
       .from('menu_sections')
-      .insert({ restaurant_id: restaurantId, name: section.name, display_order: i, menu_label: section.menuLabel ?? null })
-      .select('id')
-      .single();
+      .insert(sectionInputs.map(({ menu_label: _menuLabel, ...section }) => section))
+      .select('id, display_order');
+    insertedSections = retry.data;
+  }
 
-    // Degrade gracefully when the menu_label column is unmigrated.
-    if (!sectionRow) {
-      const retry = await db()
-        .from('menu_sections')
-        .insert({ restaurant_id: restaurantId, name: section.name, display_order: i })
-        .select('id')
-        .single();
-      sectionRow = retry.data;
-    }
-
-    if (!sectionRow) continue;
-
-    const dishRows = section.dishes.map((d: RawDish) => ({
+  const sectionIdByOrder = new Map(
+    ((insertedSections ?? []) as DbRow[]).map((section) => [section.display_order as number, section.id as string])
+  );
+  const dishRows = menu.sections.flatMap((section: RawSection, displayOrder) => {
+    const sectionId = sectionIdByOrder.get(displayOrder);
+    if (!sectionId) return [];
+    return section.dishes.map((d: RawDish) => ({
       restaurant_id: restaurantId,
-      section_id: sectionRow.id,
+      section_id: sectionId,
       name: d.name,
       description: d.description ?? null,
       price: d.price ?? null,
       classification: d.classification,
       confidence: d.confidence,
       confidence_reason: d.reason ?? null,
-      // Fresh AI extraction: record what the AI classified it as.
       origin: 'ai',
       ai_classification: d.classification,
     }));
-
-    if (dishRows.length > 0) {
-      await db().from('dishes').insert(dishRows);
-    }
-  }
+  });
+  if (dishRows.length > 0) await db().from('dishes').insert(dishRows);
 
   if (verifiedDishes.length > 0) {
     const { data: newSectionRows } = await db()

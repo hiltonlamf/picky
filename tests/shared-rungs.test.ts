@@ -21,7 +21,7 @@ vi.mock('@/lib/ai', async (importOriginal) => {
   return { ...actual, classifyMenuFromPdf: vi.fn() };
 });
 
-import { extractMenuResumable, type ExtractContext } from '@/lib/menu-extract';
+import { extractCandidatesResumable, extractMenuResumable, mergePartialMenus, type ExtractContext } from '@/lib/menu-extract';
 import { classifyMenuFromPdf } from '@/lib/ai';
 
 const mockPdf = vi.mocked(classifyMenuFromPdf);
@@ -42,6 +42,19 @@ function thinMenu(): ClassifiedMenu {
       },
     ],
   } as unknown as ClassifiedMenu;
+}
+
+function validMenu(): ClassifiedMenu {
+  const menu = thinMenu();
+  menu.sections[0].dishes = Array.from({ length: 5 }, (_, index) => ({
+    name: `Dish ${index + 1}`,
+    description: undefined,
+    price: '12',
+    classification: 'vegan',
+    confidence: 0.9,
+    reason: 'test',
+  })) as typeof menu.sections[0]['dishes'];
+  return menu;
 }
 
 const PDF = 'https://example.com/menu.pdf';
@@ -106,5 +119,74 @@ describe('shared fallback rungs', () => {
     // Different documents are different work — memoising on the URL must not
     // collapse two genuinely distinct menus into one.
     expect(mockPdf).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs distinct pending candidates concurrently and preserves their order', async () => {
+    let active = 0;
+    let maxActive = 0;
+    mockPdf.mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active -= 1;
+      return {
+        menu: validMenu(),
+        usage: { model: 'claude-haiku-4-5-20251001', tokensIn: 1000, tokensOut: 500, costUsd: 0.01 },
+      };
+    });
+
+    const candidates: MenuCandidate[] = ['a', 'b', 'c'].map((id) => ({
+      id,
+      type: 'pdf',
+      ref: `https://example.com/${id}.pdf`,
+      label: id.toUpperCase(),
+      source: 'homepage',
+    }));
+    const results = await extractCandidatesResumable(candidates, sharedCtx(), {}, Number.POSITIVE_INFINITY);
+
+    expect(maxActive).toBe(3);
+    expect(results.map((row) => row.candidate.id)).toEqual(['a', 'b', 'c']);
+    expect(results.every((row) => row.result.nextIndex === null)).toBe(true);
+  });
+
+  it('publishes a finished candidate before slower siblings settle', async () => {
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    mockPdf.mockImplementation(async (url: string) => {
+      if (url.includes('/slow.pdf')) await slowGate;
+      return {
+        menu: validMenu(),
+        usage: { model: 'claude-haiku-4-5-20251001', tokensIn: 1000, tokensOut: 500, costUsd: 0.01 },
+      };
+    });
+
+    const candidates: MenuCandidate[] = [
+      { id: 'slow', type: 'pdf', ref: 'https://example.com/slow.pdf', label: 'Dinner', source: 'homepage' },
+      { id: 'fast', type: 'pdf', ref: 'https://example.com/fast.pdf', label: 'Lunch', source: 'homepage' },
+    ];
+    const published: string[] = [];
+    const batch = extractCandidatesResumable(
+      candidates,
+      sharedCtx(),
+      {},
+      Number.POSITIVE_INFINITY,
+      ({ candidate }) => { published.push(candidate.id); }
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(published).toEqual(['fast']);
+    releaseSlow();
+    await batch;
+    expect(published).toEqual(['fast', 'slow']);
+  });
+
+  it('labels a lone progressive menu so it stays selected when siblings arrive', () => {
+    const partial = mergePartialMenus([{ label: 'Lunch', menu: validMenu() }]);
+    expect(partial.sections.every((section) => section.menuLabel === 'Lunch')).toBe(true);
+
+    const internallyNamed = validMenu();
+    internallyNamed.sections[0].menuLabel = 'Tasting';
+    const preserved = mergePartialMenus([{ label: 'Our menus', menu: internallyNamed }]);
+    expect(preserved.sections[0].menuLabel).toBe('Tasting');
   });
 });

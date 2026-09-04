@@ -65,12 +65,17 @@ export default function HeroSearch({
     return searchSessionRef.current;
   }, []);
 
-  // Set the moment the stream reaches ANY terminal outcome. The terminal
-  // branches navigate away with router.push while `state` is still 'parsing',
+  // Set the moment the stream reaches ANY usable navigation outcome, including
+  // a progressive first menu. Those branches navigate away with router.push
+  // while `state` is still 'parsing',
   // so without this the unmount cleanup reports a completed analysis as
   // abandoned — which is what happened on the first real run and would have
   // made the metric read ~100% abandonment.
   const reachedTerminalRef = useRef(false);
+  // Partial results navigate before the analysis stream ends. Remember that
+  // navigation so the later final event does not push the same route again and
+  // remount/reset the menu someone is already reading.
+  const navigatedToResultsRef = useRef(false);
 
   // preventScroll keeps the headline in frame: without it, focusing a field
   // near the fold jumps the page on mobile the instant the panel opens.
@@ -186,6 +191,21 @@ export default function HeroSearch({
             return 'done';
           } else if (event.type === 'continue') {
             return { continueWith: event.restaurantId };
+          } else if (event.type === 'partial_result') {
+            // A first menu is already durable and useful. Navigate now, but
+            // keep consuming this stream (and any continue hops) so the same
+            // analysis finishes the other selected menus without duplicate AI
+            // work. Next's client-side navigation does not cancel this fetch.
+            if (!localStorage.getItem(FIRST_ANALYSIS_KEY)) {
+              localStorage.setItem(FIRST_ANALYSIS_KEY, String(Date.now()));
+            }
+            reachedTerminalRef.current = true;
+            capture('partial_results_shown', {
+              restaurant_id: event.restaurantId,
+              remaining_menu_count: event.remainingMenuCount,
+            });
+            navigatedToResultsRef.current = true;
+            router.push(`/restaurant/${event.restaurantId}`);
           } else if (event.type === 'result' || event.type === 'cached') {
             // Anchor for the day-7+ NPS prompt: first time this browser
             // successfully got a menu (fresh analysis or cache hit).
@@ -193,7 +213,10 @@ export default function HeroSearch({
               localStorage.setItem(FIRST_ANALYSIS_KEY, String(Date.now()));
             }
             reachedTerminalRef.current = true;
-            router.push(`/restaurant/${event.restaurantId}`);
+            if (!navigatedToResultsRef.current) {
+              navigatedToResultsRef.current = true;
+              router.push(`/restaurant/${event.restaurantId}`);
+            }
             return 'done';
           } else if (event.type === 'no_menu') {
             // Not an error: the site has no readable menu / is down. The results
@@ -293,6 +316,7 @@ export default function HeroSearch({
   const startDiscovery = useCallback(
     async (input: RestaurantDiscoverInput, source: 'url' | 'picky' | 'google') => {
       reachedTerminalRef.current = false;
+      navigatedToResultsRef.current = false;
       setState('parsing');
       setError(null);
       setLog([]);
@@ -428,6 +452,7 @@ export default function HeroSearch({
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const reset = () => {
+    navigatedToResultsRef.current = false;
     setState('idle');
     setError(null);
     setLog([]);

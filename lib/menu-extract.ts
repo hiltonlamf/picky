@@ -1,4 +1,4 @@
-import type { ClassifiedMenu, MenuCandidate, RawSection } from '@/types';
+import type { CandidateAnalysisState, ClassifiedMenu, MenuCandidate, RawSection } from '@/types';
 import {
   AICallError,
   AIUsage,
@@ -586,6 +586,41 @@ export async function extractMenu(candidate: MenuCandidate, ctx: ExtractContext)
   return best;
 }
 
+/**
+ * Run every pending menu candidate concurrently while retaining an independent
+ * retry checkpoint for each one. Candidate order is preserved by Promise.all.
+ * Shared fallback sources and the run-wide escalation budget stay shared via
+ * `ctx`, so the bounded fan-out neither duplicates identical work nor removes
+ * the existing spend ceiling.
+ */
+export async function extractCandidatesResumable(
+  candidates: MenuCandidate[],
+  ctx: ExtractContext,
+  checkpoints: Record<string, CandidateAnalysisState>,
+  deadline: number,
+  onCandidateFinished?: (settled: { candidate: MenuCandidate; result: ResumableResult }) => Promise<void> | void
+): Promise<Array<{ candidate: MenuCandidate; result: ResumableResult }>> {
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const checkpoint = checkpoints[candidate.id];
+      const result = await extractMenuResumable(
+        candidate,
+        ctx,
+        checkpoint?.attemptIndex ?? 0,
+        deadline,
+        checkpoint?.bestSoFar ?? null,
+        checkpoint?.usage ?? undefined,
+        checkpoint?.evidence ?? undefined
+      );
+      const settled = { candidate, result };
+      // Await the hook for this candidate only. Siblings keep extracting, so a
+      // first-menu DB save does not put the remaining menus back in series.
+      await onCandidateFinished?.(settled);
+      return settled;
+    })
+  );
+}
+
 function normName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9 ]/g, '').trim();
 }
@@ -674,6 +709,25 @@ export function mergeMenus(named: Array<{ label: string; menu: ClassifiedMenu }>
   }
 
   return { restaurantName, language, cuisine, sections };
+}
+
+/**
+ * Prepare menus for the progressive results page. A normal single-menu result
+ * is intentionally unlabeled, but a partial result must retain its candidate
+ * label so the same menu remains selected when later menus arrive.
+ */
+export function mergePartialMenus(named: Array<{ label: string; menu: ClassifiedMenu }>): ClassifiedMenu {
+  const selected = selectSubstantialMenus(named);
+  const merged = mergeMenus(selected);
+  if (selected.length !== 1) return merged;
+  const label = selected[0].label;
+  return {
+    ...merged,
+    sections: merged.sections.map((section) => ({
+      ...section,
+      menuLabel: section.menuLabel ?? label,
+    })),
+  };
 }
 
 /**

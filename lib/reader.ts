@@ -523,22 +523,36 @@ export async function readPage(url: string, timeoutMs = READER_TIMEOUT_MS): Prom
 async function readPageUncached(url: string, timeoutMs: number): Promise<ReaderResult | null> {
   const provider = selectProvider();
   if (provider === 'off') return null;
-  if (provider === 'jina') return readWithJina(url, timeoutMs);
+  const timed = async (name: 'jina' | 'firecrawl', fn: () => Promise<ReaderResult | null>) => {
+    const startedAt = Date.now();
+    const result = await fn();
+    let domain = '';
+    try { domain = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+    console.info('[reader-timing]', JSON.stringify({
+      provider: name,
+      domain,
+      durationMs: Date.now() - startedAt,
+      success: result !== null,
+      thin: result ? readerResultIsThin(result) : null,
+    }));
+    return result;
+  };
+  if (provider === 'jina') return timed('jina', () => readWithJina(url, timeoutMs));
   if (provider === 'firecrawl') {
-    const result = await readWithFirecrawl(url, timeoutMs);
+    const result = await timed('firecrawl', () => readWithFirecrawl(url, timeoutMs));
     // Explicitly-chosen Firecrawl still degrades to keyless Jina rather than
     // returning nothing — a missing key shouldn't take the reader offline.
-    return result ?? readWithJina(url, timeoutMs);
+    return result ?? timed('jina', () => readWithJina(url, timeoutMs));
   }
 
   // auto: free first, pay only when the free read is useless.
-  const jina = await readWithJina(url, timeoutMs);
+  const jina = await timed('jina', () => readWithJina(url, timeoutMs));
   if (jina && !readerResultIsThin(jina)) return jina;
   if (!isFirecrawlConfigured()) {
     if (!jina) reportReaderOutage(url);
     return jina;
   }
-  const firecrawl = await readWithFirecrawl(url, timeoutMs);
+  const firecrawl = await timed('firecrawl', () => readWithFirecrawl(url, timeoutMs));
   // Keep Jina's thin result if the paid attempt also failed — some content
   // beats none, and we've already paid for the attempt either way.
   const result = firecrawl ?? jina;

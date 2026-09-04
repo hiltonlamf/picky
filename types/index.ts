@@ -220,6 +220,28 @@ export interface AnalysisState {
   /** Telemetry category of the analyzed selection (pdf/image/js/text/multi) —
    *  fixed when the analysis starts so resumed requests report it correctly. */
   category?: string;
+  /** Per-candidate checkpoints for concurrent resumable extraction. Older
+   * payloads used the singular fields above and are migrated on resume. */
+  candidateStates?: Record<string, CandidateAnalysisState>;
+  /** Wall-clock start of the analyze phase, retained across continue hops. */
+  startedAtMs?: number;
+  /** Number of serverless requests used by this one analysis. */
+  requestCount?: number;
+  /** Accumulated wall time by phase across resumable requests. */
+  timingMs?: Record<string, number>;
+  /** Number of menus selected when this analysis began. Retained because the
+   * queue shrinks as candidates finish. */
+  totalCandidates?: number;
+  /** True once a useful first menu has been persisted and shown while the
+   * remaining selected menus continue in the background. */
+  partialPublished?: boolean;
+}
+
+export interface CandidateAnalysisState {
+  attemptIndex: number;
+  bestSoFar?: { menu: ClassifiedMenu; usage: AIUsage } | null;
+  usage?: AIUsage | null;
+  evidence?: EscalationEvidence | null;
 }
 
 /** Persisted between the discover and analyze phases (keyed by restaurantId). */
@@ -237,6 +259,7 @@ export interface DiscoveryPayload {
 export type ParseEventType =
   | 'progress'
   | 'cached'
+  | 'partial_result'
   | 'result'
   | 'error'
   | 'no_menu'
@@ -258,6 +281,13 @@ export interface ParseCachedEvent {
 export interface ParseResultEvent {
   type: 'result';
   restaurantId: string;
+}
+
+/** A usable menu is durable, but other selected menus are still being read. */
+export interface ParsePartialResultEvent {
+  type: 'partial_result';
+  restaurantId: string;
+  remainingMenuCount: number;
 }
 
 export interface ParseErrorEvent {
@@ -289,6 +319,7 @@ export interface ParseNoMenuEvent {
 export type ParseEvent =
   | ParseProgressEvent
   | ParseCachedEvent
+  | ParsePartialResultEvent
   | ParseResultEvent
   | ParseErrorEvent
   | ParseNoMenuEvent
