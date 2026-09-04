@@ -130,8 +130,8 @@ export const SITE_FEEDBACK_TYPES = [
 // the admin inbox labels them instead of showing a raw slug.
 export const INLINE_FEEDBACK_TYPES = [
   { value: 'menu_choice_note', label: 'Menu picker — wrong or missing menus' },
-  { value: 'no_menu_note', label: 'No menu found — reader knows where it is' },
-  { value: 'parse_error_note', label: 'Analysis failed — reader knows where it is' },
+  { value: 'no_menu_note', label: 'Dead end: no menu found — visitor note' },
+  { value: 'parse_error_note', label: 'Dead end: analysis failed — visitor note' },
 ];
 
 // Guide-level feedback (not tied to one restaurant) — shown on the city guide.

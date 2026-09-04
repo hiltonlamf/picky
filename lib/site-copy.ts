@@ -35,6 +35,69 @@ export function guideIntro(city: string): string {
 export const GUIDE_HUMAN_LINE =
   'AI reads the menus. We sample and review the results by hand, and keep fixing what the error log shows us.';
 
+// ------------------------------------------------------------- the dead ends
+
+/* The four ways a search ends with nothing to show. Kept here rather than
+ * inline in RestaurantPage so /admin/dead-ends can label a wall with the exact
+ * words the visitor saw — an admin investigating "why did this fail" should not
+ * have to translate `unavailable` back into "This website looks down". */
+
+/** Short label for a `no_menu_reason`, for admin tables and pills. */
+export const NO_MENU_REASON_LABEL: Record<string, string> = {
+  not_listed: 'No menu on the site',
+  unavailable: 'Site unreachable',
+  closed: 'Restaurant closed',
+  blocked: 'Menu found, access refused',
+};
+
+/** The heading + body a visitor sees on a `no_menu` restaurant page. */
+export function noMenuCopy(
+  reason: string | null | undefined,
+  name: string
+): { heading: string; body: string } {
+  switch (reason) {
+    case 'unavailable':
+      return {
+        heading: 'This website looks down',
+        body: `We couldn't reach ${name}'s website — it may be down or not live yet.`,
+      };
+    case 'closed':
+      return {
+        heading: 'This restaurant looks closed',
+        body: `${name} appears to be permanently closed, so there's no menu to show.`,
+      };
+    // 'blocked' means we FOUND the menu and were refused it — a fact about the
+    // host, not about the restaurant. Saying "no menu listed" here would be
+    // simply untrue, and it hides the one thing that fixes it.
+    case 'blocked':
+      return {
+        heading: "We found the menu — but we can't open it",
+        body:
+          'Some things on the web are off-limits to AI agents: either we cannot read them, or ' +
+          'we are not permitted to. Can you give us a hand by uploading the menu, or pasting a ' +
+          "direct link? We'll read it right away.",
+      };
+    default:
+      return {
+        heading: 'No menu listed on this site',
+        body: `We looked, but ${name}'s website doesn't seem to publish a menu online.`,
+      };
+  }
+}
+
+/* The open-ended ask on a dead end. Deliberately NOT another "where is the
+ * menu?" — the form directly above already asks that, and repeating it wastes
+ * the one moment a disappointed visitor is willing to talk to us. This asks for
+ * anything at all, and says a person will read it. */
+export const DEAD_END_FEEDBACK = {
+  heading: 'Not what you were hoping for?',
+  body: 'Tell us anything — what you expected, what went wrong, what would make this useful. A real person reads every message, and this is exactly how we decide what to fix next.',
+  placeholder: 'Type anything at all…',
+  cta: 'Send',
+  /** Shown in place of the form once sent. Names the human, on purpose. */
+  thanks: "Thank you — that's landed with us. We read every one of these, and it's what we work from next.",
+} as const;
+
 // ------------------------------------------------------- counting methodology
 
 /* Shown collapsed on both the city guide and the restaurant page, so the number

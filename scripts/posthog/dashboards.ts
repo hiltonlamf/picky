@@ -388,6 +388,23 @@ const DASHBOARDS: Array<{ name: string; description: string; insights: Insight[]
         [ev('inline_feedback_submitted')],
         { breakdownFilter: { breakdown: 'surface', breakdown_type: 'event' } }
       ),
+      {
+        // The dead-end box is open by default, so there is no "opened" step to
+        // measure — the honest denominator is how many people were shown it.
+        name: 'Dead ends: shown the feedback box → told us something',
+        description:
+          'On the no-menu and error screens the box is expanded by default. This is the share of disappointed visitors who actually type something. It was behind a "Know where the menu is? Tell us" link before 2026-09; if this rate does not move, the copy is the problem, not the placement.',
+        query: {
+          kind: 'InsightVizNode',
+          source: {
+            kind: 'FunnelsQuery',
+            series: [ev('inline_feedback_shown'), ev('inline_feedback_submitted')],
+            dateRange: { date_from: '-30d' },
+            properties: NOT_INTERNAL,
+            funnelsFilter: { funnelVizType: 'steps' },
+          },
+        },
+      },
       trend('Share rate', 'Shares vs results seen — the organic-growth read.', [
         ev('share_clicked'),
         ev('results_viewed'),

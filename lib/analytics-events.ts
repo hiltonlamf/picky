@@ -49,6 +49,12 @@ export const EVENTS = {
   FEEDBACK_SUBMITTED: 'feedback_submitted',
   // Free-text note captured inline at the two moments the pipeline breaks:
   // the menu picker, and the error / no-menu screens. `surface` says which.
+  //
+  // SHOWN vs OPENED are not the same step and must not be merged: on a dead
+  // end the box is already open, so there is nothing to click and `opened`
+  // never fires. The response rate there is submitted/shown; on the menu
+  // picker (still a click-to-open link) it is submitted/opened.
+  INLINE_FEEDBACK_SHOWN: 'inline_feedback_shown',
   INLINE_FEEDBACK_OPENED: 'inline_feedback_opened',
   INLINE_FEEDBACK_SUBMITTED: 'inline_feedback_submitted',
   REPORT_MODAL_OPENED: 'report_modal_opened',
