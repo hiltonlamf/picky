@@ -7,6 +7,8 @@ import ReportModal from './ReportModal';
 import { capture } from '@/lib/posthog-client';
 import { CONFIDENCE_THRESHOLD_WARNING } from '@/lib/dietary-config';
 import { formatPrice } from '@/lib/format-price';
+import { matchesDietFilter, type DietFilter } from '@/lib/menu-insights';
+import { isSeafoodDish } from '@/lib/dietary-overrides';
 import { AlertIcon, QuestionIcon, FlagIcon } from './icons';
 
 interface Props {
@@ -28,19 +30,10 @@ export default function DishCard({ dish, activeFilter, aside }: Props) {
   // Menus often list a bare "4"; without a symbol it doesn't read as a price.
   const price = formatPrice(dish.price);
 
-  // Hide dishes that don't match the active filter (if set). 'unknown'
-  // dishes are included under vegetarian (a "maybe, please confirm" option)
-  // but never under vegan — the higher-trust claim per CLAUDE.md.
-  if (activeFilter && activeFilter !== 'all') {
-    if (activeFilter === 'vegan' && dish.classification !== 'vegan') return null;
-    if (
-      activeFilter === 'vegetarian' &&
-      dish.classification !== 'vegan' &&
-      dish.classification !== 'vegetarian' &&
-      dish.classification !== 'unknown'
-    )
-      return null;
-  }
+  // A second guard behind MenuSection's filter, sharing its one predicate so
+  // the two can't diverge. Section name is null on purpose: MenuSection has
+  // already folded the section-derived correction into dish.classification.
+  if (activeFilter && !matchesDietFilter(activeFilter as DietFilter, null, dish)) return null;
 
   return (
     <>
@@ -79,13 +72,13 @@ export default function DishCard({ dish, activeFilter, aside }: Props) {
               </p>
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <DietaryBadge classification={dish.classification} size="sm" />
+              <DietaryBadge classification={dish.classification} seafood={isSeafoodDish(null, dish)} size="sm" />
               {/* Says which dishes the "N veggie" number is counting. Without
                   it the tab reads "4" above nine rows with nothing to explain
                   the difference. */}
               {aside && (
                 <span className="text-[11px] text-evergreen/80 italic">
-                  Not included in the veggie count
+                  Not included in the count
                 </span>
               )}
               {uncertain && dish.confidenceReason && (

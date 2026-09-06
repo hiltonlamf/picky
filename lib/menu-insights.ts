@@ -2,7 +2,7 @@ import type { Restaurant, MenuSection, Dish } from '@/types';
 import { formatPrice } from '@/lib/format-price';
 import { classifyDishRole } from '@/lib/dish-role';
 import { modifierDishes } from '@/lib/menu-modifiers';
-import { effectiveDietaryClassification } from '@/lib/dietary-overrides';
+import { effectiveDietaryClassification, isPescatarianDish } from '@/lib/dietary-overrides';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -53,6 +53,27 @@ export function isVeg(
     classification === 'vegetarian' ||
     classification === 'unknown'
   );
+}
+
+/** The diet tabs on the restaurant page, in the order they are shown. */
+export type DietFilter = 'all' | 'pescatarian' | 'vegetarian' | 'vegan';
+
+/**
+ * Does this dish belong under the given tab? THE one implementation.
+ *
+ * Both MenuSection and DishCard used to carry their own copy of this test, and
+ * a third copy is exactly how the 9-vs-10 count bug happened. Every surface
+ * that shows or hides a dish by diet calls this.
+ */
+export function matchesDietFilter(
+  filter: DietFilter,
+  sectionName: string | null | undefined,
+  dish: Pick<Dish, 'name' | 'description' | 'classification'>
+): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'vegan') return effectiveDietaryClassification(sectionName, dish) === 'vegan';
+  if (filter === 'pescatarian') return isPescatarianDish(sectionName, dish);
+  return isVeg(dish, sectionName);
 }
 
 /** A veg dish that belongs in the headline figure — i.e. not a dessert, sauce,
@@ -173,6 +194,8 @@ export interface MenuTallies {
   all: number;
   veg: CategoryTally;
   vegan: CategoryTally;
+  /** Seafood PLUS everything veg — a superset of `veg`, never smaller. */
+  pesc: CategoryTally;
 }
 
 /**
@@ -197,6 +220,8 @@ export function menuTallies(
   const aside = new Set<string>();
   const veganCounted = new Set<string>();
   const veganAside = new Set<string>();
+  const pescCounted = new Set<string>();
+  const pescAside = new Set<string>();
   const priceTest = makePriceTest(priceContext);
   for (const section of sections) {
     const modifiers = modifierDishes(section);
@@ -204,9 +229,15 @@ export function menuTallies(
       if (modifiers.has(dish)) continue;
       const key = dishKey(dish);
       all.add(key);
+      // Pescatarian is a superset of veg, so it is decided first and the veg
+      // branch below narrows it. Same walk, same keys — a dish can never be
+      // counted by one tab and asided by another.
+      const pesc = isPescatarianDish(section.name, dish);
+      const isCounted = isCountedWithPrice(section.name, dish, priceTest);
+      if (pesc) (isCounted ? pescCounted : pescAside).add(key);
       if (!isVeg(dish, section.name)) continue;
       const vegan = dish.classification === 'vegan';
-      if (isCountedWithPrice(section.name, dish, priceTest)) {
+      if (isCounted) {
         counted.add(key);
         if (vegan) veganCounted.add(key);
       } else {
@@ -221,11 +252,13 @@ export function menuTallies(
   // Set directly needs --downlevelIteration.
   counted.forEach((key) => aside.delete(key));
   veganCounted.forEach((key) => veganAside.delete(key));
+  pescCounted.forEach((key) => pescAside.delete(key));
 
   return {
     all: all.size,
     veg: { counted: counted.size, aside: aside.size },
     vegan: { counted: veganCounted.size, aside: veganAside.size },
+    pesc: { counted: pescCounted.size, aside: pescAside.size },
   };
 }
 
@@ -235,13 +268,18 @@ function dishKey(dish: Dish): string {
   return normalizeDishName(dish.name) || `#${dish.id}`;
 }
 
-/** The guide card's three figures, derived from the same walk. */
+/** The guide card's figures, derived from the same walk. */
 export function headlineCounts(
   sections: MenuSection[],
   priceContext: MenuSection[] = sections
-): { counted: number; aside: number; countedVegan: number } {
+): { counted: number; aside: number; countedVegan: number; countedPesc: number } {
   const t = menuTallies(sections, priceContext);
-  return { counted: t.veg.counted, aside: t.veg.aside, countedVegan: t.vegan.counted };
+  return {
+    counted: t.veg.counted,
+    aside: t.veg.aside,
+    countedVegan: t.vegan.counted,
+    countedPesc: t.pesc.counted,
+  };
 }
 
 /** Whether a dish is one of the COUNTED ones, for marking it in the list. */
@@ -270,6 +308,18 @@ export function splitVegDishes(
   sections: MenuSection[],
   priceContext: MenuSection[] = sections
 ): { counted: Dish[]; aside: Dish[] } {
+  return splitDishesByDiet('vegetarian', sections, priceContext);
+}
+
+/**
+ * The same split for any diet tab. `splitVegDishes` is the vegetarian case,
+ * kept as its own name because most callers only ever want that one.
+ */
+export function splitDishesByDiet(
+  filter: DietFilter,
+  sections: MenuSection[],
+  priceContext: MenuSection[] = sections
+): { counted: Dish[]; aside: Dish[] } {
   const priceTest = makePriceTest(priceContext);
   const seen: Record<string, true> = {};
   const counted: Dish[] = [];
@@ -280,7 +330,7 @@ export function splitVegDishes(
     const modifiers = modifierDishes(section);
     for (const dish of liveDishes(section)) {
       if (modifiers.has(dish)) continue;
-      if (!isVeg(dish, section.name)) continue;
+      if (!matchesDietFilter(filter, section.name, dish)) continue;
       const key = dishKey(dish);
       if (seen[key]) continue;
       if (isCountedWithPrice(section.name, dish, priceTest)) {
@@ -332,6 +382,9 @@ export interface GuideInsights {
   /** The best single menu's vegan / vegetarian split (shown once on the card).
    *  Counted dishes only, so it can never exceed maxVegOptions. */
   bestMenu: { label: string | null; vegan: number; vegetarian: number };
+  /** That same menu's COUNTED pescatarian total (seafood + veg). A superset of
+   *  maxVegOptions, so it is never smaller — read the two side by side. */
+  maxPescOptions: number;
   /** Veg options per source menu, in display order. */
   perMenu: PerMenuVeg[];
   /** All live dishes across every menu (sides included). */
@@ -520,6 +573,9 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
     vegan: best?.countedVegan ?? 0,
     vegetarian: (best?.counted ?? 0) - (best?.countedVegan ?? 0),
   };
+  // Same menu, same counted set — so the card's fish number can't belong to a
+  // different menu than its veggie number.
+  const maxPescOptions = best?.countedPesc ?? 0;
 
   const totalDishes = restaurant.sections.reduce((total, section) => {
     const modifiers = modifierDishes(section);
@@ -600,5 +656,5 @@ export function guideInsights(restaurant: Pick<Restaurant, 'sections'>): GuideIn
   const highlightsAreThin =
     highlights.length < MAX_HIGHLIGHTS || topHighlights.every((h) => isNonMainSectionName(h.sectionName));
 
-  return { maxVegOptions, asideCount, bestMenu, perMenu, totalDishes, highlights, highlightsAreThin };
+  return { maxVegOptions, maxPescOptions, asideCount, bestMenu, perMenu, totalDishes, highlights, highlightsAreThin };
 }

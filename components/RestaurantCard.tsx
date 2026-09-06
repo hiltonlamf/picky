@@ -14,7 +14,7 @@ interface Props {
 }
 
 export default function RestaurantCard({ restaurant, city }: Props) {
-  const { maxVegOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
+  const { maxVegOptions, maxPescOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
     guideInsights(restaurant);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
@@ -90,6 +90,14 @@ export default function RestaurantCard({ restaurant, city }: Props) {
             // badge — this restaurant has sides and sweets but no veggie dish.
             <span className="text-forest/70 whitespace-nowrap">
               <span aria-hidden="true">😢</span> No veggie mains
+            </span>
+          )}
+          {/* Only when it says something the veggie number doesn't. Pescatarian
+              includes every veg dish, so at a restaurant with no seafood the two
+              are identical and a second identical number is just noise. */}
+          {maxPescOptions > maxVegOptions && (
+            <span className="text-ocean-700 whitespace-nowrap">
+              <span aria-hidden="true">🐟</span> {maxPescOptions} pescatarian
             </span>
           )}
         </div>

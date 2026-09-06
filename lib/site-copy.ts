@@ -105,7 +105,7 @@ export const DEAD_END_FEEDBACK = {
  * in "double quotes", or the build breaks. */
 
 /** The always-visible label on the collapsed disclosure. */
-export const COUNTING_METHOD_SUMMARY = 'How we count veggie dishes';
+export const COUNTING_METHOD_SUMMARY = 'How we count dishes';
 
 /** The expanded explanation. One string per paragraph. */
 export const COUNTING_METHOD_BODY: string[] = [
@@ -113,6 +113,7 @@ export const COUNTING_METHOD_BODY: string[] = [
   "Nothing is hidden. Every dish the AI found is on the menu below, with its own label, whether we count it or not.",
   "When we can't tell, we count it. We would rather show you a maybe than quietly drop something you might have wanted.",
   'Sharing plates are still dishes. At a tapas, mezze or dim sum place, small plates are the meal — so they count.',
+  "Pescatarian means seafood plus everything a vegetarian can eat — fish, shellfish and crustaceans, alongside every veggie and vegan dish. A dish that pairs seafood with meat, like surf and turf, is not counted, and neither is one where we can't tell the fish from the meat.",
 ];
 
 /* Flag emoji beside a guide headline. Dublin used to hardcode 🇮🇪 in its own
