@@ -54,6 +54,10 @@ const SEAFOOD_RE = new RegExp(
       'sardines?', 'anchovy', 'anchovies', 'trout', 'eel', 'monkfish',
       'swordfish', 'whitebait', 'skate', 'sea\\s?bass', 'sea\\s?bream',
       'red\\s?mullet', 'john\\s?dory', 'smoked\\s?salmon', 'gravlax',
+      // Closed compounds. `\bfish\b` does not fire inside "Fishcakes" or
+      // "Kingfish", and all three of these were missed on live menus.
+      'fish\\s?cakes?', 'fish\\s?fingers?', 'kingfish', 'sea\\s?trout',
+      'catfish', 'whitefish', 'rockfish',
       // --- English: shellfish, molluscs, crustaceans
       'prawns?', 'shrimps?', 'crab', 'crabmeat', 'lobster', 'langoustines?',
       'crayfish', 'scampi', 'mussels?', 'clams?', 'cockles?', 'oysters?',
@@ -107,11 +111,27 @@ const SEAFOOD_RE = new RegExp(
 const SEAFOOD_CONTEXT_RE =
   /\b(?:dover|lemon|grilled|pan[\s-]?fried|fried|whole|fillet\s+of|black)\s+sole\b|\bsole\s+(?:meuni[èe]re|fillet|goujons)\b|\b(?:sea|striped|black|chilean)\s+bass\b|\brape\s+(?:a\s+la|al|con|en)\b|\b(?:al|a\s+la)\s+rape\b|\bsepia\s+(?:a\s+la|con|plancha|encebollada)\b|\bchocos?\b|\brombo\s+(?:al|con|alla)\b|\bgeb(?:akken|raden)\s+tong\b|\btong\s+meuni[èe]re\b/i;
 
-// Plant-based decoys. These contain a seafood word but are not seafood, and
-// getting one wrong is the worst kind of error here — it would hide a vegan
-// dish from a vegan. Checked BEFORE the seafood list, always.
+// Plant-based decoys: phrases that contain a seafood word but are not seafood.
+// Getting one wrong is the worst error here — it would hide a vegan dish from a
+// vegan.
+//
+// These are STRIPPED from the text rather than used to veto the whole dish. A
+// veto is too blunt: Liath sells "Cromane oyster, seaweed hot sauce, fermented
+// gooseberry", where the seaweed cancelled a real oyster and the dish fell out
+// of the pescatarian tab. Removing just the decoy phrase leaves the rest of the
+// name to speak for itself. Found by the live audit.
 const PLANT_SEAFOOD_RE =
-  /\boyster (?:mushrooms?|leaf|sauce)\b|\blobster mushrooms?\b|\bcrab apples?\b|\bfish[\s-]?free\b|\bsea(?:weed|\s?salt)\b|\bvis\s?vrij\b|\b(?:vegan|vegetarian|veggie|plant[\s-]?based|mock|no[\s-]?|not\s+)\s*(?:fish|seafood|prawns?|shrimps?|crab|lobster|scallops?|tuna|salmon|calamari|squid|vis|garnalen)\b/i;
+  /\boyster (?:mushrooms?|leaf|sauce)\b|\blobster mushrooms?\b|\bcrab apples?\b|\bfish[\s-]?free\b|\bsea(?:weed|\s?salt)\b|\bvis\s?vrij\b|\b(?:vegan|vegetarian|veggie|plant[\s-]?based|mock|no[\s-]?|not\s+)\s*(?:fish|seafood|prawns?|shrimps?|crab|lobster|scallops?|tuna|salmon|calamari|squid|vis|garnalen)\b/gi;
+
+/** Remove the plant look-alikes so what remains can be matched honestly.
+ *
+ *  Longest phrase first: "seaweed caviar" has to go as a unit, because
+ *  stripping only the "seaweed" would leave a bare "caviar" behind and turn a
+ *  vegan dish into fish roe. */
+const PLANT_CAVIAR_STRIP_RE = new RegExp(PLANT_CAVIAR_RE.source, 'gi');
+function stripPlantDecoys(text: string): string {
+  return text.replace(PLANT_CAVIAR_STRIP_RE, ' ').replace(PLANT_SEAFOOD_RE, ' ');
+}
 
 // ---------------------------------------------------------------------------
 // Meat
@@ -129,7 +149,7 @@ const MEAT_RE = new RegExp(
   '\\b(?:' +
     [
       // --- English
-      'meat', 'beef', 'steak', 'ribeye', 'sirloin', 'fillet\\s+steak',
+      'meat', 'beef', 'steaks?', 'rib\\s?eye', 'ribs?', 'sirloin', 'fillet\\s+steak',
       'chicken', 'poultry', 'pork', 'lamb', 'mutton', 'veal', 'venison',
       'duck', 'turkey', 'goat', 'rabbit', 'goose', 'quail', 'pigeon',
       'oxtail', 'brisket', 'bacon', 'ham', 'sausages?', 'salami',
@@ -164,8 +184,14 @@ const MEAT_RE = new RegExp(
 // Dishes that offer a VEGETARIAN option are already stored as 'vegetarian' by
 // the extraction prompt, so they reach the pescatarian tab via the veg branch
 // and never get here.
+// SUBSTITUTION only — the diner picks which protein the dish is made with.
+// Deliberately NOT "add", "optional", "extra" or "upgrade": those are add-ons
+// bolted onto a dish that already has its own protein. The Church Café Bar
+// sells a "16oz Rib Eye on the Bone" whose description ends "Optional add-on:
+// pan-fried prawns"; an add-on rule put a steak in the pescatarian tab. Found
+// by the live audit, not by a unit test.
 const PROTEIN_CHOICE_RE =
-  /\b(?:choice|choose|select)\s+(?:of|from|your|between)\b|\byour\s+choice\b|\bwith\s+(?:a\s+)?choice\b|\bor\s+(?:add|swap)\b|\badd\s+(?:on\s+)?\b|\boptional(?:ly)?\b|\bupgrade\s+to\b|\bkeuze\s+(?:uit|van)\b|\ba\s+(?:elegir|escoger)\b|\ba\s+scelta\b/i;
+  /\b(?:choice|choose|select)\s+(?:of|from|your|between)\b|\byour\s+choice\b|\bwith\s+(?:a\s+)?choice\b|\bkeuze\s+(?:uit|van)\b|\ba\s+(?:elegir|escoger)\b|\ba\s+scelta\b/i;
 
 export function hasExplicitAnimalRoe(
   sectionName: string | null | undefined,
@@ -183,8 +209,7 @@ export function hasExplicitAnimalProduct(
   if (hasExplicitAnimalRoe(sectionName, dish)) return true;
   // Use the sold name, not the description: descriptions often advertise
   // optional meat/seafood add-ons to an otherwise vegetarian dish.
-  const dishText = fold(dish.name);
-  if (PLANT_SEAFOOD_RE.test(dishText)) return false;
+  const dishText = stripPlantDecoys(fold(dish.name));
   return SEAFOOD_RE.test(dishText) || SEAFOOD_CONTEXT_RE.test(dishText);
 }
 
@@ -215,24 +240,25 @@ export function isSeafoodDish(
   const name = fold(dish.name);
   const description = fold(dish.description ?? '');
 
-  // Normally the sold NAME is the only evidence we trust, because descriptions
-  // advertise optional meat add-ons on otherwise vegetarian dishes. The one
-  // exception is a dish that explicitly lets the diner pick their protein
-  // ("Noodles — choice of chicken, beef or prawns"): there the description is
-  // the only place the prawn is named, and a pescatarian really can order it.
+  // Meat in the NAME settles it — the dish is sold as a meat dish, whatever
+  // else the description offers. This is what keeps "Surf & Turf", "Pollo e
+  // Gamberi" and a rib eye with an optional prawn add-on out of the fish tab.
+  //
+  // Unless the name ITSELF frames a choice ("Pad Thai — choice of chicken or
+  // prawn"), in which case the meat is one option among several rather than
+  // what the dish is, and a pescatarian orders the other one.
+  if (MEAT_RE.test(name) && !PROTEIN_CHOICE_RE.test(name)) return false;
+
+  // Otherwise the sold NAME is still the only evidence we trust, because
+  // descriptions advertise optional add-ons. The exception is again a choice of
+  // protein ("Noodles — choice of chicken, beef or prawns"), where the
+  // description is the only place the prawn is named.
   const isChoice = PROTEIN_CHOICE_RE.test(name) || PROTEIN_CHOICE_RE.test(description);
-  const text = isChoice ? `${name} ${description}` : name;
+  const text = stripPlantDecoys(isChoice ? `${name} ${description}` : name);
 
-  if (PLANT_SEAFOOD_RE.test(text)) return false;
-
-  const seafood =
-    hasExplicitAnimalRoe(sectionName, dish) || SEAFOOD_RE.test(text) || SEAFOOD_CONTEXT_RE.test(text);
-  if (!seafood) return false;
-
-  // Meat and fish together: a fixed dish (Surf & Turf, Pollo e Gamberi) is out,
-  // a dish that lets the diner choose between them is in.
-  if (MEAT_RE.test(text)) return isChoice;
-  return true;
+  return (
+    hasExplicitAnimalRoe(sectionName, dish) || SEAFOOD_RE.test(text) || SEAFOOD_CONTEXT_RE.test(text)
+  );
 }
 
 /** Can a pescatarian eat this? Seafood, plus everything a vegetarian can eat.

@@ -105,6 +105,28 @@ describe('the choice exception — a pescatarian orders the prawn', () => {
   it('still excludes a fixed dish that merely lists two proteins', () => {
     expect(seafood('Chicken and Prawn Laksa')).toBe(false);
   });
+
+  it('does not treat an optional ADD-ON as a choice — a steak stays a steak', () => {
+    // The Church Café Bar, found by scripts/audit-pescatarian.ts against live
+    // data (not by a unit test). An add-on is bolted onto a dish that already
+    // has its protein; a choice decides what the protein is.
+    expect(
+      seafood(
+        '16oz Rib Eye on the Bone',
+        'All steaks are served with fondant potatoes. Optional add-on: pan-fried prawns'
+      )
+    ).toBe(false);
+    expect(seafood('Sirloin Steak', 'Add garlic prawns for €6')).toBe(false);
+    expect(seafood('Burger', 'Upgrade to a lobster topping')).toBe(false);
+  });
+
+  it('ignores the section hint when the dish name itself says meat', () => {
+    // A "Caviar" section marks its dishes as roe (that rule predates this
+    // feature and is right for the safety override). It must not drag a steak
+    // listed in the same section into the fish tab.
+    expect(isSeafoodDish('Caviar', dish('16oz Rib Eye on the Bone'))).toBe(false);
+    expect(isSeafoodDish('Caviar', dish('Sevruga Royal'))).toBe(true);
+  });
 });
 
 describe('plant decoys — a false positive here would hide a vegan dish', () => {
@@ -114,6 +136,21 @@ describe('plant decoys — a false positive here would hide a vegan dish', () =>
     expect(seafood('Crab Apple Chutney')).toBe(false);
     expect(seafood('Vegan Fish Cakes')).toBe(false);
     expect(seafood('Mock Tuna Sandwich')).toBe(false);
+  });
+
+  it('cancels only the decoy phrase, not the whole dish', () => {
+    // Liath: "Cromane oyster, seaweed hot sauce" — the seaweed used to veto the
+    // dish and take a real oyster out of the pescatarian tab with it.
+    expect(seafood('Cromane oyster, seaweed hot sauce, fermented gooseberry')).toBe(true);
+    expect(seafood('Seaweed butter')).toBe(false);
+    // Still correct when the decoy is the whole dish.
+    expect(seafood('Oyster Mushroom Skewers')).toBe(false);
+  });
+
+  it('reads closed compounds, which a bare \\bfish\\b misses', () => {
+    expect(seafood('Fishcakes with lime mayonnaise')).toBe(true);
+    expect(seafood('Cured kingfish, lemon, red chili')).toBe(true);
+    expect(seafood('Seatrout Crudo, Apple, Kohlrabi')).toBe(true);
   });
 
   it('never downgrades a vegan dish through the display override', () => {

@@ -27,14 +27,48 @@
 // word list also widens the safety override that forces a dish to 'neither' —
 // so this branch can move the veggie count, and any movement should be a dish
 // that genuinely names a fish.
+//
+// It talks to Supabase directly rather than importing lib/db, deliberately:
+// lib/db pulls in the whole app graph (lib/scraper and friends), which takes
+// minutes to load in this sandbox for a script that only needs three tables.
 import './_preload-env';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { getCityGuides, getFeaturedRestaurants } from '@/lib/db';
+import { createClient } from '@supabase/supabase-js';
 import { isSeafoodDish, effectiveDietaryClassification } from '@/lib/dietary-overrides';
 import { menuTallies, guideInsights } from '@/lib/menu-insights';
 import { modifierDishes } from '@/lib/menu-modifiers';
-import type { Restaurant } from '@/types';
+import type { Restaurant, MenuSection, Dish, DietaryClassification } from '@/types';
+
+function db() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+}
+
+/** PostgREST silently truncates at 1000 rows, so every whole-table read pages.
+ *  Mirrors selectAllRows in lib/db.ts, which is private to that module. */
+async function selectAll<T>(build: (from: number, to: number) => any): Promise<T[]> {
+  const PAGE = 1000;
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    // Retry the page, not the run: a single dropped connection partway through
+    // 4,000 rows should not cost the whole audit (it did once).
+    let page: T[] | null = null;
+    for (let attempt = 1; attempt <= 4 && page === null; attempt++) {
+      try {
+        const { data, error } = await build(from, from + PAGE - 1);
+        if (error) throw new Error(error.message);
+        page = (data ?? []) as T[];
+      } catch (err) {
+        if (attempt === 4) throw err;
+        console.log(`  page ${from} failed (${(err as Error).message}) — retry ${attempt}`);
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
+    all.push(...page!);
+    if (page!.length < PAGE) break;
+  }
+  return all;
+}
 
 interface DishRow {
   restaurant: string;
@@ -154,9 +188,16 @@ function auditRestaurant(restaurant: Restaurant, city: string): RestaurantReport
     }
   }
 
-  // The page's own figures, from the same walk both surfaces use.
-  const tallies = menuTallies(restaurant.sections, restaurant.sections);
-  const { maxPescOptions } = guideInsights(restaurant);
+  // Card vs page, compared on the SAME menu. The card headlines one menu (a
+  // diner only eats from one), and the page opens on that same menu — so
+  // comparing the card against a whole-restaurant total would report a
+  // mismatch on every multi-menu restaurant and hide any real one.
+  const { maxPescOptions, bestMenu } = guideInsights(restaurant);
+  const bestSections = restaurant.sections.filter((s) => (s.menuLabel ?? null) === bestMenu.label);
+  const tallies = menuTallies(
+    bestSections.length > 0 ? bestSections : restaurant.sections,
+    restaurant.sections
+  );
 
   return {
     city,
@@ -170,21 +211,77 @@ function auditRestaurant(restaurant: Restaurant, city: string): RestaurantReport
   };
 }
 
-async function main() {
-  const guides = await getCityGuides();
-  const reports: RestaurantReport[] = [];
+/** Assemble Restaurant-shaped objects from three bulk reads, so the pure
+ *  counting functions below see exactly what the app sees. Three queries
+ *  total, not four per restaurant. */
+async function loadRestaurants(): Promise<Restaurant[]> {
+  const supabase = db();
 
-  // Progress as it goes: loading every dish of every restaurant is a few
-  // hundred sequential round trips, so a silent run looks indistinguishable
-  // from a hung one for several minutes.
-  for (const g of guides) {
-    process.stdout.write(`loading ${g.slug}... `);
-    const restaurants = await getFeaturedRestaurants(g.slug, { includeHidden: false });
-    console.log(`${restaurants.length} restaurants`);
-    for (const r of restaurants) {
-      if (r.status !== 'done') continue;
-      reports.push(auditRestaurant(r, g.slug));
-    }
+  console.log('loading restaurants...');
+  const rows = await selectAll<any>((from, to) =>
+    supabase
+      .from('restaurants')
+      .select('id, name, url, city, status, cuisine')
+      .eq('status', 'done')
+      .range(from, to)
+  );
+
+  console.log(`loading sections and dishes for ${rows.length} restaurants...`);
+  const sectionRows = await selectAll<any>((from, to) =>
+    supabase.from('menu_sections').select('*').order('display_order').range(from, to)
+  );
+  const dishRows = await selectAll<any>((from, to) =>
+    supabase.from('dishes').select('*').is('deleted_at', null).order('created_at').range(from, to)
+  );
+  console.log(`${sectionRows.length} sections, ${dishRows.length} live dishes\n`);
+
+  const dishesBySection = new Map<string, Dish[]>();
+  for (const d of dishRows) {
+    const dish: Dish = {
+      id: d.id,
+      name: d.name,
+      description: d.description,
+      price: d.price,
+      classification: d.classification as DietaryClassification,
+      confidence: d.confidence,
+      confidenceReason: d.confidence_reason,
+      reportCount: d.report_count ?? 0,
+      warningFlagged: !!d.warning_flagged,
+      humanVerified: !!d.human_verified,
+      origin: d.origin ?? 'ai',
+      deletedAt: d.deleted_at ?? null,
+    };
+    const list = dishesBySection.get(d.section_id) ?? [];
+    list.push(dish);
+    dishesBySection.set(d.section_id, list);
+  }
+
+  const sectionsByRestaurant = new Map<string, MenuSection[]>();
+  for (const s of sectionRows) {
+    const section: MenuSection = {
+      id: s.id,
+      name: s.name,
+      displayOrder: s.display_order ?? 0,
+      menuLabel: s.menu_label ?? null,
+      dishes: dishesBySection.get(s.id) ?? [],
+    };
+    const list = sectionsByRestaurant.get(s.restaurant_id) ?? [];
+    list.push(section);
+    sectionsByRestaurant.set(s.restaurant_id, list);
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    sections: sectionsByRestaurant.get(r.id) ?? [],
+  })) as Restaurant[];
+}
+
+async function main() {
+  const restaurants = await loadRestaurants();
+  const reports: RestaurantReport[] = [];
+  for (const r of restaurants) {
+    if (r.sections.length === 0) continue;
+    reports.push(auditRestaurant(r, r.city ?? 'unknown'));
   }
 
   const outDir = join(process.cwd(), 'db', 'reports');
@@ -196,7 +293,7 @@ async function main() {
   const missed = reports.reduce((a, r) => a + r.missed.length, 0);
   const mismatches = reports.filter((r) => r.pesc !== r.cardPesc);
 
-  console.log(`\n${reports.length} analysed restaurants across ${guides.length} guides`);
+  console.log(`\n${reports.length} analysed restaurants`);
   console.log(`non-veg dishes called seafood: ${caught}`);
   console.log(`non-veg dishes NOT called seafood: ${missed}`);
   console.log(
