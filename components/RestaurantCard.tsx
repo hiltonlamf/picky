@@ -75,7 +75,13 @@ export default function RestaurantCard({ restaurant, city }: Props) {
             The count is dishes you would order AS a dish; desserts, sauces and
             plain breads are tallied beside it rather than folded in, so the
             headline can't be inflated by a €3 pot of tahini. */}
-        <div className="glass-light self-start inline-flex items-center gap-3 rounded-full px-3.5 py-2 text-sm font-semibold">
+        {/* Wraps rather than overflows. With three figures ("5 vegan · 23
+            veggie · 30 pescatarian") this pill is wider than a phone, and the
+            card clips its overflow — so "pescataria…" ran off the edge. Each
+            figure keeps whitespace-nowrap so a number never separates from its
+            word; the group wraps between them. w-fit keeps the pill hugging its
+            content on wide screens instead of stretching to the card. */}
+        <div className="glass-light self-start w-fit max-w-full flex flex-wrap items-center gap-x-3 gap-y-1 rounded-3xl px-3.5 py-2 text-sm font-semibold">
           {bestMenu.vegan > 0 && (
             <span className="text-picky-700 whitespace-nowrap">
               <span aria-hidden="true">🌱</span> {bestMenu.vegan} vegan

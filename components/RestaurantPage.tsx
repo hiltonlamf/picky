@@ -626,7 +626,11 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
 
       {/* Filter tabs — glass when idle, solid forest when active so the current
           filter is never ambiguous. */}
-      <div className="relative z-[2] flex gap-2 mb-6 overflow-x-auto pb-1">
+      {/* Wraps instead of scrolling sideways. Four tabs do not fit one phone
+          row, and a horizontal scroller hides the last one off-screen with
+          nothing to say it is there — the same "cut off" problem as the guide
+          card. Wrapping keeps every tab visible at every width. */}
+      <div className="relative z-[2] flex flex-wrap gap-2 mb-6 pb-1">
         {filters.map((f) => (
           <button
             key={f.value}
