@@ -52,19 +52,26 @@ describe('the guide card count pill', () => {
   });
 
   it('wraps instead of overflowing — three figures are wider than a phone', () => {
-    // The bug: a non-wrapping row inside a card that clips its overflow
+    // The first bug: a non-wrapping row inside a card that clips its overflow
     // rendered "pescataria…" running off the screen edge.
-    const pill = html.match(/<div class="[^"]*glass-light[^"]*"/)?.[0] ?? '';
-    expect(pill).toContain('flex-wrap');
-    expect(pill).toContain('max-w-full');
-    expect(pill).not.toContain('overflow-hidden');
+    const row = html.match(/<div class="[^"]*flex-wrap[^"]*"/)?.[0] ?? '';
+    expect(row).toContain('flex-wrap');
   });
 
-  it('keeps each figure whole when the group wraps', () => {
-    // Wrapping must happen BETWEEN figures, never inside one, or a number
-    // ends up on a different line from the word it belongs to.
-    const figures = html.match(/<span class="[^"]*(?:picky-700|picky-600|ocean-700)[^"]*"/g) ?? [];
-    expect(figures.length).toBe(3);
-    for (const f of figures) expect(f).toContain('whitespace-nowrap');
+  it('sizes each figure to its own text, so a wrapped line leaves no gap', () => {
+    // The second bug: one pill AROUND all three cannot shrink to its wrapped
+    // lines — CSS gives it the available width — so a short second line left a
+    // wide empty space on the right. Each figure is its own chip instead.
+    const chips = html.match(/<span class="[^"]*(?:picky-700|picky-600|ocean-700)[^"]*"/g) ?? [];
+    expect(chips.length).toBe(3);
+    for (const chip of chips) {
+      // inline-flex hugs the text; whitespace-nowrap keeps a number with its
+      // word, so wrapping only ever happens BETWEEN chips.
+      expect(chip).toContain('inline-flex');
+      expect(chip).toContain('whitespace-nowrap');
+    }
+    // And no shared wrapper draws a box around the group any more.
+    const row = html.match(/<div class="[^"]*flex-wrap[^"]*"/)?.[0] ?? '';
+    expect(row).not.toContain('glass-light');
   });
 });
