@@ -17,9 +17,10 @@ import { captureError, EVENTS } from '@/lib/analytics';
 import { SITE_TITLE, noMenuCopy, DEAD_END_FEEDBACK } from '@/lib/site-copy';
 import CountingMethod from '@/components/CountingMethod';
 import { isVeg, headlineCounts, menuTallies, makeCountedTest, guideInsights, type CategoryTally } from '@/lib/menu-insights';
+import { isPescatarianDish } from '@/lib/dietary-overrides';
 import { SproutIcon, ShieldIcon, LeafOutlineIcon, AlertIcon, ChatIcon } from '@/components/icons';
 
-type Filter = 'all' | 'vegan' | 'vegetarian';
+type Filter = 'all' | 'pescatarian' | 'vegan' | 'vegetarian';
 
 const PENDING_POLL_MS = 4000;
 // Cap the pending poll. Two problems with the previous unbounded loop: a tab
@@ -226,6 +227,10 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
             veg_count: countDishes(data.sections, 'vegetarian'),
             veg_counted: headlineCounts(data.sections).counted,
             veg_aside: headlineCounts(data.sections).aside,
+            // Ships alongside the veg figures rather than replacing them, so
+            // "how much does the fish tab actually add here?" is answerable
+            // from day one instead of needing a later backfill of the event.
+            pesc_counted: headlineCounts(data.sections).countedPesc,
             menu_count: distinctMenuLabels(data).length,
             source: arrivalSource(),
             // Only set on a no_menu outcome; it's what separates "site is
@@ -424,12 +429,17 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
   // Marks the sides/sweets in the list itself, so the "+N" on the tab has
   // something to point at. Same price context as the tally above.
   const countedTest = makeCountedTest(restaurant.sections);
+  // Pescatarian is the widest of the diet tabs, so testing against it marks the
+  // seafood sides too ("Prawn Crackers") rather than only the veg ones. A dish
+  // excluded here is excluded from every count, so the footnote is true on
+  // whichever tab the visitor is on.
   const isAsideDish = (sectionName: string, dish: DishType) =>
-    isVeg(dish, sectionName) && !countedTest(sectionName, dish);
+    isPescatarianDish(sectionName, dish) && !countedTest(sectionName, dish);
 
   // One order everywhere: broadest first, narrowest last.
   const filters: { value: Filter; label: string; tally: CategoryTally }[] = [
     { value: 'all', label: '🍽️ All dishes', tally: { counted: tallies.all, aside: 0 } },
+    { value: 'pescatarian', label: '🐟 Pescatarian', tally: tallies.pesc },
     { value: 'vegetarian', label: '🍳 Veggie', tally: tallies.veg },
     { value: 'vegan', label: '🌱 Vegan', tally: tallies.vegan },
   ];
@@ -559,11 +569,19 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
 
       {/* Stats — glass capsules over the mesh, but the numbers themselves stay
           solid green: dietary information must never lose contrast to an effect. */}
-      <div className="grid grid-cols-3 gap-3 mb-2">
+      {/* Two-up on a phone, four across from tablet: four capsules squeezed
+          onto one narrow row shrink the numbers past glanceable. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍽️</div>
           <div className="font-display text-3xl text-forest/80">{tallies.all}</div>
           <div className="text-xs text-forest/75 mt-0.5">All dishes</div>
+        </div>
+        <div className="glass-light rounded-2xl p-3.5 text-center">
+          <div className="text-lg mb-0.5" aria-hidden="true">🐟</div>
+          <div className="font-display text-3xl text-ocean-700">{tallies.pesc.counted}</div>
+          <div className="text-xs text-forest/75 mt-0.5">Pescatarian</div>
+          <AsideNote count={tallies.pesc.aside} />
         </div>
         <div className="glass-light rounded-2xl p-3.5 text-center">
           <div className="text-lg mb-0.5" aria-hidden="true">🍳</div>
@@ -608,7 +626,11 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
 
       {/* Filter tabs — glass when idle, solid forest when active so the current
           filter is never ambiguous. */}
-      <div className="relative z-[2] flex gap-2 mb-6 overflow-x-auto pb-1">
+      {/* Wraps instead of scrolling sideways. Four tabs do not fit one phone
+          row, and a horizontal scroller hides the last one off-screen with
+          nothing to say it is there — the same "cut off" problem as the guide
+          card. Wrapping keeps every tab visible at every width. */}
+      <div className="relative z-[2] flex flex-wrap gap-2 mb-6 pb-1">
         {filters.map((f) => (
           <button
             key={f.value}
@@ -640,11 +662,11 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
       {filter !== 'all' && activeTally.aside > 0 && (
         <p className="relative z-[2] -mt-4 mb-6 text-xs text-forest/65">
           <strong className="font-semibold text-forest/80">{activeTally.counted}</strong>{' '}
-          {filter === 'vegan' ? 'vegan' : 'veggie'} dish
+          {filter === 'vegan' ? 'vegan' : filter === 'pescatarian' ? 'pescatarian' : 'veggie'} dish
           {activeTally.counted === 1 ? '' : 'es'} we count, plus {activeTally.aside} side
           {activeTally.aside === 1 ? '' : 's'}, sauce{activeTally.aside === 1 ? '' : 's'} &amp;
           sweet{activeTally.aside === 1 ? '' : 's'} marked{' '}
-          <em>not included in the veggie count</em> below.
+          <em>not included in the count</em> below.
         </p>
       )}
 

@@ -10,13 +10,35 @@ const CONFIG: Record<DietaryClassification, { label: string; className: string; 
   unknown: { label: 'Double-check this one', className: 'badge-unknown', emoji: '❓' },
 };
 
+// Fish gets its own badge rather than sharing "🥩 Not vegetarian" with steak.
+// Two reasons: inside the Pescatarian tab a plate of mussels labelled "not
+// vegetarian" reads as a bug, and a pescatarian scanning the full menu needs to
+// spot their options as fast as a vegetarian spots theirs. Ocean, not green —
+// green means plants here, without exception (CLAUDE.md).
+const SEAFOOD_CONFIG = { label: 'Seafood', className: 'badge-pescatarian', emoji: '🐟' };
+
 interface Props {
   classification: DietaryClassification;
+  /** Non-veg because it is fish/shellfish, rather than meat. */
+  seafood?: boolean;
+  /** Overrides the label for a dish sold as a choice of protein, where one
+   *  badge is one of several things the dish can be ordered as. */
+  optionLabel?: string;
   size?: 'sm' | 'md';
 }
 
-export default function DietaryBadge({ classification, size = 'md' }: Props) {
-  const { label, className, emoji } = CONFIG[classification] ?? CONFIG.unknown;
+export default function DietaryBadge({
+  classification,
+  seafood = false,
+  optionLabel,
+  size = 'md',
+}: Props) {
+  const base =
+    seafood && classification === 'neither'
+      ? SEAFOOD_CONFIG
+      : CONFIG[classification] ?? CONFIG.unknown;
+  const { className, emoji } = base;
+  const label = optionLabel ?? base.label;
   const sizeClass = size === 'sm' ? 'text-[11px] px-2.5 py-0.5' : '';
 
   return (

@@ -14,7 +14,7 @@ interface Props {
 }
 
 export default function RestaurantCard({ restaurant, city }: Props) {
-  const { maxVegOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
+  const { maxVegOptions, maxPescOptions, asideCount, bestMenu, perMenu, highlights, highlightsAreThin } =
     guideInsights(restaurant);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
@@ -75,21 +75,34 @@ export default function RestaurantCard({ restaurant, city }: Props) {
             The count is dishes you would order AS a dish; desserts, sauces and
             plain breads are tallied beside it rather than folded in, so the
             headline can't be inflated by a €3 pot of tahini. */}
-        <div className="glass-light self-start inline-flex items-center gap-3 rounded-full px-3.5 py-2 text-sm font-semibold">
+        {/* One chip per figure, not one pill around all of them.
+            A single wrapping pill cannot shrink to its wrapped lines — CSS
+            sizes it to the available width — so a short second line left a
+            wide empty gap on the right. Separate chips each hug their own
+            text, wrap as a group, and leave no dead space at any width. */}
+        <div className="flex flex-wrap items-center gap-2">
           {bestMenu.vegan > 0 && (
-            <span className="text-picky-700 whitespace-nowrap">
-              <span aria-hidden="true">🌱</span> {bestMenu.vegan} vegan
+            <span className="glass-light inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold whitespace-nowrap text-picky-700">
+              <span aria-hidden="true" className="mr-1.5">🌱</span> {bestMenu.vegan} vegan
             </span>
           )}
           {maxVegOptions > 0 ? (
-            <span className="text-picky-600 whitespace-nowrap">
-              <span aria-hidden="true">🍳</span> {maxVegOptions} veggie
+            <span className="glass-light inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold whitespace-nowrap text-picky-600">
+              <span aria-hidden="true" className="mr-1.5">🍳</span> {maxVegOptions} veggie
             </span>
           ) : (
             // An honest empty state beats a bare "0 veggie" next to a green
             // badge — this restaurant has sides and sweets but no veggie dish.
-            <span className="text-forest/70 whitespace-nowrap">
-              <span aria-hidden="true">😢</span> No veggie mains
+            <span className="glass-light inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold whitespace-nowrap text-forest/70">
+              <span aria-hidden="true" className="mr-1.5">😢</span> No veggie mains
+            </span>
+          )}
+          {/* Only when it says something the veggie number doesn't. Pescatarian
+              includes every veg dish, so at a restaurant with no seafood the two
+              are identical and a second identical number is just noise. */}
+          {maxPescOptions > maxVegOptions && (
+            <span className="glass-light inline-flex items-center rounded-full px-3 py-1.5 text-sm font-semibold whitespace-nowrap text-ocean-700">
+              <span aria-hidden="true" className="mr-1.5">🐟</span> {maxPescOptions} pescatarian
             </span>
           )}
         </div>

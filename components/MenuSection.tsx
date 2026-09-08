@@ -2,6 +2,7 @@ import type { Dish, MenuSection as MenuSectionType } from '@/types';
 import DishCard from './DishCard';
 import { modifierDishes } from '@/lib/menu-modifiers';
 import { effectiveDietaryClassification } from '@/lib/dietary-overrides';
+import { matchesDietFilter, type DietFilter } from '@/lib/menu-insights';
 
 interface Props {
   section: MenuSectionType;
@@ -19,15 +20,14 @@ export default function MenuSection({ section, activeFilter, isAside }: Props) {
       const classification = effectiveDietaryClassification(section.name, dish);
       return classification === dish.classification ? dish : { ...dish, classification };
     })
-    .filter((dish) => {
-      if (!activeFilter || activeFilter === 'all') return true;
-      if (activeFilter === 'vegan') return dish.classification === 'vegan';
-      // 'unknown' surfaces here (not under vegan — the higher-trust claim per
-      // CLAUDE.md) as a "maybe, please confirm" option instead of being hidden.
-      if (activeFilter === 'vegetarian')
-        return dish.classification === 'vegan' || dish.classification === 'vegetarian' || dish.classification === 'unknown';
-      return true;
-    });
+    // One shared predicate with the tallies and DishCard — this test used to be
+    // written out here and again in DishCard, and a divergent second copy is
+    // exactly how the count and the list stop agreeing.
+    // 'unknown' surfaces under vegetarian and pescatarian (not under vegan —
+    // the higher-trust claim per CLAUDE.md) as a "maybe, please confirm".
+    .filter((dish) =>
+      !activeFilter ? true : matchesDietFilter(activeFilter as DietFilter, section.name, dish)
+    );
 
   if (visibleDishes.length === 0) return null;
 

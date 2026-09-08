@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { capture } from '@/lib/posthog-client';
 import type { Restaurant } from '@/types';
-import { splitVegDishes } from '@/lib/menu-insights';
+import { splitVegDishes, splitDishesByDiet } from '@/lib/menu-insights';
 import { restaurantPath } from '@/lib/restaurant-url';
 import { CheckIcon, CopyIcon, ShareIcon } from './icons';
 
@@ -44,6 +44,12 @@ function buildShareMessage(
   const { counted, aside } = splitVegDishes(sections, restaurant.sections);
   const veganDishes = counted.filter((d) => d.classification === 'vegan');
   const vegDishes = counted.filter((d) => d.classification !== 'vegan');
+  // Seafood = the pescatarian split minus the veg dishes already listed above.
+  // Derived from the same walk rather than filtered by hand here, so the shared
+  // message can't disagree with the page's own 🐟 number.
+  const vegKeys = new Set(counted.map((d) => d.id));
+  const seafoodDishes = splitDishesByDiet('pescatarian', sections, restaurant.sections).counted
+    .filter((d) => !vegKeys.has(d.id));
 
   const name = restaurant.name ?? 'this restaurant';
 
@@ -51,7 +57,8 @@ function buildShareMessage(
   // reader of the page see the same number before any list is read.
   const summary =
     `${counted.length} veggie dish${counted.length === 1 ? '' : 'es'}` +
-    (veganDishes.length > 0 ? ` (${veganDishes.length} vegan)` : '');
+    (veganDishes.length > 0 ? ` (${veganDishes.length} vegan)` : '') +
+    (seafoodDishes.length > 0 ? ` + ${seafoodDishes.length} for pescatarians` : '');
 
   const lines: string[] = [
     `*Platefully* found ${summary} at *${name}* 🌱`,
@@ -67,6 +74,12 @@ function buildShareMessage(
   if (vegDishes.length > 0) {
     lines.push(`*Veggie (${vegDishes.length}):*`);
     vegDishes.forEach((d) => lines.push(`• ${d.name}`));
+    lines.push(``);
+  }
+
+  if (seafoodDishes.length > 0) {
+    lines.push(`*Seafood (${seafoodDishes.length}):*`);
+    seafoodDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }
 
