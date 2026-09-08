@@ -17,7 +17,17 @@ interface DishLike {
  * just as often ("Baccala", "atun", "salmon", "jamon").
  */
 function fold(text: string): string {
-  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return (
+    text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      // "Crab Meat Spring Roll" is seafood, but the meat guard saw a bare
+      // "meat" in it and threw the dish out. Closing the compound up front
+      // keeps `\bmeat\b` honest \u2014 "crabmeat" is already in the seafood list,
+      // and a genuine "Meat, Fish, Vega" platter still matches. Found in the
+      // live audit's sushi rows.
+      .replace(/\b(crab|lobster|fish|white\s+crab)\s+meat\b/gi, '$1meat')
+  );
 }
 
 // Caviar and roe are fish eggs, but short luxury-product names such as
@@ -57,7 +67,9 @@ const SEAFOOD_RE = new RegExp(
       // Closed compounds. `\bfish\b` does not fire inside "Fishcakes" or
       // "Kingfish", and all three of these were missed on live menus.
       'fish\\s?cakes?', 'fish\\s?fingers?', 'kingfish', 'sea\\s?trout',
-      'catfish', 'whitefish', 'rockfish',
+      'catfish', 'whitefish', 'rockfish', 'yellowtail', 'butterfish',
+      'hamachi', 'unagi', 'toro', 'kanpachi', 'lumpfish', 'crabmeat',
+      'lobstermeat', 'fishmeat',
       // --- English: shellfish, molluscs, crustaceans
       'prawns?', 'shrimps?', 'crab', 'crabmeat', 'lobster', 'langoustines?',
       'crayfish', 'scampi', 'mussels?', 'clams?', 'cockles?', 'oysters?',

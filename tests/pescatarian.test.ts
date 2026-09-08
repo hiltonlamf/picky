@@ -163,6 +163,20 @@ describe('plant decoys — a false positive here would hide a vegan dish', () =>
     expect(seafood('Oyster Mushroom Skewers')).toBe(false);
   });
 
+  it('does not let "crab meat" trip the meat guard', () => {
+    // "Crab Meat Spring Roll" was excluded because the meat guard matched the
+    // bare word "meat" inside it. Found in the audit's sushi rows.
+    expect(seafood('Crab Meat Spring Roll')).toBe(true);
+    expect(seafood('White Crab Meat, Brown Butter')).toBe(true);
+    // The generic word still guards a genuinely mixed platter.
+    expect(seafood('Authentic Rice Table | Meat, Fish, Vega')).toBe(false);
+  });
+
+  it('reads the fish names sushi menus actually use', () => {
+    expect(seafood('Japanese Yellowtail roll, mango salsa')).toBe(true);
+    expect(seafood('Hamachi crudo')).toBe(true);
+  });
+
   it('reads closed compounds, which a bare \\bfish\\b misses', () => {
     expect(seafood('Fishcakes with lime mayonnaise')).toBe(true);
     expect(seafood('Cured kingfish, lemon, red chili')).toBe(true);
