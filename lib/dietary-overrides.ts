@@ -155,7 +155,11 @@ const MEAT_RE = new RegExp(
       'oxtail', 'brisket', 'bacon', 'ham', 'sausages?', 'salami',
       'pepperoni', 'prosciutto', 'chorizo', 'pancetta', 'guanciale',
       'bresaola', 'mortadella', "n'?duja", 'pastrami', 'meatballs?',
-      'burger', 'ribs', 'wings', 'liver', 'p[âa]t[ée]', 'foie\\s?gras',
+      // NOT 'burger' — it is a FORMAT, not a protein, and Fish Shop sells a
+      // "Fillet O'Fish Shop - Our Fish Burger" that this was excluding. A plain
+      // "Burger" names no seafood either way, so dropping it costs nothing:
+      // this list only ever decides a dish that already matched the fish list.
+      'ribs', 'wings', 'liver', 'p[âa]t[ée]', 'foie\\s?gras',
       'surf\\s*(?:and|&|\'n\'?|n)\\s*turf',
       // --- Italian
       'carne', 'manzo', 'vitello', 'maiale', 'agnello', 'pollo', 'anatra',

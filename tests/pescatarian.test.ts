@@ -94,6 +94,22 @@ describe('the meat guard — an unsafe mislabel here is trust-breaking', () => {
     expect(seafood('Roast Chicken')).toBe(false);
     expect(seafood('Beef Rendang')).toBe(false);
   });
+
+  it('treats a burger as a format, not a protein', () => {
+    // Fish Shop's "Fillet O'Fish Shop - Our Fish Burger" was being excluded
+    // because "burger" sat in the meat list. A burger is a shape.
+    expect(seafood("Fillet O'Fish Shop - Our Fish Burger")).toBe(true);
+    expect(seafood('Beef Burger with garlic prawns')).toBe(false);
+  });
+
+  it('excludes fish plated with meat — the biggest group in the audit', () => {
+    expect(seafood('Mussels, Beans, Chorizo, Palmito')).toBe(false);
+    expect(seafood("Gambas, N'Duja, Garlic, Spring Onion & Lemon")).toBe(false);
+    expect(seafood('Signature Prawn & Pork Wonton with Thin Noodle')).toBe(false);
+    expect(seafood('Seared Scallops, Caramelised Parsnip, Yuzu, Bacon')).toBe(false);
+    expect(seafood('Atlantic Hake, Braised Leek, Alsace Bacon, Smoked Mussels')).toBe(false);
+    expect(seafood('Chicken Wings w/ fish sauce caramel')).toBe(false);
+  });
 });
 
 describe('the choice exception — a pescatarian orders the prawn', () => {
