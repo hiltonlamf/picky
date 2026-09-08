@@ -78,7 +78,7 @@ function buildShareMessage(
   }
 
   if (seafoodDishes.length > 0) {
-    lines.push(`*Fish & seafood (${seafoodDishes.length}):*`);
+    lines.push(`*Seafood (${seafoodDishes.length}):*`);
     seafoodDishes.forEach((d) => lines.push(`• ${d.name}`));
     lines.push(``);
   }

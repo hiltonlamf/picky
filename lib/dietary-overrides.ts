@@ -111,6 +111,29 @@ const SEAFOOD_RE = new RegExp(
   'i'
 );
 
+// ---------------------------------------------------------------------------
+// Sushi
+// ---------------------------------------------------------------------------
+// These are seafood for the PESCATARIAN TAB ONLY, and never feed the safety
+// override above. The distinction is what makes them safe to include:
+//
+//   * hasExplicitAnimalProduct sees EVERY dish, vegan ones included, and forces
+//     a match to 'neither'. Putting "maki" in that list would hide a vegan
+//     cucumber maki from a vegan — the worst error this file can make.
+//   * isSeafoodDish is only ever asked about dishes that are ALREADY non-veg.
+//     A dish the classifier called non-vegetarian that is also called "maki"
+//     is fish. There is nothing left to get wrong.
+//
+// So the generic sushi words live here, plus the named classics whose fish is
+// in the tradition rather than in the words ("California Roll" is crab).
+const SUSHI_SEAFOOD_RE =
+  /\b(?:sushi|nigiri|sashimi|maki|makimono|temaki|uramaki|futomaki|hosomaki|chirashi|omakase|donburi|poke\s?bowl)\b|\b(?:california|dragon|rainbow|philadelphia|spider|tiger|volcano|boston|alaska|caterpillar|crunchy)[^A-Za-z0-9]{1,3}rolls?\b/i;
+
+// Vegetable sushi, so the generic terms above cannot claim one. Sushi rolls are
+// the one place a menu names the filling before the format.
+const VEG_SUSHI_RE =
+  /\b(?:cucumber|avocado|vegetable|veggie|vegan|kappa|inari|oshinko|yasai|shiitake|asparagus|tofu)\b[^.;]{0,24}\b(?:maki|roll|nigiri|sushi|temaki)\b/i;
+
 // Words that mean seafood but are also ordinary words, so they need a food
 // context before we believe them:
 //   sole   — "the sole reason"; but "Dover sole", "grilled sole" is a fish
@@ -164,6 +187,12 @@ const MEAT_RE = new RegExp(
       'meat', 'beef', 'steaks?', 'rib\\s?eye', 'ribs?', 'sirloin', 'fillet\\s+steak',
       'chicken', 'poultry', 'pork', 'lamb', 'mutton', 'veal', 'venison',
       'duck', 'turkey', 'goat', 'rabbit', 'goose', 'quail', 'pigeon',
+      // Cuts and cured meats that name no animal. "Prawn tempura & wagyu
+      // tartare roll" reached the fish tab because "wagyu" was missing.
+      'wagyu', 'bavette', 'tomahawk', 'picanha', 'entrec[ôo]te', 'onglet',
+      'chateaubriand', 'flank', 'rump', 'shank', 'tripe', 'sweetbreads?',
+      'haggis', 'black\\s?pudding', 'biltong', 'jerky', 'ox\\s?tail',
+      'ox\\s?cheek', 'short\\s?ribs?', 'pull(?:ed)?\\s?pork',
       'oxtail', 'brisket', 'bacon', 'ham', 'sausages?', 'salami',
       'pepperoni', 'prosciutto', 'chorizo', 'pancetta', 'guanciale',
       'bresaola', 'mortadella', "n'?duja", 'pastrami', 'meatballs?',
@@ -200,14 +229,65 @@ const MEAT_RE = new RegExp(
 // Dishes that offer a VEGETARIAN option are already stored as 'vegetarian' by
 // the extraction prompt, so they reach the pescatarian tab via the veg branch
 // and never get here.
-// SUBSTITUTION only — the diner picks which protein the dish is made with.
-// Deliberately NOT "add", "optional", "extra" or "upgrade": those are add-ons
-// bolted onto a dish that already has its own protein. The Church Café Bar
-// sells a "16oz Rib Eye on the Bone" whose description ends "Optional add-on:
-// pan-fried prawns"; an add-on rule put a steak in the pescatarian tab. Found
-// by the live audit, not by a unit test.
-const PROTEIN_CHOICE_RE =
-  /\b(?:choice|choose|select)\s+(?:of|from|your|between)\b|\byour\s+choice\b|\bwith\s+(?:a\s+)?choice\b|\bkeuze\s+(?:uit|van)\b|\ba\s+(?:elegir|escoger)\b|\ba\s+scelta\b/i;
+// ---------------------------------------------------------------------------
+// "Choice of lamb, chicken, prawns or vegetable"
+// ---------------------------------------------------------------------------
+// Some dishes are one line on the menu but several dishes on the plate: Daata's
+// Coconut Curry is whichever protein you ask for. Those belong in EVERY tab
+// their options allow — a pescatarian orders the prawns, a vegetarian orders
+// the vegetable version, and both should find it.
+//
+// The hard part is that most "choice of" phrases on real menus are not about
+// protein at all. Of 37 such dishes in the database, most read "served with a
+// choice of sides and choice of béarnaise, red wine jus or Cashel Blue cheese
+// butter" — a steak with a sauce list. So we do not just detect the phrase, we
+// read WHAT IS BEING CHOSEN and check whether those things are proteins.
+const CHOICE_LEAD_RE =
+  /(?:your\s+)?choice\s+of\s*:?|choose\s+(?:from|between)?\s*:?|select\s+(?:from|one)?\s*:?|keuze\s+uit\s*:?|a\s+(?:elegir|escoger)\s*:?|a\s+scelta\s*:?/gi;
+
+// SUBSTITUTION only. Deliberately NOT "add", "optional", "extra" or "upgrade":
+// those bolt something onto a dish that already has its own protein. The Church
+// Café Bar's "16oz Rib Eye on the Bone" ends "Optional add-on: pan-fried
+// prawns", and reading that as a choice put a steak in the pescatarian tab.
+
+// Vegetarian proteins, as menus write them in a choice list. Deliberately
+// conservative — this is the one direction that can ADD a dish to the veggie
+// tab, so it must not fire on a garnish. No bare "veg", no "cheese" (a
+// "Cashel Blue cheese butter" sauce choice would qualify a steak) and no
+// "mushroom" (usually a sauce in these lists).
+const VEG_PROTEIN_RE =
+  /\b(?:vegetables?|vegetarian|veggie|tofu|bean\s?curd|paneer|halloumi|aubergine|eggplant|jackfruit|chickpeas?|chana|falafel|seitan|tempeh|quorn|plant[\s-]?based)\b/i;
+
+export interface ProteinOptions {
+  /** The diner picks which PROTEIN the dish is made with (not a side or sauce). */
+  isChoice: boolean;
+  veg: boolean;
+  seafood: boolean;
+  meat: boolean;
+}
+
+const NO_OPTIONS: ProteinOptions = { isChoice: false, veg: false, seafood: false, meat: false };
+
+/** What can this dish be ordered as? Empty unless it genuinely offers a choice
+ *  of protein — see the note above on sauce and side lists. */
+export function proteinOptions(dish: Pick<DishLike, 'name' | 'description'>): ProteinOptions {
+  const text = `${fold(dish.name)}. ${fold(dish.description ?? '')}`;
+  CHOICE_LEAD_RE.lastIndex = 0;
+  let veg = false;
+  let seafood = false;
+  let meat = false;
+  for (let m = CHOICE_LEAD_RE.exec(text); m; m = CHOICE_LEAD_RE.exec(text)) {
+    // Read to the end of the clause, capped: a choice list is short, and
+    // running on would drag in whatever sentence happens to follow it.
+    const segment = stripPlantDecoys(text.slice(m.index + m[0].length).split(/[.;]/)[0].slice(0, 140));
+    if (VEG_PROTEIN_RE.test(segment)) veg = true;
+    if (SEAFOOD_RE.test(segment) || SEAFOOD_CONTEXT_RE.test(segment)) seafood = true;
+    if (MEAT_RE.test(segment)) meat = true;
+  }
+  // No protein among the options means it was a list of sides or sauces.
+  if (!veg && !seafood && !meat) return NO_OPTIONS;
+  return { isChoice: true, veg, seafood, meat };
+}
 
 export function hasExplicitAnimalRoe(
   sectionName: string | null | undefined,
@@ -253,28 +333,27 @@ export function isSeafoodDish(
   sectionName: string | null | undefined,
   dish: Pick<DishLike, 'name' | 'description'>
 ): boolean {
+  // A genuine choice of protein settles it on its own: a pescatarian orders
+  // the prawn version. Meat elsewhere in the dish is fine here — that is the
+  // whole point of a choice.
+  const options = proteinOptions(dish);
+  if (options.isChoice) return options.seafood;
+
   const name = fold(dish.name);
-  const description = fold(dish.description ?? '');
 
-  // Meat in the NAME settles it — the dish is sold as a meat dish, whatever
-  // else the description offers. This is what keeps "Surf & Turf", "Pollo e
-  // Gamberi" and a rib eye with an optional prawn add-on out of the fish tab.
-  //
-  // Unless the name ITSELF frames a choice ("Pad Thai — choice of chicken or
-  // prawn"), in which case the meat is one option among several rather than
-  // what the dish is, and a pescatarian orders the other one.
-  if (MEAT_RE.test(name) && !PROTEIN_CHOICE_RE.test(name)) return false;
+  // Otherwise meat in the NAME settles it — the dish is sold as a meat dish,
+  // whatever the description offers. This keeps "Surf & Turf", "Pollo e
+  // Gamberi" and a rib eye with an optional prawn ADD-ON out of the fish tab.
+  if (MEAT_RE.test(name)) return false;
 
-  // Otherwise the sold NAME is still the only evidence we trust, because
-  // descriptions advertise optional add-ons. The exception is again a choice of
-  // protein ("Noodles — choice of chicken, beef or prawns"), where the
-  // description is the only place the prawn is named.
-  const isChoice = PROTEIN_CHOICE_RE.test(name) || PROTEIN_CHOICE_RE.test(description);
-  const text = stripPlantDecoys(isChoice ? `${name} ${description}` : name);
-
-  return (
-    hasExplicitAnimalRoe(sectionName, dish) || SEAFOOD_RE.test(text) || SEAFOOD_CONTEXT_RE.test(text)
-  );
+  // And the sold name is the only other evidence we trust, because descriptions
+  // advertise add-ons on dishes that already have their protein.
+  const text = stripPlantDecoys(name);
+  if (hasExplicitAnimalRoe(sectionName, dish)) return true;
+  if (SEAFOOD_RE.test(text) || SEAFOOD_CONTEXT_RE.test(text)) return true;
+  // Sushi last, and only if the roll is not named for its vegetables. Safe
+  // here in a way it would not be in the safety override — see SUSHI_SEAFOOD_RE.
+  return SUSHI_SEAFOOD_RE.test(text) && !VEG_SUSHI_RE.test(text);
 }
 
 /** Can a pescatarian eat this? Seafood, plus everything a vegetarian can eat.
@@ -291,5 +370,8 @@ export function isPescatarianDish(
   // included for the same reason the veggie count includes it: when in doubt,
   // show it rather than quietly drop something they might have wanted.
   if (classification !== 'neither') return true;
+  // A choice dish qualifies on either of its edible-for-them options.
+  const options = proteinOptions(dish);
+  if (options.isChoice) return options.veg || options.seafood;
   return isSeafoodDish(sectionName, dish);
 }

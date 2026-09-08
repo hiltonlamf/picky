@@ -3,7 +3,9 @@ import {
   isSeafoodDish,
   isPescatarianDish,
   effectiveDietaryClassification,
+  proteinOptions,
 } from '@/lib/dietary-overrides';
+import { isVeg, matchesDietFilter } from '@/lib/menu-insights';
 import type { DietaryClassification } from '@/types';
 
 // Cases are real dish names from the Dublin and Amsterdam guides wherever
@@ -74,6 +76,45 @@ describe('seafood detection — the other languages our menus are written in', (
   });
 });
 
+describe('sushi', () => {
+  it('counts the classics, whose fish is in the tradition not the words', () => {
+    expect(seafood('California Roll')).toBe(true);
+    expect(seafood("Ivy 'Volcano' Roll")).toBe(true);
+    expect(seafood('Dragon Roll')).toBe(true);
+    expect(seafood('Rainbow Roll')).toBe(true);
+  });
+
+  it('counts the generic sushi words too', () => {
+    expect(seafood('Nigiri Selection')).toBe(true);
+    expect(seafood('Sushi Platter for Two')).toBe(true);
+    expect(seafood('Chirashi Don')).toBe(true);
+    expect(seafood('Omakase, 12 courses')).toBe(true);
+  });
+
+  it('does not claim a roll named for its vegetables', () => {
+    expect(seafood('Cucumber Maki')).toBe(false);
+    expect(seafood('Avocado Nigiri')).toBe(false);
+    expect(seafood('Cucumber, Asparagus & Avocado Roll')).toBe(false);
+    expect(seafood('Inari Sushi')).toBe(false);
+  });
+
+  it('keeps the sushi words OUT of the safety override', () => {
+    // This is what makes including them safe at all: the override sees vegan
+    // dishes too, so a match there would hide a cucumber maki from a vegan.
+    for (const name of ['Cucumber Maki', 'Nigiri Selection', 'Sushi Platter', 'California Roll']) {
+      expect(effectiveDietaryClassification(null, dish(name, 'vegan'))).toBe('vegan');
+    }
+  });
+
+  it('still excludes a meat roll', () => {
+    expect(seafood('Duck Roll')).toBe(false);
+    expect(seafood('Ossenworst roll')).toBe(false);
+    expect(seafood('Crispy Pork Belly Roll')).toBe(false);
+    // Hot Stone. Wagyu names no animal, so the meat list had to learn the cut.
+    expect(seafood('Prawn tempura & wagyu tartare roll')).toBe(false);
+  });
+});
+
 describe('the meat guard — an unsafe mislabel here is trust-breaking', () => {
   it('excludes a fixed dish that pairs seafood with meat', () => {
     expect(seafood('Surf & Turf')).toBe(false);
@@ -109,6 +150,73 @@ describe('the meat guard — an unsafe mislabel here is trust-breaking', () => {
     expect(seafood('Seared Scallops, Caramelised Parsnip, Yuzu, Bacon')).toBe(false);
     expect(seafood('Atlantic Hake, Braised Leek, Alsace Bacon, Smoked Mussels')).toBe(false);
     expect(seafood('Chicken Wings w/ fish sauce caramel')).toBe(false);
+  });
+});
+
+describe('dishes sold as a choice of protein', () => {
+  // Real rows from the database. All three were stored as 'neither', which hid
+  // the tofu and vegetable versions from vegetarians entirely.
+  const coconutCurry = dish(
+    'Coconut Curry',
+    'neither',
+    'Slow-simmered onions and tomatoes with ground almonds, coconut and delicate spices, blended into a velvety sauce with coconut milk and cream. Choice of: lamb, chicken, prawns or vegetable'
+  );
+  const phadThai = dish(
+    'Phad Thai',
+    'neither',
+    'Rice noodles, Asian greens, scallions, bean sprouts, egg, tamarind, lime & roast peanuts. Your choice of chicken, prawn, or tofu'
+  );
+  const biryani = dish(
+    'Hyderabadi Biryani',
+    'neither',
+    'Perfumed Basmati Rice, Saffron & Rose Water, Choice of Lamb, Chicken or Prawns*, Raita & Curry'
+  );
+
+  it('reads every protein the dish can be ordered as', () => {
+    expect(proteinOptions(coconutCurry)).toEqual({
+      isChoice: true, veg: true, seafood: true, meat: true,
+    });
+    expect(proteinOptions(phadThai)).toEqual({
+      isChoice: true, veg: true, seafood: true, meat: true,
+    });
+    // No vegetarian option on this one — lamb, chicken or prawns.
+    expect(proteinOptions(biryani)).toEqual({
+      isChoice: true, veg: false, seafood: true, meat: true,
+    });
+  });
+
+  it('puts a dish in every tab its options allow', () => {
+    for (const d of [coconutCurry, phadThai]) {
+      expect(isVeg(d)).toBe(true);
+      expect(isPescatarianDish(null, d)).toBe(true);
+    }
+    // Seafood but no veg option: pescatarian yes, veggie no.
+    expect(isPescatarianDish(null, biryani)).toBe(true);
+    expect(isVeg(biryani)).toBe(false);
+  });
+
+  it('does not promote it to vegan — the sauce has cream', () => {
+    expect(matchesDietFilter('vegan', null, coconutCurry)).toBe(false);
+  });
+
+  it('ignores a choice of SIDES or SAUCES, which is most of them', () => {
+    // 29 of the 37 "choice of" dishes in the database are this shape.
+    const ribeye = dish(
+      'Dry-Aged Ribeye',
+      'neither',
+      'Flame-grilled for a deep smoky finish. Served with a choice of sides and choice of béarnaise, red wine jus, green peppercorn sauce or Cashel Blue cheese butter.'
+    );
+    expect(proteinOptions(ribeye).isChoice).toBe(false);
+    expect(isVeg(ribeye)).toBe(false);
+    expect(isPescatarianDish(null, ribeye)).toBe(false);
+
+    const momo = dish(
+      'Momo - Chicken',
+      'neither',
+      'Nepali dumplings served with choice of jhol achar (sesame sauce) or tomato & coriander sauce'
+    );
+    expect(proteinOptions(momo).isChoice).toBe(false);
+    expect(isVeg(momo)).toBe(false);
   });
 });
 

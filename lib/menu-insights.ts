@@ -2,7 +2,7 @@ import type { Restaurant, MenuSection, Dish } from '@/types';
 import { formatPrice } from '@/lib/format-price';
 import { classifyDishRole } from '@/lib/dish-role';
 import { modifierDishes } from '@/lib/menu-modifiers';
-import { effectiveDietaryClassification, isPescatarianDish } from '@/lib/dietary-overrides';
+import { effectiveDietaryClassification, isPescatarianDish, proteinOptions } from '@/lib/dietary-overrides';
 
 // Guide-facing menu insights — all derived from data we already have, NO LLM.
 //
@@ -48,11 +48,21 @@ export function isVeg(
   sectionName?: string | null
 ): boolean {
   const classification = effectiveDietaryClassification(sectionName, dish);
-  return (
+  if (
     classification === 'vegan' ||
     classification === 'vegetarian' ||
     classification === 'unknown'
-  );
+  ) {
+    return true;
+  }
+  // A dish sold as a choice of protein counts if one of the choices is
+  // vegetarian — Daata's "Coconut Curry ... choice of lamb, chicken, prawns or
+  // vegetable", or a Phad Thai offering tofu. The extraction prompt already
+  // intends these to be vegetarian; this catches the ones where the AI filed
+  // them under the meat they ALSO offer, which hid them from vegetarians
+  // completely. The dish still shows every option it has, so nobody is misled.
+  const options = proteinOptions(dish);
+  return options.isChoice && options.veg;
 }
 
 /** The diet tabs on the restaurant page, in the order they are shown. */
