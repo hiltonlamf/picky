@@ -45,8 +45,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ guide, added });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Server error';
-    // A duplicate-slug attempt is a client error, not a server fault.
-    const status = /already exists/i.test(msg) ? 409 : 500;
+    // A duplicate slug, or one that collides with an existing route, is a bad
+    // request rather than a server fault — the admin needs to see the reason
+    // and pick a different name, not a generic 500.
+    const status = /already exists/i.test(msg) ? 409 : /is reserved/i.test(msg) ? 400 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
 }

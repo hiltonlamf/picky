@@ -25,9 +25,14 @@ export default function GuideCtaLink({
   className = 'btn-guide',
 }: {
   href: string;
-  label: string;
+  /** Accepts rich content, not just a string, so a city tile on /guides can be
+   *  one CTA rather than a link wrapped around another link. */
+  label: React.ReactNode;
   city: string;
-  placement: 'hero' | 'band';
+  /** New values are additive: the PostHog dashboard BREAKS DOWN
+   *  guide_cta_clicked by `placement`, so extra values appear as extra rows.
+   *  Renaming one, by contrast, would read as zero rather than as an error. */
+  placement: 'hero' | 'band' | 'index' | 'home_chip';
   className?: string;
 }) {
   return (

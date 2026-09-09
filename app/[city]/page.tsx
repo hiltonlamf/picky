@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { cookies } from 'next/headers';
 import Link from 'next/link';
-import { getFeaturedRestaurants, getCityGuideBySlug } from '@/lib/db';
+import { getFeaturedRestaurants, getCityGuideBySlug, listCityGuideLinks } from '@/lib/db';
+import CityGuideSwitcher from '@/components/CityGuideSwitcher';
 import GuideRestaurantGrid from '@/components/GuideRestaurantGrid';
 import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import CountingMethod from '@/components/CountingMethod';
 import GuideViewTracker from '@/components/GuideViewTracker';
-import { ADMIN_COOKIE_NAME, expectedAdminCookieValue } from '@/lib/admin-auth';
+import { isAdminViewer } from '@/lib/admin-viewer';
 import { GUIDE_HUMAN_LINE, countryFlag, guideHeadline, guideIntro, guideMetaDescription } from '@/lib/site-copy';
 import type { Restaurant } from '@/types';
 
@@ -16,14 +16,6 @@ import type { Restaurant } from '@/types';
 // it can never be statically prerendered (CI has no DB) or cached.
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
-
-/** Whether the current viewer is a signed-in admin (so a draft guide can be
- *  previewed). Mirrors the middleware's cookie check; fails closed. */
-async function isAdminViewer(): Promise<boolean> {
-  const expected = await expectedAdminCookieValue();
-  if (!expected) return false;
-  return cookies().get(ADMIN_COOKIE_NAME)?.value === expected;
-}
 
 export async function generateMetadata({ params }: { params: { city: string } }): Promise<Metadata> {
   const guide = await getCityGuideBySlug(params.city).catch(() => null);
@@ -63,6 +55,10 @@ export default async function CityGuidePage({ params }: { params: { city: string
   // Preview mode: an admin viewing a not-yet-live guide. "What you preview is
   // what publishes" — same public render, plus a banner listing held-back ones.
   const previewMode = isDraft && isAdmin;
+
+  // Every guide this viewer may navigate to. One row query; drafts only for a
+  // signed-in admin, so Cork and Limerick can be checked before they go live.
+  const siblingGuides = await listCityGuideLinks({ includeDrafts: isAdmin }).catch(() => []);
 
   let restaurants: Restaurant[] = [];
   try {
@@ -119,19 +115,30 @@ export default async function CityGuidePage({ params }: { params: { city: string
       {/* Header band — forest with the mesh field, same as the homepage hero.
           This was Dublin's own design while it had a separate route; it is now
           every city's, so the guides can't drift apart again. */}
-      <section className="relative overflow-hidden bg-forest-deep text-paper pt-14 pb-16">
-        <div className="mesh mesh-animate" aria-hidden="true">
-          <span className="w-[66%] h-[86%] left-[-12%] top-[-16%] bg-[#0f7a52] opacity-55" />
-          <span className="w-[54%] h-[74%] left-[44%] top-[14%] bg-[#14563c] opacity-75" />
-          <span className="w-[32%] h-[46%] left-[68%] top-[-12%] bg-azalea-500 opacity-[0.28]" />
+      {/* The mesh is clipped by its own wrapper rather than by the section, so
+          the city switcher's panel can hang below the hero instead of being
+          cut off at its edge. The blurred blobs are still bounded exactly as
+          before — only the clipping moved. */}
+      <section className="relative bg-forest-deep text-paper pt-14 pb-16">
+        <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+          <div className="mesh mesh-animate">
+            <span className="w-[66%] h-[86%] left-[-12%] top-[-16%] bg-[#0f7a52] opacity-55" />
+            <span className="w-[54%] h-[74%] left-[44%] top-[14%] bg-[#14563c] opacity-75" />
+            <span className="w-[32%] h-[46%] left-[68%] top-[-12%] bg-azalea-500 opacity-[0.28]" />
+          </div>
+          <div className="grain" />
         </div>
-        <div className="grain" aria-hidden="true" />
 
         <div className="band-inner">
-          <span className="glass inline-flex items-center gap-2.5 rounded-full px-4 py-2 font-mono text-[11px] tracking-[0.16em] uppercase text-paper/90">
-            <span className="w-1.5 h-1.5 rounded-full bg-azalea-500 animate-blink" />
-            {where}
-          </span>
+          {/* The "where" pill doubles as the way out to the other guides —
+              most visitors land on a guide page, not the index, so this is
+              where a second city actually gets discovered. */}
+          <CityGuideSwitcher
+            currentSlug={slug}
+            where={where}
+            guides={siblingGuides}
+            showDraftBadge={isAdmin}
+          />
           <h1 className="font-display text-[clamp(2rem,4.6vw,3.1rem)] leading-[1.04] tracking-[-0.025em] mt-5 mb-4 max-w-[20ch] text-balance">
             {flag && (
               <span className="mr-2" role="img" aria-label={guide.country ?? ''}>

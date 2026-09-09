@@ -25,7 +25,14 @@ const PANEL_ID = 'hero-search-panel';
  * the abandonment-metric refs, and keeping the disclosure out of it means its
  * diff stays small enough to review against those.
  */
-export default function HeroCta() {
+export default function HeroCta({
+  featuredGuide,
+}: {
+  /** The guide the hero leads with. Null when no guide is published yet (or
+   *  the database is unreachable) — the guide CTA is simply dropped and the
+   *  search button carries the hero on its own. */
+  featuredGuide: { slug: string; displayName: string } | null;
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const deepLinkHandled = useRef(false);
@@ -86,13 +93,15 @@ export default function HeroCta() {
               pink-does/green-goes convention elsewhere on the site. Same
               .btn-cta treatment as "Find my veggies" so the two catchy pink
               pills read as a family. */}
-          <GuideCtaLink
-            href="/dublin"
-            label={HERO.guideCta}
-            city="dublin"
-            placement="hero"
-            className="btn-cta"
-          />
+          {featuredGuide && (
+            <GuideCtaLink
+              href={`/${featuredGuide.slug}`}
+              label={HERO.guideCta(featuredGuide.displayName)}
+              city={featuredGuide.slug}
+              placement="hero"
+              className="btn-cta"
+            />
+          )}
 
           <button
             ref={triggerRef}

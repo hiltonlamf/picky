@@ -31,6 +31,53 @@ export function guideIntro(city: string): string {
   );
 }
 
+// ------------------------------------------------------------- the guide index
+
+/** Copy for /guides, the index of every city guide. */
+export const GUIDE_INDEX = {
+  eyebrow: 'Every city, menu by menu',
+  headline: 'Pick your city.',
+  intro:
+    "Every guide below is a city whose most popular restaurant menus we've read dish by dish. " +
+    'Open one to see what is vegetarian and vegan before you book.',
+  /** Label above the filter box, which only appears once the list is long. */
+  filterLabel: 'Find a city',
+  filterPlaceholder: 'Start typing a city or country…',
+  empty: 'No city matches that. Try a country, or vote for the city you want next.',
+  /** Restaurant count on a city tile. Singular matters — "1 restaurants" on a
+   *  brand-new guide is exactly the sort of detail that reads as unfinished. */
+  restaurantCount: (n: number) => `${n} restaurant${n === 1 ? '' : 's'}`,
+  /** A published guide whose restaurants are all still being reviewed. */
+  noneLive: 'Nothing live yet',
+  /** Only ever rendered for a signed-in admin. */
+  draftBadge: 'Draft — only you can see this',
+  vote: {
+    eyebrow: 'Not on the list?',
+    title: 'Put your city on the map.',
+    button: 'Vote for a city →',
+  },
+} as const;
+
+export const GUIDE_INDEX_TITLE = 'City guides — vegetarian and vegan options, city by city';
+
+export function guideIndexMetaDescription(cities: string[]): string {
+  const where = cities.length ? `Now covering ${cities.join(', ')}. ` : '';
+  return (
+    `Browse Platefully's city guides. ${where}` +
+    'The most popular restaurants in each city, read menu by menu, with every vegetarian and ' +
+    'vegan dish flagged by AI and reviewed by a human.'
+  );
+}
+
+/** The switcher that sits in a guide page's hero. */
+export const CITY_SWITCHER = {
+  /** Accessible name for the disclosure button. */
+  label: (city: string) => `${city} — change city`,
+  heading: 'Other city guides',
+  allGuides: 'All city guides →',
+  current: 'You are here',
+} as const;
+
 /** The honest version of who does what. Sampling, not per-item verification. */
 export const GUIDE_HUMAN_LINE =
   'AI reads the menus. We sample and review the results by hand, and keep fixing what the error log shows us.';

@@ -77,7 +77,10 @@ describe('readable restaurant URLs', () => {
     const carousel = readFileSync('components/GuideRestaurantCarousel.tsx', 'utf8');
     expect(card).toContain('href={restaurantPath(restaurant, city)}');
     expect(card).not.toContain('href={`/restaurant/${restaurant.id}`}');
-    expect(carousel).toContain('<RestaurantCard restaurant={restaurant} city="dublin" />');
+    // The carousel takes its city as a prop now that the homepage features
+    // whichever guide is the flagship — but it must still pass one, or the
+    // cards fall back to UUID links.
+    expect(carousel).toContain('<RestaurantCard restaurant={restaurant} city={city} />');
   });
 
   it('assigns slugs on every future terminal outcome', () => {

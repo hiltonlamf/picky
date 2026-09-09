@@ -1,14 +1,15 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import GuideCtaLink from '@/components/GuideCtaLink';
 import GuideRestaurantCarousel from '@/components/GuideRestaurantCarousel';
 import HeroCta from '@/components/HeroCta';
 import SiteFeedbackButton from '@/components/SiteFeedbackButton';
 import VoteCityLink from '@/components/VoteCityLink';
-import { getFeaturedRestaurants } from '@/lib/db';
+import { getFeaturedRestaurants, listCityGuideLinks } from '@/lib/db';
 import { isPubliclyVisible } from '@/lib/review-flags';
 import { FEEDBACK_CTA, GUIDE, HERO, PILLARS, STORY } from '@/lib/home-copy';
-import { SITE_DESCRIPTION, SITE_TITLE } from '@/lib/site-copy';
-import type { Restaurant } from '@/types';
+import { SITE_DESCRIPTION, SITE_TITLE, countryFlag } from '@/lib/site-copy';
+import type { CityGuide, Restaurant } from '@/types';
 
 export const metadata: Metadata = {
   title: SITE_TITLE,
@@ -18,9 +19,28 @@ export const metadata: Metadata = {
   alternates: { canonical: '/' },
 };
 
-// Reads the Dublin guide for the preview strip. Cached for 5 minutes: it's a
+// Reads the featured guide for the preview strip. Cached for 5 minutes: it's a
 // DB read on every cold render otherwise, and the guide barely moves.
 export const revalidate = 300;
+
+/**
+ * The guide the homepage leads with: the earliest published one — the flagship.
+ *
+ * Deliberately not "whichever has the most restaurants", which would let the
+ * homepage's identity swap around on its own as guides grow, and not a
+ * hardcoded 'dublin' either. When this needs to be chosen by hand, that is the
+ * moment to add a `display_order` column to `city_guides` — not before.
+ */
+function pickFeaturedGuide(guides: CityGuide[]): CityGuide | null {
+  const published = guides.filter((g) => g.status === 'published');
+  if (!published.length) return null;
+  return [...published].sort(
+    (a, b) => (a.publishedAt ?? '').localeCompare(b.publishedAt ?? '') || a.slug.localeCompare(b.slug)
+  )[0];
+}
+
+/** How many city chips the homepage shows before deferring to /guides. */
+const MAX_HOME_CITY_CHIPS = 5;
 
 const TAG_TONE: Record<string, string> = {
   ai: 'bg-forest text-paper',
@@ -29,15 +49,24 @@ const TAG_TONE: Record<string, string> = {
 };
 
 export default async function HomePage() {
+  // Published guides only — this page is cached and shared between visitors, so
+  // a draft must never appear here, not even for an admin.
+  // No DB (or no credentials, as in CI's build) leaves both empty: the guide
+  // band is dropped and the rest of the page still renders.
+  const guides = await listCityGuideLinks().catch((): CityGuide[] => []);
+  const featuredGuide = pickFeaturedGuide(guides);
+
   let featured: Restaurant[] = [];
-  try {
-    featured = await getFeaturedRestaurants('dublin');
-  } catch {
-    // No DB (or no credentials, as in CI's build) — the guide strip is simply
-    // omitted and the rest of the page still renders.
+  if (featuredGuide) {
+    featured = await getFeaturedRestaurants(featuredGuide.slug).catch((): Restaurant[] => []);
   }
   const visible = featured.filter(isPubliclyVisible);
   const preview = visible.slice(0, 12);
+  // Everything else is one link away. Beyond a handful, chips stop being a
+  // glanceable row and become a wall — /guides is the surface built for that.
+  const otherGuides = guides.filter((g) => g.slug !== featuredGuide?.slug);
+  const chipGuides = otherGuides.slice(0, MAX_HOME_CITY_CHIPS);
+  const featuredFlag = countryFlag(featuredGuide?.country);
 
   return (
     <div className="flex flex-col bg-forest">
@@ -67,32 +96,90 @@ export default async function HomePage() {
             {HERO.sub}
           </p>
 
-          <HeroCta />
+          <HeroCta
+            featuredGuide={
+              featuredGuide
+                ? { slug: featuredGuide.slug, displayName: featuredGuide.displayName }
+                : null
+            }
+          />
 
           <p className="mt-8 text-sm text-paper/70">{HERO.support}</p>
         </div>
       </section>
 
-      {/* ---------------- Dublin guide, right under the search ---------------- */}
-      <section className="band plate plate-paper z-[2] bg-paper text-forest">
-        <div className="band-inner">
-          <div className="flex flex-wrap items-end justify-between gap-x-[52px] gap-y-6">
-            <div className="flex-1 basis-[420px]">
-              <span className="eyebrow-pink">{GUIDE.eyebrow}</span>
-              <h2 className="font-display text-[clamp(1.8rem,3.5vw,2.5rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[24ch] text-balance">
-                <span className="mr-2" role="img" aria-label="Ireland">🇮🇪</span>
-                {GUIDE.headline}
-              </h2>
-              <p className="mt-3.5 max-w-[60ch] leading-relaxed text-forest/85">{GUIDE.lede}</p>
+      {/* ------- Featured city guide, right under the search -------
+          One city leads because the carousel is the proof the product works:
+          a first-time visitor sees a real menu with a real veggie count before
+          clicking anything. The other cities follow as chips underneath, which
+          is what keeps this section honest once there are dozens of them. */}
+      {featuredGuide && (
+        <section className="band plate plate-paper z-[2] bg-paper text-forest">
+          <div className="band-inner">
+            <div className="flex flex-wrap items-end justify-between gap-x-[52px] gap-y-6">
+              <div className="flex-1 basis-[420px]">
+                <span className="eyebrow-pink">{GUIDE.eyebrow(featuredGuide.displayName)}</span>
+                <h2 className="font-display text-[clamp(1.8rem,3.5vw,2.5rem)] leading-[1.03] tracking-[-0.025em] mt-3 max-w-[24ch] text-balance">
+                  {featuredFlag && (
+                    <span className="mr-2" role="img" aria-label={featuredGuide.country ?? ''}>
+                      {featuredFlag}
+                    </span>
+                  )}
+                  {GUIDE.headline(featuredGuide.displayName)}
+                </h2>
+                <p className="mt-3.5 max-w-[60ch] leading-relaxed text-forest/85">
+                  {GUIDE.lede(featuredGuide.displayName)}
+                </p>
+              </div>
+              <GuideCtaLink
+                href={`/${featuredGuide.slug}`}
+                label={GUIDE.cta(featuredGuide.displayName)}
+                city={featuredGuide.slug}
+                placement="band"
+              />
             </div>
-            <GuideCtaLink href="/dublin" label={GUIDE.cta} city="dublin" placement="band" />
-          </div>
 
-          {preview.length > 0 && (
-            <GuideRestaurantCarousel restaurants={preview} />
-          )}
-        </div>
-      </section>
+            {preview.length > 0 && (
+              <GuideRestaurantCarousel
+                restaurants={preview}
+                city={featuredGuide.slug}
+                cityName={featuredGuide.displayName}
+              />
+            )}
+
+            {otherGuides.length > 0 && (
+              <div className="mt-9 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="eyebrow-pink mr-1">{GUIDE.otherCities}</span>
+                {chipGuides.map((guide) => (
+                  <GuideCtaLink
+                    key={guide.slug}
+                    href={`/${guide.slug}`}
+                    city={guide.slug}
+                    placement="home_chip"
+                    className="inline-flex items-center gap-1.5 rounded-full border-[1.5px] border-forest px-4 py-2 font-display text-sm text-forest transition-colors hover:bg-forest hover:text-paper focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-azalea-500/25"
+                    label={
+                      <>
+                        {countryFlag(guide.country) && (
+                          <span role="img" aria-hidden="true">{countryFlag(guide.country)}</span>
+                        )}
+                        {guide.displayName}
+                      </>
+                    }
+                  />
+                ))}
+                <Link
+                  href="/guides"
+                  className="text-sm font-semibold text-azalea-700 underline underline-offset-4 hover:text-azalea-500 transition-colors"
+                >
+                  {otherGuides.length > chipGuides.length
+                    ? GUIDE.allGuidesCounted(guides.length)
+                    : GUIDE.allGuides}
+                </Link>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ---------------- The story ---------------- */}
       <section id="story" className="band plate z-[3] bg-forest text-paper scroll-mt-[78px]">

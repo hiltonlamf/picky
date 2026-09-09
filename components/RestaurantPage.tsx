@@ -94,7 +94,17 @@ function distinctMenuLabels(restaurant: Restaurant): string[] {
   return labels;
 }
 
-export default function RestaurantPage({ restaurantId }: { restaurantId: string }) {
+export default function RestaurantPage({
+  restaurantId,
+  backGuide = null,
+}: {
+  restaurantId: string;
+  /** The city guide this restaurant belongs to, when it has a live one. Falls
+   *  back to the guide index — a restaurant can sit in no guide at all (or in
+   *  one that is still a draft), and a "back to X" link to a 404 is worse than
+   *  a slightly vaguer one that works. */
+  backGuide?: { slug: string; displayName: string } | null;
+}) {
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -401,8 +411,8 @@ export default function RestaurantPage({ restaurantId }: { restaurantId: string 
         <p className="text-evergreen/80 mb-6">
           Usually under a minute — this page updates itself the moment it&apos;s ready.
         </p>
-        <Link href="/dublin" className="btn-guide">
-          ← Back to Dublin Guide
+        <Link href={backGuide ? `/${backGuide.slug}` : '/guides'} className="btn-guide">
+          {backGuide ? `← Back to the ${backGuide.displayName} guide` : '← All city guides'}
         </Link>
       </div>
     );
