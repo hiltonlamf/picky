@@ -14,6 +14,8 @@ import {
   resetRestaurantForReparse,
 } from './db';
 import { createClient } from '@supabase/supabase-js';
+import * as Sentry from '@sentry/nextjs';
+import { shouldBootstrapGuide } from './guide-bootstrap';
 
 export const DUBLIN_RESTAURANTS: { name: string; url: string }[] = [
   { name: 'Chapter One', url: 'https://chapteronerestaurant.com' },
@@ -97,17 +99,34 @@ export async function initDublinRestaurants(): Promise<void> {
   const supabase = db();
 
   // Guide membership is ADMIN-OWNED and persistent (curated from
-  // /admin/restaurants). This seeder therefore only *bootstraps* the guide the
-  // first time — if the Dublin guide already has any entries, we leave it
-  // completely alone so an admin's add/remove is never wiped on a server
-  // restart. (It used to delete-and-reseed on every boot, which fought with
-  // admin curation.) The seeder still ensures the seed restaurants exist and
-  // get parsed regardless.
-  const { count: guideCount } = await supabase
+  // /admin/restaurants). This seeder therefore only *bootstraps* the guide on a
+  // genuinely fresh database — see lib/guide-bootstrap.ts for the rules and for
+  // the incident that produced them. Both counts are read with their errors
+  // checked, because a failed query must never read as "empty".
+  const guide = await supabase
     .from('featured_restaurants')
     .select('*', { count: 'exact', head: true })
     .eq('city', 'dublin');
-  const bootstrapGuide = (guideCount ?? 0) === 0;
+  const analysed = await supabase
+    .from('restaurants')
+    .select('*', { count: 'exact', head: true })
+    .eq('city', 'dublin')
+    .eq('status', 'done');
+
+  const decision = shouldBootstrapGuide({
+    guideCount: guide.error ? null : guide.count ?? 0,
+    analysedCount: analysed.error ? null : analysed.count ?? 0,
+  });
+  const bootstrapGuide = decision.bootstrap;
+
+  // Never silent, in either direction. Writing a city guide from a background
+  // task is a rare, consequential act; declining to is worth knowing about too.
+  if (bootstrapGuide) {
+    console.warn(`[Picky] Bootstrapping the dublin guide — ${decision.reason}`);
+    Sentry.captureMessage(`Dublin guide bootstrap: ${decision.reason}`, 'warning');
+  } else {
+    console.log(`[Picky] Leaving the dublin guide alone — ${decision.reason}`);
+  }
 
   const toparse: { id: string; name: string; url: string }[] = [];
 
