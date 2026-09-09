@@ -16,6 +16,7 @@ import {
   logParseAttempt,
   getRestaurantSearchTarget,
   findRestaurantIdByProviderPlace,
+  guideCityForPlace,
   linkRestaurantProviderPlace,
 } from '@/lib/db';
 import { captureServer } from '@/lib/posthog-server';
@@ -217,7 +218,9 @@ export async function POST(request: NextRequest) {
           discoveryCity = target.city;
         } else if ('googlePlaceId' in parsed.data) {
           selectedGooglePlaceId = parsed.data.googlePlaceId;
-          discoveryCity = 'dublin';
+          // City comes from the place's own address below. It used to be
+          // hardcoded to 'dublin', which was safe only while search could not
+          // return anything outside Dublin.
 
           // A previously selected Google branch is just another Platefully cache
           // lookup. Resolve its stored URL without another paid Places call.
@@ -225,6 +228,9 @@ export async function POST(request: NextRequest) {
           const linked = linkedId ? await getRestaurantSearchTarget(linkedId).catch(() => null) : null;
           if (linked) {
             url = linked.url;
+            // Already in our database, so its city is already decided — reuse it
+            // rather than re-deriving one (this branch makes no Places call).
+            discoveryCity = linked.city;
           } else {
             const lookupBudget = await checkPlaceLookupRateLimit(ip, 'details');
             if (!lookupBudget.allowed) {
@@ -255,6 +261,10 @@ export async function POST(request: NextRequest) {
                 return close();
               }
               url = place.websiteUrl ?? place.googleMapsUrl ?? '';
+              // Falls back to 'unassigned' when the address is outside the
+              // cities we cover — an honest unknown beats a wrong city on the
+              // restaurant's page and in its public URL.
+              discoveryCity = await guideCityForPlace(place).catch(() => 'unassigned');
               if (!url) {
                 await trackGooglePlacesIssue({
                   request,

@@ -30,7 +30,7 @@ export const HERO = {
    * `subAccent`, but it sells the *secondary* action — as a full-width pink
    * line under a guide-led headline it contradicted the hierarchy.
    */
-  searchHint: "Type a Dublin restaurant name — or paste its website — and we'll find the menu.",
+  searchHint: "Type an Irish restaurant name — or paste its website — and we'll find the menu.",
   /** Collapses the panel again. Only offered while the search is idle. */
   searchCancel: 'Cancel',
   voteCta: 'Vote for our next city →',

@@ -39,7 +39,7 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
-import { areAddressesEquivalent, cleanPublishedAddress, pointInGeoJson, type LocationCandidate } from './location';
+import { areAddressesEquivalent, cleanPublishedAddress, looksLikeIrishAddress, pointInGeoJson, type LocationCandidate } from './location';
 import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 import { rankPickyCandidates } from './restaurant-search-utils';
@@ -239,31 +239,112 @@ type RestaurantSearchRow = {
   }>;
 };
 
-/** Database-first restaurant-name lookup. Unassigned rows are eligible only
- * when first-party location data proves they are in Dublin. */
-export async function searchDublinRestaurantsByName(
+/** The country whose guides restaurant search covers. Search is Ireland-wide;
+ *  widening it further is a product decision, not a config tweak. */
+const SEARCHABLE_COUNTRY = 'Ireland';
+
+/** Guide slugs in SEARCHABLE_COUNTRY, cached briefly.
+ *
+ * Search runs on (debounced) keystrokes, so this must not add a query per
+ * request. The list changes only when a guide is created or renamed, so a short
+ * TTL is plenty — a new city becomes searchable within a minute of being added,
+ * with no deploy. */
+type SearchableCity = { slug: string; displayName: string };
+let irishCityCache: { cities: SearchableCity[]; at: number } | null = null;
+const IRISH_CITY_TTL_MS = 60_000;
+
+async function searchableCities(): Promise<SearchableCity[]> {
+  if (irishCityCache && Date.now() - irishCityCache.at < IRISH_CITY_TTL_MS) {
+    return irishCityCache.cities;
+  }
+  const { data } = await db()
+    .from('city_guides')
+    .select('slug, display_name, country')
+    .eq('country', SEARCHABLE_COUNTRY);
+  const cities = ((data ?? []) as DbRow[]).map((r) => ({
+    slug: r.slug as string,
+    displayName: r.display_name as string,
+  }));
+  irishCityCache = { cities, at: Date.now() };
+  return cities;
+}
+
+/**
+ * Which guide city a Google-sourced restaurant belongs to.
+ *
+ * Search used to be Dublin-only, so every Google pick was filed as 'dublin'.
+ * Now that it covers Ireland, that assumption would give a Cork restaurant a
+ * /restaurant/dublin/... URL and drop it into Dublin's own search results.
+ *
+ * Returns 'unassigned' rather than guessing when the address is not in a city
+ * we cover — an honest "we don't know" that the rest of the app already
+ * handles, and which the Irish-evidence check in search still accepts.
+ */
+export async function guideCityForPlace(place: {
+  locality: string | null;
+  formattedAddress: string | null;
+}): Promise<string> {
+  // Outside the Republic we file nothing: better unassigned than wrong.
+  if (!looksLikeIrishAddress(place.formattedAddress)) return 'unassigned';
+
+  const cities = await searchableCities().catch((): SearchableCity[] => []);
+  if (place.locality) {
+    const localitySlug = citySlug(place.locality);
+    const bySlug = cities.find((c) => c.slug === localitySlug);
+    if (bySlug) return bySlug.slug;
+  }
+  // Google's locality can be a suburb ("Ballsbridge") while the address still
+  // names the city, so fall back to matching the guide name in the address.
+  const address = place.formattedAddress ?? '';
+  const byName = cities.find((c) =>
+    new RegExp(`\\b${c.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(address)
+  );
+  return byName?.slug ?? 'unassigned';
+}
+
+/**
+ * Database-first restaurant-name lookup across every Irish guide city.
+ *
+ * Was Dublin-only. It is now driven by `city_guides`, so Cork and Limerick
+ * become searchable the moment their guide rows exist — there is no per-city
+ * code to add, which is the same property /guides has.
+ *
+ * A row with no assigned city is eligible only when its own first-party
+ * location data shows it is in Ireland. That check is evidence-based rather
+ * than optimistic on purpose: a missed match is a restaurant the visitor can
+ * still reach by pasting its link, while a false match puts a foreign
+ * restaurant in front of someone searching their own city.
+ */
+export async function searchIrishRestaurantsByName(
   rawQuery: string,
   limit = 6
 ): Promise<PickyRestaurantSearchCandidate[]> {
   const query = rawQuery.trim().replace(/[%_,]/g, ' ').replace(/\s+/g, ' ');
   if (query.length < 2) return [];
+  const citySlugs = (await searchableCities().catch((): SearchableCity[] => [])).map((c) => c.slug);
+  // 'unassigned' is where a restaurant found by search (rather than added to a
+  // guide) lands when we cannot place it in a city we cover.
+  const cityFilter = Array.from(new Set([...citySlugs, 'dublin', 'unassigned']));
   const { data, error } = await db()
     .from('restaurants')
     .select('id, name, status, city, address, area_label, restaurant_locations(address, label, area_label)')
-    .in('city', ['dublin', 'unassigned'])
+    .in('city', cityFilter)
     .in('status', ['done', 'no_menu', 'error'])
     .not('name', 'is', null)
     .ilike('name', `%${query}%`)
     .limit(Math.max(limit * 4, 20));
   if (error) throw new Error(`Failed to search restaurants: ${error.message}`);
 
+  const knownCities = new Set(cityFilter.filter((c) => c !== 'unassigned'));
   const candidates = ((data ?? []) as RestaurantSearchRow[])
     .filter((row) => {
-      if (row.city.toLowerCase() === 'dublin') return true;
+      // A restaurant already filed under a city we cover needs no further proof.
+      if (knownCities.has(row.city.toLowerCase())) return true;
+      // A Dublin Eircode area, assigned from a real address.
       if (row.area_label) return true;
-      if (/\bdublin\b/i.test(row.address ?? '')) return true;
+      if (looksLikeIrishAddress(row.address)) return true;
       return (row.restaurant_locations ?? []).some((location) =>
-        !!location.area_label || /\bdublin\b/i.test(location.address)
+        !!location.area_label || looksLikeIrishAddress(location.address)
       );
     })
     .map((row) => {

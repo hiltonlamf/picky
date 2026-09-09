@@ -20,7 +20,7 @@ export const DAILY_SPEND_CAP_USD = Number(process.env.DAILY_SPEND_CAP_USD || '25
 /** Shown to the user when the cap is hit. Deliberately not alarming. */
 export const AT_CAPACITY_MESSAGE =
   "We're at capacity for today — this one's on us to fix. Please try again tomorrow, " +
-  'or browse the Dublin guide in the meantime.';
+  'or browse the city guides in the meantime.';
 
 type CachedSpend = { total: number; at: number };
 let cache: CachedSpend | null = null;

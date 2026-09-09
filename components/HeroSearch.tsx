@@ -7,7 +7,7 @@ import InlineFeedbackNote from './InlineFeedbackNote';
 import { capture } from '@/lib/posthog-client';
 import { EVENTS, captureError, classifyError } from '@/lib/analytics';
 import { domainOf, FIRST_ANALYSIS_KEY } from '@/lib/telemetry';
-import { DEAD_END_FEEDBACK } from '@/lib/site-copy';
+import { DEAD_END_FEEDBACK, SEARCH } from '@/lib/site-copy';
 import { looksLikeRestaurantUrl, normalizeRestaurantName } from '@/lib/restaurant-search-utils';
 import type {
   ParseEvent,
@@ -92,7 +92,7 @@ export default function HeroSearch({
   }, [sessionToken]);
 
   // Our own database is always asked first. Google is called only when it has no
-  // matching Dublin restaurant; a visible control lets the user broaden an
+  // matching Irish restaurant; a visible control lets the user broaden an
   // existing result list deliberately.
   useEffect(() => {
     if (state !== 'idle') return;
@@ -372,7 +372,7 @@ export default function HeroSearch({
     }
   }, [sessionToken, startDiscovery]);
 
-  const searchAllDublin = useCallback(async () => {
+  const searchAllIreland = useCallback(async () => {
     const value = query.trim();
     if (value.length < 3) return;
     setSearching(true);
@@ -419,7 +419,7 @@ export default function HeroSearch({
       chooseRestaurant(searchCandidates[activeSearchIndex]);
       return;
     }
-    setError(searching ? 'Still searching Dublin…' : 'Choose a restaurant from the list, or paste its website link.');
+    setError(searching ? SEARCH.stillSearching : SEARCH.chooseOne);
   }, [query, searchCandidates, activeSearchIndex, searching, chooseRestaurant, startDiscovery]);
 
   const handleAnalyzeSelected = useCallback(async () => {
@@ -657,15 +657,15 @@ export default function HeroSearch({
           {(searchCandidates.length > 0 || searching || googleQueried || providerError) && !looksLikeRestaurantUrl(query) && (
             <div className="ph-no-capture relative z-30 mt-2 overflow-hidden rounded-2xl border border-forest/15 bg-white text-forest shadow-[0_18px_45px_rgba(4,28,20,0.28)]">
               {searching && searchCandidates.length === 0 && (
-                <p className="px-4 py-3 text-sm text-forest/65" role="status">Searching Dublin…</p>
+                <p className="px-4 py-3 text-sm text-forest/65" role="status">{SEARCH.searching}</p>
               )}
               {!searching && googleQueried && searchCandidates.length === 0 && !providerError && (
                 <p className="px-4 py-3 text-sm text-forest/65" role="status">
-                  No Dublin matches yet. Try another spelling or paste the restaurant website.
+                  {SEARCH.noMatches}
                 </p>
               )}
               {searchCandidates.length > 0 && (
-                <ul id="restaurant-search-results" role="listbox" aria-label="Dublin restaurant matches" className="py-1">
+                <ul id="restaurant-search-results" role="listbox" aria-label={SEARCH.resultsLabel} className="py-1">
                   {searchCandidates.map((candidate, index) => (
                     <li
                       id={`restaurant-search-option-${index}`}
@@ -700,18 +700,18 @@ export default function HeroSearch({
               {!googleQueried && searchCandidates.some((candidate) => candidate.source === 'picky') && query.trim().length >= 3 && (
                 <button
                   type="button"
-                  onClick={searchAllDublin}
+                  onClick={searchAllIreland}
                   disabled={searching}
                   className="w-full border-t border-forest/10 px-4 py-3 text-left text-xs font-semibold text-azalea-700 hover:bg-azalea-50 disabled:opacity-60"
                 >
-                  {searching ? 'Searching all Dublin restaurants…' : 'Search all Dublin restaurants'}
+                  {searching ? SEARCH.broadening : SEARCH.broaden}
                 </button>
               )}
               {providerError && (
                 <p className="border-t border-forest/10 px-4 py-3 text-xs text-forest/65">
                   {providerError === 'rate_limited'
-                    ? 'Restaurant lookup limit reached. Pick a Platefully result or paste the website link.'
-                    : 'Live Dublin lookup is unavailable. Platefully results and website links still work.'}
+                    ? SEARCH.providerRateLimited
+                    : SEARCH.providerUnavailable}
                 </p>
               )}
               {attributionRequired && (

@@ -69,6 +69,36 @@ export function guideIndexMetaDescription(cities: string[]): string {
   );
 }
 
+// ------------------------------------------------------- restaurant search
+
+/**
+ * The restaurant-name search box.
+ *
+ * These used to be inline in HeroSearch.tsx, which meant rewording them was a
+ * code change in a 700-line component carrying the SSE reader. They say
+ * "Ireland" rather than "Dublin" now: search covers every Irish guide city, and
+ * Google autocomplete is bounded to the Republic.
+ */
+export const SEARCH = {
+  /** While the first results are still coming back. */
+  searching: 'Searching Ireland…',
+  /** Nothing found, after Google has been asked too. */
+  noMatches: 'No matches yet. Try another spelling or paste the restaurant website.',
+  /** Accessible name for the results listbox. */
+  resultsLabel: 'Irish restaurant matches',
+  /** Broadens a database-only result set to Google. */
+  broaden: 'Search all Irish restaurants',
+  broadening: 'Searching all Irish restaurants…',
+  /** Enter pressed with nothing chosen yet. */
+  stillSearching: 'Still searching Ireland…',
+  chooseOne: 'Choose a restaurant from the list, or paste its website link.',
+  /** Google is unavailable or rate-limited; our own results still work. */
+  providerRateLimited:
+    'Restaurant lookup limit reached. Pick a Platefully result or paste the website link.',
+  providerUnavailable:
+    'Live restaurant lookup is unavailable. Platefully results and website links still work.',
+} as const;
+
 /** The switcher that sits in a guide page's hero. */
 export const CITY_SWITCHER = {
   /** Accessible name for the disclosure button. */

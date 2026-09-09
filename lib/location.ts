@@ -39,6 +39,82 @@ function validCoordinates(latitude: number | undefined, longitude: number | unde
 const DUBLIN_EIRCODE_SOURCE = '(?:D(?:0[1-9]|1\\d|2[0-4])|D6W)\\s*[A-Z0-9]{4}';
 const DUBLIN_EIRCODE_RE = new RegExp(`\\b${DUBLIN_EIRCODE_SOURCE}\\b`, 'i');
 
+/**
+ * An Eircode anywhere in the Republic, not just Dublin's D-codes.
+ *
+ * A routing key is one of fifteen letters (B, G, I, J, M, O, Q, S, U and Z are
+ * never used), then two digits — with D6W as the single exception where the
+ * third character is a letter. The unique identifier that follows draws on the
+ * same restricted alphabet, which is what keeps this from matching ordinary
+ * words: "T12 ABCD" is an Eircode, "for 2019 only" is not.
+ *
+ * DUBLIN_EIRCODE_SOURCE stays as it is — `eircodeKey` and the Dublin area
+ * mapping are deliberately Dublin-only and must not start matching Cork.
+ */
+const IRISH_EIRCODE_RE = /\b[ACDEFHKNPRTVWXY]\d[0-9W]\s?[0-9ACDEFHKNPRTVWXY]{4}\b/i;
+
+/**
+ * Counties of the Republic and the towns most likely to appear in a restaurant
+ * address. Used both to recognise an Irish address and to pull an address block
+ * out of scraped HTML — before this, only Dublin was recognised, so a Cork
+ * restaurant's address was never extracted at all.
+ *
+ * Northern Ireland is deliberately absent: the product covers the Republic, and
+ * Google files NI under region `gb`.
+ */
+export const IRISH_PLACE_NAMES: readonly string[] = [
+  // Counties
+  'Carlow', 'Cavan', 'Clare', 'Cork', 'Donegal', 'Dublin', 'Galway', 'Kerry',
+  'Kildare', 'Kilkenny', 'Laois', 'Leitrim', 'Limerick', 'Longford', 'Louth',
+  'Mayo', 'Meath', 'Monaghan', 'Offaly', 'Roscommon', 'Sligo', 'Tipperary',
+  'Waterford', 'Westmeath', 'Wexford', 'Wicklow',
+  // Towns and cities that are not also county names
+  'Athlone', 'Ballina', 'Bray', 'Clonmel', 'Dundalk', 'Dun Laoghaire',
+  'Dún Laoghaire', 'Ennis', 'Kinsale', 'Letterkenny', 'Malahide', 'Mullingar',
+  'Naas', 'Navan', 'Newbridge', 'Portlaoise', 'Skibbereen', 'Sligo Town',
+  'Swords', 'Tralee', 'Westport', 'Youghal',
+];
+
+function alternation(names: readonly string[]): string {
+  // Longest first so "Dun Laoghaire" wins over a bare prefix, and escape the
+  // few names carrying regex-significant characters.
+  return [...names]
+    .sort((a, b) => b.length - a.length)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+}
+
+const IRISH_PLACE_RE = new RegExp(`\\b(?:${alternation(IRISH_PLACE_NAMES)})\\b`, 'i');
+// \b is ASCII-only in JavaScript, so `\bÉire\b` never matches — there is no
+// word boundary between a space and "É". The accented form is distinctive
+// enough to match bare; only the ASCII spellings need boundaries.
+const IRELAND_NAME_RE = /\bIreland\b|\bEire\b|Éire/i;
+
+/**
+ * Whether an address looks like it is in the Republic of Ireland.
+ *
+ * Used to decide whether a restaurant with no assigned city may still appear in
+ * Irish search results. Deliberately evidence-based rather than a guess: an
+ * Eircode, the country named outright, or a county/town. An address with none of
+ * those is treated as not-Irish, which is the safe direction — a missed match is
+ * a restaurant the user can still reach by pasting its link, whereas a false
+ * match puts a Manchester restaurant in front of someone searching Dublin.
+ */
+export function looksLikeIrishAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  // An Eircode settles it outright and must be checked FIRST. A UK postcode can
+  // never look like one (its inward code is always three characters, an Eircode
+  // unique identifier always four), but the reverse is not true: "A65 2CD4" is
+  // a perfectly good Tipperary Eircode that the UK-postcode shape below would
+  // otherwise veto, because its second half happens to start with a digit.
+  if (IRISH_EIRCODE_RE.test(address)) return true;
+  // Otherwise a UK postcode is a strong signal this is NOT the Republic, and it
+  // has to beat the place-name test: "Dublin Road, Newry BT35 8QB" names Dublin
+  // but is in Down.
+  if (/\b[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}\b/i.test(address)) return false;
+  return IRELAND_NAME_RE.test(address) || IRISH_PLACE_RE.test(address);
+}
+
 function eircodeKey(address: string): string | null {
   return address.match(DUBLIN_EIRCODE_RE)?.[0].replace(/\s+/g, '').toUpperCase() ?? null;
 }
@@ -185,12 +261,20 @@ function mapCandidatesFromDocument($: cheerio.CheerioAPI, sourceUrl: string): Lo
 // An Eircode or Dutch postcode is a strong enough signal to accept a compact
 // visible text block as a published address. Many small restaurant sites put
 // this in an ordinary <p>, not an <address> element or JSON-LD.
-const VISIBLE_EIRCODE_RE = new RegExp(`\\b${DUBLIN_EIRCODE_SOURCE}\\b`, 'i');
+// Any Irish Eircode, not just Dublin's: a Cork site printing "T12 X2RH" is
+// giving us exactly the same signal a Dublin one does with "D02 XY45".
+const VISIBLE_EIRCODE_RE = IRISH_EIRCODE_RE;
 // Keep Dutch postcode letters case-sensitive so ordinary prose such as
 // "from 2016 to 2019" cannot become a bogus address. Lowercase address blocks
 // that include Amsterdam still use the street-and-city fallback below.
 const VISIBLE_DUTCH_POSTCODE_RE = /\b\d{4}\s?[A-Z]{2}\b/;
-const VISIBLE_CITY_RE = /\b(?:Dublin(?:\s+\d{1,2})?|Amsterdam|London|Westport)\b/i;
+// Every Irish place name, plus the non-Irish cities we already had, and Dublin's
+// postal-district form ("Dublin 8"). Before this it was Dublin-only, so a Cork
+// restaurant's address block was never recognised as an address at all.
+const VISIBLE_CITY_RE = new RegExp(
+  `\\b(?:Dublin\\s+\\d{1,2}|${alternation(IRISH_PLACE_NAMES)}|Amsterdam|London)\\b`,
+  'i'
+);
 const STREET_TYPES = 'street|st\\.?|road|rd\\.?|row|court|square|quay|lane|place|terrace|buildings?|avenue|boulevard|straat|gracht|kade|plein|weg|dijk|markt|rue|quai|via|viale|piazza|calle|carrer|paseo|platz|strasse|straße|chaussee|chaussée|rua|travessa';
 const STREET_TYPE_RE = new RegExp(`\\b(?:${STREET_TYPES})\\b`, 'i');
 const NUMBERED_STREET_RE = new RegExp(`\\b\\d+[A-Z]?(?:[-/]\\d+[A-Z]?)?(?:\\s+[^\\s,]+){0,6}\\s+(?:${STREET_TYPES})\\b`, 'i');
