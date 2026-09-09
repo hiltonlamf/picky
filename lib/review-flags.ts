@@ -269,3 +269,35 @@ export function isPubliclyVisible(
   if (restaurant.guideApprovedAt) return true;
   return !computeReviewFlags(restaurant).some((f) => GATING_FLAGS.includes(f.code));
 }
+
+/**
+ * Why a restaurant curated into a guide is not showing on it — or null when it
+ * IS showing.
+ *
+ * The counterpart to isPubliclyVisible: that answers "does it appear", this
+ * answers "why not". Both live here because they encode the same judgement, and
+ * this existed as two copies (the guide page's preview banner and the admin
+ * workspace) that had already drifted in wording and in whether they returned
+ * null. A guide showing 25 of 40 is either a content gap or a pipeline bug, and
+ * the only thing that tells them apart is this reason — so it should not depend
+ * on which screen you happen to be looking at.
+ *
+ * Order matters: the first failing condition is the most useful one to report.
+ */
+export function heldBackReason(
+  restaurant: Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>
+): string | null {
+  if (isPubliclyVisible(restaurant)) return null;
+  if (restaurant.status === 'pending' || restaurant.status === 'processing') {
+    // Neither live nor "needs attention" in the admin counts — an interrupted
+    // batch hides in this gap, so it has to be named.
+    return 'still analyzing';
+  }
+  if (restaurant.status === 'error') return 'analysis errored — reparse or check the site';
+  if (restaurant.status === 'no_menu') return 'no menu found on the site';
+  const dishes = countDishes(restaurant);
+  if (dishes < MIN_GUIDE_DISHES) return `only ${dishes} dish${dishes === 1 ? '' : 'es'} — likely mis-read`;
+  const flags = computeReviewFlags(restaurant);
+  if (flags.length) return flags[0].detail;
+  return 'held back for review';
+}

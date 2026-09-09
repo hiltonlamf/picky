@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { getFeaturedRestaurants, getCityGuideBySlug, listCityGuideLinks } from '@/lib/db';
 import CityGuideSwitcher from '@/components/CityGuideSwitcher';
 import GuideRestaurantGrid from '@/components/GuideRestaurantGrid';
-import { isPubliclyVisible, computeReviewFlags, countDishes, MIN_GUIDE_DISHES } from '@/lib/review-flags';
+import { isPubliclyVisible, heldBackReason } from '@/lib/review-flags';
 import GuideFeedbackButton from '@/components/GuideFeedbackButton';
 import CountingMethod from '@/components/CountingMethod';
 import GuideViewTracker from '@/components/GuideViewTracker';
@@ -28,18 +28,6 @@ export async function generateMetadata({ params }: { params: { city: string } })
     title: `Vegetarian & Vegan Options in ${guide.displayName}’s Most Popular Restaurants`,
     description: guideMetaDescription(guide.displayName, where),
   };
-}
-
-/** One-line reason a featured restaurant is being withheld from the public. */
-function heldBackReason(r: Restaurant): string {
-  if (r.status === 'error') return 'analysis errored';
-  if (r.status === 'no_menu') return 'no menu found';
-  if (r.status !== 'done') return r.status;
-  const dishes = countDishes(r);
-  if (dishes < MIN_GUIDE_DISHES) return `only ${dishes} dish${dishes === 1 ? '' : 'es'}`;
-  const flags = computeReviewFlags(r);
-  if (flags.length) return flags[0].detail;
-  return 'held back for review';
 }
 
 export default async function CityGuidePage({ params }: { params: { city: string } }) {
