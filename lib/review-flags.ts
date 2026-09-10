@@ -288,10 +288,15 @@ export function heldBackReason(
   restaurant: Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>
 ): string | null {
   if (isPubliclyVisible(restaurant)) return null;
-  if (restaurant.status === 'pending' || restaurant.status === 'processing') {
-    // Neither live nor "needs attention" in the admin counts — an interrupted
-    // batch hides in this gap, so it has to be named.
-    return 'still analyzing';
+  // These two are NOT the same thing, and calling both "still analyzing" is a
+  // lie that costs real time. A batch is driven by the admin's browser tab, so
+  // once that tab is gone nothing is running — no amount of waiting will move a
+  // pending row. Say which it is.
+  if (restaurant.status === 'pending') {
+    return 'not analysed yet — nothing is running, start a batch to analyse it';
+  }
+  if (restaurant.status === 'processing') {
+    return 'interrupted part-way — the run that started it stopped; analyse it again';
   }
   if (restaurant.status === 'error') return 'analysis errored — reparse or check the site';
   if (restaurant.status === 'no_menu') return 'no menu found on the site';

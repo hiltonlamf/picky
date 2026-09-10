@@ -47,6 +47,14 @@ export default async function AdminGuidesPage() {
                   {g.needsAttention > 0 && (
                     <span className="text-sun-800 font-medium"> · {g.needsAttention} need attention</span>
                   )}
+                  {/* Never analysed at all. Analysis is driven by the browser
+                      tab running the batch, so these do not progress on their
+                      own — leaving them out of this line made 37 restaurants
+                      invisible on the screen that is supposed to show the
+                      whole workspace. */}
+                  {g.notAnalysed > 0 && (
+                    <span className="text-sun-800 font-medium"> · {g.notAnalysed} not analysed</span>
+                  )}
                   <span className="text-evergreen/50"> · {g.total} total</span>
                 </p>
               </div>

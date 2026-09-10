@@ -1743,7 +1743,7 @@ export function citySlug(name: string): string {
 /** All city guides, newest first, each with live restaurant counts (total /
  *  publicly-visible / needs-attention) for the admin list. */
 export async function getCityGuides(): Promise<
-  Array<CityGuide & { total: number; visible: number; needsAttention: number }>
+  Array<CityGuide & { total: number; visible: number; needsAttention: number; notAnalysed: number }>
 > {
   const { data } = await db().from('city_guides').select('*').order('created_at', { ascending: false });
   const guides = ((data ?? []) as DbRow[]).map(mapCityGuide);
@@ -1752,11 +1752,21 @@ export async function getCityGuides(): Promise<
     guides.map(async (g) => {
       // includeHidden so counts reflect the whole workspace, not just public rows.
       const restaurants = await getFeaturedRestaurants(g.slug, { includeHidden: true });
-      const visible = restaurants.filter((r) => !r.guideHidden && isPubliclyVisible(r)).length;
-      const needsAttention = restaurants.filter(
-        (r) => !r.guideHidden && !isPubliclyVisible(r) && (r.status === 'done' || r.status === 'error' || r.status === 'no_menu')
+      const active = restaurants.filter((r) => !r.guideHidden);
+      const visible = active.filter(isPubliclyVisible).length;
+      // Finished, but withheld — errored, no menu, thin, or review-flagged.
+      const needsAttention = active.filter(
+        (r) => !isPubliclyVisible(r) && (r.status === 'done' || r.status === 'error' || r.status === 'no_menu')
       ).length;
-      return { ...g, total: restaurants.length, visible, needsAttention };
+      // Never finished. Counting these as "needs attention" would blur two very
+      // different problems, but leaving them out of every count — which is what
+      // this did — is worse: a guide with 3 live and 37 never-analysed rendered
+      // as "3 live · 40 total" with nothing flagged at all, so 37 restaurants
+      // were invisible on the one screen meant to show the whole workspace.
+      const notAnalysed = active.filter(
+        (r) => r.status === 'pending' || r.status === 'processing'
+      ).length;
+      return { ...g, total: restaurants.length, visible, needsAttention, notAnalysed };
     })
   );
 }

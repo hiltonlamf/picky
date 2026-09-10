@@ -48,11 +48,21 @@ describe('heldBackReason', () => {
     expect(heldBackReason(ok)).toBeNull();
   });
 
-  it('names an unfinished analysis rather than leaving it in a gap', () => {
-    // Neither "live" nor "needs attention" in the admin counts, so an
-    // interrupted batch is invisible unless this says so explicitly.
-    expect(heldBackReason(restaurant('pending', 0))).toBe('still analyzing');
-    expect(heldBackReason(restaurant('processing', 0))).toBe('still analyzing');
+  it('does not claim a never-started restaurant is being analysed', () => {
+    // The batch runs in the admin's browser tab. Once that tab is gone nothing
+    // is running, so "still analyzing" on a pending row sent the founder away
+    // to wait for hours on work that was never going to happen.
+    const reason = heldBackReason(restaurant('pending', 0));
+    expect(reason).not.toMatch(/analysing|analyzing/i);
+    expect(reason).toMatch(/not analysed yet/i);
+    expect(reason).toMatch(/nothing is running/i);
+  });
+
+  it('distinguishes an interrupted run from one that never started', () => {
+    const pending = heldBackReason(restaurant('pending', 0));
+    const processing = heldBackReason(restaurant('processing', 0));
+    expect(processing).not.toBe(pending);
+    expect(processing).toMatch(/interrupted/i);
   });
 
   it('distinguishes an error from a site with no menu', () => {
