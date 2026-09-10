@@ -65,6 +65,18 @@ describe('heldBackReason', () => {
     expect(processing).toMatch(/interrupted/i);
   });
 
+  it('says a restaurant is being analysed only when a run really has it', () => {
+    // `processing` alone does not mean anything is running — that was the whole
+    // bug. The freshness of updated_at is what separates the two, and without a
+    // timestamp the reason must stay on the safe side ("interrupted").
+    const fresh = heldBackReason(restaurant('processing', 0), new Date(Date.now() - 60_000).toISOString());
+    expect(fresh).toMatch(/being analysed right now/i);
+
+    const stale = heldBackReason(restaurant('processing', 0), new Date(Date.now() - 6 * 3600_000).toISOString());
+    expect(stale).toMatch(/interrupted/i);
+    expect(heldBackReason(restaurant('processing', 0))).toMatch(/interrupted/i);
+  });
+
   it('distinguishes an error from a site with no menu', () => {
     expect(heldBackReason(restaurant('error', 0))).toMatch(/errored/);
     expect(heldBackReason(restaurant('no_menu', 0))).toMatch(/no menu found/);

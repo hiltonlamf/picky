@@ -1,4 +1,5 @@
 import type { AnalyzeProgress } from './batchAnalyze';
+import { isLiveProcessing } from '@/lib/guide-queue';
 
 // How a restaurant's state is shown in the guide workspace.
 //
@@ -57,7 +58,7 @@ const OUTCOME_BADGES: Record<string, Badge> = {
   error: { label: 'Error', className: WARN_CLASS },
 };
 
-export function statusBadge(status: string, live?: LiveState): Badge {
+export function statusBadge(status: string, live?: LiveState, updatedAt?: string | null): Badge {
   if (live?.phase === 'queued') {
     return { label: 'Queued', className: QUEUED_CLASS, title: 'Waiting for its turn in the current batch' };
   }
@@ -75,14 +76,26 @@ export function statusBadge(status: string, live?: LiveState): Badge {
     return { label: 'Queued', className: QUEUED_CLASS, title: 'Added but not analyzed yet' };
   }
   if (status === 'processing') {
-    // Nothing is driving this row from this tab, yet it never finished — almost
-    // always an interrupted run (tab closed, request timed out). Say so, rather
-    // than showing "processing" forever, which reads as "still working" and is
-    // what made a stalled Amsterdam row look like it was in progress for hours.
+    // `processing` on its own does NOT mean anything is still working. Now that
+    // the batch runs on a server there are two real cases, and they want
+    // opposite responses from the admin — so the freshness of `updated_at`
+    // decides, through the same rule the worker uses to claim rows.
+    if (isLiveProcessing(status, updatedAt ?? null)) {
+      return {
+        label: 'Analyzing',
+        className: 'bg-picky-100 text-picky-700',
+        active: true,
+        title: 'Being analyzed right now by the server run — you can close this tab',
+      };
+    }
+    // Nothing is driving this row, yet it never finished — an interrupted run
+    // (tab closed, request timed out). Say so, rather than showing "processing"
+    // forever, which reads as "still working" and is what made a stalled
+    // Amsterdam row look like it was in progress for hours.
     return {
       label: 'Interrupted',
       className: WARN_CLASS,
-      title: 'An earlier analysis started but never finished — use “Analyze queued” to run it again',
+      title: 'An earlier analysis started but never finished — the next run picks it up automatically',
     };
   }
   return OUTCOME_BADGES[status] ?? { label: status, className: 'bg-mint-100 text-evergreen/80' };

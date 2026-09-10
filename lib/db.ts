@@ -28,6 +28,7 @@ import type {
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
 import { isReservedGuideSlug } from './city-guides';
+import type { QueueRow } from './guide-queue';
 import { guideInsights } from './menu-insights';
 import {
   verifyVegClassifications,
@@ -1676,6 +1677,47 @@ export async function saveCityGuideVote(input: {
   }
   if (error) throw new Error(`Failed to save city vote: ${error.message}`);
   return { duplicate: false };
+}
+
+/**
+ * The analysis queue for one city guide — a LIGHT read: id, name, url, status
+ * and the `updated_at` that tells a live run from an abandoned one.
+ *
+ * Deliberately not `getFeaturedRestaurants()`, which loads every section and
+ * dish of every restaurant to rank them for the public page. A worker deciding
+ * "what is left to analyse?" needs none of that, and a 40-restaurant guide
+ * would fetch several thousand rows to answer a question about forty.
+ *
+ * Membership comes from `featured_restaurants` (admin-curated), NOT
+ * `restaurants.city` — a restaurant found by search can sit in a city without
+ * anyone having put it in that city's guide.
+ */
+export async function listGuideQueue(city: string): Promise<QueueRow[]> {
+  const { data, error } = await db()
+    .from('featured_restaurants')
+    .select('display_order, restaurants!inner(id, name, url, status, updated_at)')
+    .eq('city', city)
+    .order('display_order');
+
+  if (error) throw new Error(`Failed to read the ${city} guide queue: ${error.message}`);
+
+  return ((data ?? []) as DbRow[]).flatMap((row) => {
+    // A one-to-one embed comes back as an object, but PostgREST types it loosely
+    // enough that an array is possible; normalise rather than trust the shape.
+    const embedded = row.restaurants;
+    const r = (Array.isArray(embedded) ? embedded[0] : embedded) as DbRow | undefined;
+    if (!r?.id) return [];
+    return [
+      {
+        id: r.id as string,
+        name: (r.name as string | null) ?? null,
+        url: r.url as string,
+        status: r.status as string,
+        updatedAt: (r.updated_at as string | null) ?? null,
+        displayOrder: (row.display_order as number) ?? 0,
+      },
+    ];
+  });
 }
 
 export async function getFeaturedRestaurants(

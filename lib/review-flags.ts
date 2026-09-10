@@ -1,4 +1,5 @@
 import type { Restaurant, Dish } from '@/types';
+import { isLiveProcessing } from './guide-queue';
 
 // The public Dublin Guide only shows restaurants with at least this many real
 // dishes. Fewer than this almost always means the pipeline mis-read the site
@@ -285,18 +286,23 @@ export function isPubliclyVisible(
  * Order matters: the first failing condition is the most useful one to report.
  */
 export function heldBackReason(
-  restaurant: Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>
+  restaurant: Pick<Restaurant, 'sections' | 'status' | 'guideApprovedAt'>,
+  /** `restaurants.updated_at`, when the caller has it. Without it a `processing`
+   *  row is reported as interrupted, which is the safe direction: it sends
+   *  someone to re-run a row rather than telling them to keep waiting. */
+  updatedAt?: string | null
 ): string | null {
   if (isPubliclyVisible(restaurant)) return null;
-  // These two are NOT the same thing, and calling both "still analyzing" is a
-  // lie that costs real time. A batch is driven by the admin's browser tab, so
-  // once that tab is gone nothing is running — no amount of waiting will move a
-  // pending row. Say which it is.
+  // These are NOT the same thing, and calling them all "still analyzing" is a
+  // lie that costs real time — the founder waited hours on rows nothing was
+  // working. Say which it is.
   if (restaurant.status === 'pending') {
     return 'not analysed yet — nothing is running, start a batch to analyse it';
   }
   if (restaurant.status === 'processing') {
-    return 'interrupted part-way — the run that started it stopped; analyse it again';
+    return isLiveProcessing(restaurant.status, updatedAt ?? null)
+      ? 'being analysed right now'
+      : 'interrupted part-way — the run that started it stopped; analyse it again';
   }
   if (restaurant.status === 'error') return 'analysis errored — reparse or check the site';
   if (restaurant.status === 'no_menu') return 'no menu found on the site';

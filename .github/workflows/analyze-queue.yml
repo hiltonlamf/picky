@@ -1,0 +1,192 @@
+# Analyse a city guide's outstanding restaurants — the server-side batch.
+#
+# WHY THIS EXISTS: the guide batch used to run in the admin's browser tab, so
+# closing the tab stranded every remaining restaurant as `pending` forever (the
+# founder added 40 Cork + 40 Limerick restaurants and most were still "queued"
+# hours later). It cannot move to a Vercel function — the Hobby plan kills any
+# function at 60s and one restaurant takes 30-60s, so a 40-restaurant batch
+# needs ~30 minutes. A runner is the only place long enough. This repo is
+# public, so those runner minutes are free; the only cost is the AI calls the
+# restaurants were always going to need.
+#
+# SPENDS REAL MONEY: roughly $0.05 per restaurant that succeeds, and MORE per
+# failure (a hopeless site still walks its full retry ladder — 10-20+ billed
+# calls). A 40-restaurant city is ~$2-3.
+#
+# NO `schedule`, deliberately, and the same reasoning as pipeline.yml: nothing
+# in this repo spends money on a timer. A guide is analysed when someone decides
+# to analyse it.
+#
+# Requires repo secrets: ANTHROPIC_API_KEY, NEXT_PUBLIC_SUPABASE_URL,
+# SUPABASE_SERVICE_ROLE_KEY (all already present for pipeline.yml), plus
+# FIRECRAWL_API_KEY / JINA_API_KEY for the JS-rendering page reader.
+name: Analyse guide queue
+
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: 'Guide slug, e.g. cork, limerick, dublin.'
+        type: string
+        required: true
+      mode:
+        description: 'queued = restaurants never analysed (plus any stranded by an interrupted run). failed = re-run the ones that came back no-menu or errored — costs full price and often cannot change the answer, so pick it on purpose.'
+        type: choice
+        options: [queued, failed]
+        default: queued
+      limit:
+        description: 'Analyse at most this many (blank = all of them). Use a small number to sanity-check a city before spending on the whole guide.'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Print exactly what would be analysed and stop. FREE — no AI calls.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+# Per city, and NOT cancel-in-progress: a second dispatch must queue behind the
+# first rather than run alongside it. Two workers on one guide could hand the
+# same restaurant to both and pay twice for one result. (The staleness lease in
+# lib/guide-queue.ts is the second line of defence.)
+concurrency:
+  group: analyze-queue-${{ inputs.city }}
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    # Generous on purpose. The script stops itself at --budget-minutes below,
+    # finishing the restaurant it is on rather than being killed mid-analysis, so
+    # this ceiling should never actually be reached. Sized so ONE dispatch drains
+    # a whole city: ~45s per restaurant means 330 minutes covers 400+ of them.
+    #
+    # (A workflow cannot re-dispatch itself to continue: GitHub deliberately
+    # ignores workflow_dispatch made with the built-in GITHUB_TOKEN, and adding a
+    # second personal token as a repo secret to work around that is not worth it
+    # when one pass already covers far more restaurants than a city holds. If a
+    # run ever does stop with work left, nothing is lost — the queue lives in the
+    # database, so re-dispatching resumes exactly where it stopped.)
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 22, not 20: @supabase/realtime-js needs a native WebSocket, which
+          # Node 20 lacks, and it throws at client construction — before any work
+          # happens. This job cannot do anything without the database, so on 20
+          # it would die at $0 spent (as pipeline.yml's run #46 did).
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Without a working reader, every JS-rendered restaurant looks like it has
+      # no menu — and a batch of false "no menu" verdicts is worse than no run at
+      # all, because `not_listed` is sticky. Make the configuration impossible to
+      # miss. r.jina.ai answers keyless requests with a Cloudflare challenge
+      # (verified 2026-08-05), so the keyless tier cannot be relied on.
+      - name: Reader and credential check
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          [ -n "$JINA_API_KEY" ] && echo "Jina: keyed (${#JINA_API_KEY} chars) — tried first" || echo "Jina: NO KEY — skipped entirely (keyless is a guaranteed Cloudflare 403)"
+          [ -n "$FIRECRAWL_API_KEY" ] && echo "Firecrawl: ENABLED (${#FIRECRAWL_API_KEY} chars)" || echo "Firecrawl: DISABLED — no FIRECRAWL_API_KEY repo secret"
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::No Supabase credentials. This job reads its queue from the database and writes menus back to it — it cannot run."
+            exit 1
+          fi
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::error::No ANTHROPIC_API_KEY. Every restaurant would fail at the classification step."
+            exit 1
+          fi
+          if [ -z "$JINA_API_KEY" ] && [ -z "$FIRECRAWL_API_KEY" ]; then
+            echo "::warning::No reader is configured. JS-rendered sites cannot be read, so restaurants will be recorded as having no menu for reasons unrelated to the restaurant."
+          fi
+
+      # Inputs go through `env`, never interpolated into the shell. On a public
+      # repo an inline ${{ inputs.city }} inside a run: block is a script
+      # injection hole; the script itself also lowercases and validates the slug.
+      - name: Analyse the queue
+        id: analyse
+        shell: bash
+        env:
+          CITY: ${{ inputs.city }}
+          MODE: ${{ inputs.mode }}
+          LIMIT: ${{ inputs.limit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DAILY_SPEND_CAP_USD: ${{ secrets.DAILY_SPEND_CAP_USD }}
+        run: |
+          set -o pipefail
+          args=(--city="$CITY" --mode="$MODE" --budget-minutes=330)
+          [ -n "$LIMIT" ] && args+=(--limit="$LIMIT")
+          # --yes is what makes it spend; a dry run deliberately omits it.
+          [ "$DRY_RUN" = "true" ] || args+=(--yes)
+          npx tsx scripts/analyze-guide-queue.ts "${args[@]}" 2>&1 | tee analyze-log.txt
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          CITY: ${{ inputs.city }}
+          MODE: ${{ inputs.mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REMAINING: ${{ steps.analyse.outputs.remaining }}
+        run: |
+          {
+            echo "## Analyse guide queue — $CITY ($MODE)"
+            [ "$DRY_RUN" = "true" ] && echo "_Dry run — no AI calls, no spend._"
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' analyze-log.txt 2>/dev/null || tail -30 analyze-log.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$REMAINING" ] && [ "$REMAINING" != "0" ]; then
+            echo "::warning::$REMAINING restaurant(s) in the $CITY guide are still waiting. Re-run this workflow to continue — the queue is in the database, so it resumes where it stopped."
+          fi
+
+      - name: Upload full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze-queue-${{ inputs.city }}-${{ github.run_number }}
+          path: analyze-log.txt
+          retention-days: 30
+
+      # A failed run means the batch stopped for a REASON the script identified
+      # as broken — a run of consecutive failures, the daily spend cap, or missing
+      # credentials — not just an individual restaurant without a menu. That
+      # needs to be visible after the tab is closed, which is the whole point.
+      - name: File an issue on failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CITY: ${{ inputs.city }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "The server-side guide batch for **$CITY** (mode \`$MODE\`) stopped early on $(date -u +%F)."
+            echo
+            echo "A run stops itself when something is broken rather than grinding through a whole city at full price — most often the page reader being down or rate-limited, a missing key, or the daily spend cap."
+            echo
+            echo '```'
+            sed -n '/=* SUMMARY =*/,$p' analyze-log.txt 2>/dev/null | head -40 || tail -30 analyze-log.txt
+            echo '```'
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > issue-body.md
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'Guide batch stopped early in:title' --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Guide batch stopped early" --body-file issue-body.md
+          fi
