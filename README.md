@@ -124,6 +124,7 @@ lib/
   url-guard.ts     SSRF protection for every outbound fetch
   reanalyse.ts     the one analysis path for admin re-runs and batches
   guide-queue.ts   what a guide still needs analysed (pure, no DB)
+  guide-batch.ts   one batch pass; every paid dependency injected
   spend-guard.ts   global daily AI spend ceiling
   rate-limit.ts    per-IP budgets
   dish-role.ts     what counts as a dish a vegetarian would order

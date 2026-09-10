@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 const WORKFLOW = readFileSync('.github/workflows/analyze-queue.yml', 'utf8');
 const WORKER = readFileSync('scripts/analyze-guide-queue.ts', 'utf8');
 const DISPATCH = readFileSync('app/api/admin/guides/[slug]/analyze/route.ts', 'utf8');
+const BATCH = readFileSync('lib/guide-batch.ts', 'utf8');
 
 /** The shell body of every `run: |` block, cut at the first line that dedents
  *  out of it — so a following step's comments are never mistaken for script. */
@@ -57,27 +58,45 @@ describe('nothing spends money on a timer', () => {
 
   it('the worker will not spend without --yes', () => {
     expect(WORKER).toContain("const APPLY = process.argv.includes('--yes')");
-    // The dry path must return before the analysis loop, not merely log louder.
-    expect(WORKER.indexOf('if (!APPLY)')).toBeLessThan(WORKER.indexOf('reanalyseRestaurant(row.id)'));
+    // The dry path must return before the loop, not merely log louder.
+    expect(WORKER.indexOf('if (!APPLY)')).toBeLessThan(WORKER.indexOf('runQueuePass('));
   });
 
-  it('the worker checks the daily spend cap, which no script used to do', () => {
-    expect(WORKER).toContain('checkDailySpend()');
-    expect(WORKER.indexOf('checkDailySpend()')).toBeLessThan(WORKER.indexOf('reanalyseRestaurant(row.id)'));
+  // The behaviour of these guards is tested for real in tests/guide-batch.test.ts,
+  // with the analysis mocked. What text alone can still check is that the worker
+  // WIRES them in — a loop that quietly stopped being handed the spend check
+  // would pass every behavioural test in that file and still bypass the cap.
+  it('hands the real spend cap to the loop', () => {
+    expect(WORKER).toContain('checkSpend: checkDailySpend');
+    expect(BATCH).toContain('deps.checkSpend()');
+    // Inside the loop, per restaurant — not once before it.
+    expect(BATCH.indexOf('deps.checkSpend()')).toBeGreaterThan(BATCH.indexOf('for (const row of queue)'));
   });
 
-  it('the worker gives up on a run of failures instead of grinding through a city', () => {
+  it('hands the real analysis to the loop', () => {
+    expect(WORKER).toContain('analyse: reanalyseRestaurant');
+  });
+
+  it('gives up on a run of failures instead of grinding through a city', () => {
     // Every failure is a full-price retry ladder. A dead reader or an expired
     // key fails all 40 at ~10-20 billed calls each, and cannot succeed.
-    expect(WORKER).toContain('MAX_CONSECUTIVE_FAILURES');
-    expect(WORKER).toMatch(/consecutiveFailures >= MAX_CONSECUTIVE_FAILURES/);
+    expect(BATCH).toContain('MAX_CONSECUTIVE_FAILURES');
+    expect(BATCH).toMatch(/consecutiveFailures >= maxConsecutive/);
   });
 
   it('keeps the delay that stops a batch tripping the page reader', () => {
     // Without it a run of fast failures fires dozens of reader calls a minute
     // and gets rate-limited — which returned an empty menu for a whole
     // Amsterdam batch and looked like the restaurants had no menus.
-    expect(WORKER).toContain('INTER_RESTAURANT_DELAY_MS');
+    expect(BATCH).toContain('INTER_RESTAURANT_DELAY_MS');
+    expect(BATCH).toContain('deps.sleep(delayMs)');
+  });
+
+  it('exits non-zero on a breakdown by asking the loop, not by reading its message', () => {
+    // Sniffing the stop-reason string for "time budget" would silently start
+    // filing issues (or stop filing them) the day that wording changed.
+    expect(WORKER).toContain('if (report.broken)');
+    expect(WORKER).not.toMatch(/stopReason.*startsWith/);
   });
 });
 

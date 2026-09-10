@@ -402,6 +402,20 @@ and `not_listed` (genuinely no menu — sticky, and published to diners). At bat
 scale that misreports real restaurants. Spend still flows through
 `extractAndMerge` → `callClaude()`, so `ai_usage_log` is unaffected.
 
+### The loop is testable without spending
+
+`lib/guide-batch.ts` holds the pass — the loop, the spend check, the delay, the
+abort — with `analyse`, `checkSpend`, `sleep` and `now` **injected**. It is the
+only genuinely new logic here (the analysis itself is a straight move), and it
+is where the expensive mistakes are, so it is unit-tested with the analysis
+mocked (`tests/guide-batch.test.ts`, free). `scripts/analyze-guide-queue.ts` is
+a thin CLI over it. **Don't put batch logic back in the script** — a driver that
+can only be checked by spending money is one that doesn't get checked.
+
+`report.broken` is what decides the exit code (and so whether the workflow files
+an issue): running out of the time budget is an ordinary boundary, every
+restaurant failing is not. Never infer that by matching the stop-reason string.
+
 ### Cost guards the worker adds
 
 - **`--yes`-gated.** A dry run prints the plan and costs nothing.
