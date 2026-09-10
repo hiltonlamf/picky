@@ -1691,33 +1691,48 @@ export async function saveCityGuideVote(input: {
  * Membership comes from `featured_restaurants` (admin-curated), NOT
  * `restaurants.city` — a restaurant found by search can sit in a city without
  * anyone having put it in that city's guide.
+ *
+ * Two queries rather than one PostgREST embed. An embed would be tidier, but
+ * this repo's only proven embed goes parent-to-child; a child-to-parent join
+ * here could only be validated by running it against the live database, and
+ * the batch worker is not the place to discover a query syntax error. Two
+ * round trips is O(1) in the number of restaurants either way.
  */
 export async function listGuideQueue(city: string): Promise<QueueRow[]> {
-  const { data, error } = await db()
+  const { data: memberships, error: membershipError } = await db()
     .from('featured_restaurants')
-    .select('display_order, restaurants!inner(id, name, url, status, updated_at)')
+    .select('restaurant_id, display_order')
     .eq('city', city)
     .order('display_order');
 
-  if (error) throw new Error(`Failed to read the ${city} guide queue: ${error.message}`);
+  if (membershipError) {
+    throw new Error(`Failed to read the ${city} guide queue: ${membershipError.message}`);
+  }
 
-  return ((data ?? []) as DbRow[]).flatMap((row) => {
-    // A one-to-one embed comes back as an object, but PostgREST types it loosely
-    // enough that an array is possible; normalise rather than trust the shape.
-    const embedded = row.restaurants;
-    const r = (Array.isArray(embedded) ? embedded[0] : embedded) as DbRow | undefined;
-    if (!r?.id) return [];
-    return [
-      {
-        id: r.id as string,
-        name: (r.name as string | null) ?? null,
-        url: r.url as string,
-        status: r.status as string,
-        updatedAt: (r.updated_at as string | null) ?? null,
-        displayOrder: (row.display_order as number) ?? 0,
-      },
-    ];
-  });
+  const rows = (memberships ?? []) as Array<{ restaurant_id: string; display_order: number | null }>;
+  if (!rows.length) return [];
+
+  const orderById = new Map(rows.map((r) => [r.restaurant_id, r.display_order ?? 0]));
+
+  const { data: restaurants, error: restaurantError } = await db()
+    .from('restaurants')
+    .select('id, name, url, status, updated_at')
+    .in('id', Array.from(orderById.keys()));
+
+  if (restaurantError) {
+    throw new Error(`Failed to read the ${city} guide queue: ${restaurantError.message}`);
+  }
+
+  return ((restaurants ?? []) as DbRow[])
+    .map((r) => ({
+      id: r.id as string,
+      name: (r.name as string | null) ?? null,
+      url: r.url as string,
+      status: r.status as string,
+      updatedAt: (r.updated_at as string | null) ?? null,
+      displayOrder: orderById.get(r.id as string) ?? 0,
+    }))
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id));
 }
 
 export async function getFeaturedRestaurants(
