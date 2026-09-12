@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import CityGuideList from '@/components/CityGuideList';
 import GuideIndexTracker from '@/components/GuideIndexTracker';
 import VoteCityLink from '@/components/VoteCityLink';
-import { getPublishedCityGuides } from '@/lib/db';
+import { listCityGuideLinks } from '@/lib/db';
 import { isAdminViewer } from '@/lib/admin-viewer';
 import {
   GUIDE_HUMAN_LINE,
@@ -10,7 +10,7 @@ import {
   GUIDE_INDEX_TITLE,
   guideIndexMetaDescription,
 } from '@/lib/site-copy';
-import type { CityGuideSummary } from '@/types';
+import type { CityGuide } from '@/types';
 
 // Reads the DB and the admin cookie on every request, so it can never be
 // statically prerendered — CI builds without database credentials, and a
@@ -21,7 +21,7 @@ export const fetchCache = 'force-no-store';
 
 export async function generateMetadata(): Promise<Metadata> {
   // Public guides only — a draft city must not leak into a meta description.
-  const guides = await getPublishedCityGuides().catch(() => [] as CityGuideSummary[]);
+  const guides = await listCityGuideLinks().catch(() => [] as CityGuide[]);
   return {
     title: GUIDE_INDEX_TITLE,
     description: guideIndexMetaDescription(guides.map((g) => g.displayName)),
@@ -34,9 +34,9 @@ export default async function GuidesIndexPage() {
   // before it goes live. isAdminViewer fails closed.
   const isAdmin = await isAdminViewer();
 
-  let guides: CityGuideSummary[] = [];
+  let guides: CityGuide[] = [];
   try {
-    guides = await getPublishedCityGuides({ includeDrafts: isAdmin });
+    guides = await listCityGuideLinks({ includeDrafts: isAdmin });
   } catch {
     // DB unavailable — fall through to the empty state rather than a 500.
   }

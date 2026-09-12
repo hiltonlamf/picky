@@ -19,7 +19,6 @@ import type {
   RestaurantStatus,
   NoMenuReason,
   CityGuide,
-  CityGuideSummary,
   LocationConfidence,
   RestaurantLocationSource,
   RestaurantLocation,
@@ -452,13 +451,6 @@ export async function getMenuCandidates(restaurantId: string): Promise<Discovery
 /**
  * Turns raw `menu_sections` + `dishes` rows into the section list every menu
  * calculation reads.
- *
- * Extracted so `fetchRestaurantWithDishes` and the lean guide-count path in
- * `getPublishedCityGuides` cannot drift apart. They both feed the SAME
- * `isPubliclyVisible` predicate, so if one of them assembled sections even
- * slightly differently, `/guides` would advertise a restaurant count the guide
- * page then contradicts — the "two surfaces, two numbers" failure this codebase
- * has already been bitten by once.
  */
 function assembleSections(rawSections: DbRow[], rawDishes: DbRow[]): MenuSection[] {
   const sectionList: MenuSection[] = rawSections.map((s) => ({
@@ -1845,122 +1837,6 @@ export async function listCityGuideLinks(options?: { includeDrafts?: boolean }):
   if (!options?.includeDrafts) query = query.eq('status', 'published');
   const { data } = await query;
   return ((data ?? []) as DbRow[]).map(mapCityGuide);
-}
-
-/**
- * Guides with the number of restaurants each one actually shows — for /guides.
- *
- * Runs in a CONSTANT five queries no matter how many cities exist. The obvious
- * implementation (call getFeaturedRestaurants per guide) costs roughly four
- * round trips per restaurant, which is fine for one city and unusable for
- * fifty.
- *
- * The count has to equal what the guide page renders, exactly — `/guides`
- * promising "18 restaurants" and the page then listing 15 is the same class of
- * bug as a restaurant showing two different veggie counts. So this reuses the
- * real `isPubliclyVisible` predicate rather than approximating it in SQL, which
- * is not possible anyway: `computeReviewFlags` is string heuristics.
- *
- * `isPubliclyVisible` reads only `sections`, `status` and `guideApprovedAt`, so
- * that is all we assemble — no locations, no neighbourhoods, no menu candidates.
- *
- * Ceiling: the dish payload grows with the number of restaurants, so this is
- * comfortable to roughly 40 guides / ~800 restaurants. Past that, the answer is
- * a denormalised live count on `city_guides` maintained on publish/hide/review
- * — deliberately NOT built yet, because a count column that silently drifts is
- * worse than a query that is merely slow.
- */
-export async function getPublishedCityGuides(
-  options?: { includeDrafts?: boolean }
-): Promise<CityGuideSummary[]> {
-  const guides = await listCityGuideLinks(options);
-  if (!guides.length) return [];
-
-  const slugs = guides.map((g) => g.slug);
-  const { data: featuredRows } = await db()
-    .from('featured_restaurants')
-    .select('city, restaurant_id, hidden')
-    .in('city', slugs);
-
-  // Manually-hidden rows never reach the public guide, so they must not be
-  // counted here either — same filter as getFeaturedRestaurants.
-  const featured = ((featuredRows ?? []) as DbRow[]).filter((r) => !r.hidden);
-  const restaurantIds = Array.from(new Set(featured.map((r) => r.restaurant_id as string)));
-  if (!restaurantIds.length) return guides.map((g) => ({ ...g, liveCount: 0 }));
-
-  const [{ data: restaurantRows }, { data: sectionRows }, { data: dishRows }] = await Promise.all([
-    db().from('restaurants').select('id, status, guide_approved_at').in('id', restaurantIds),
-    db().from('menu_sections').select('*').in('restaurant_id', restaurantIds).order('display_order'),
-    // Soft-deleted dishes are excluded everywhere users see, so they must not
-    // count towards MIN_GUIDE_DISHES either.
-    db().from('dishes').select('*').in('restaurant_id', restaurantIds).is('deleted_at', null).order('created_at'),
-  ]);
-
-  const liveByCity = countLiveRestaurantsByCity(
-    featured,
-    (restaurantRows ?? []) as DbRow[],
-    (sectionRows ?? []) as DbRow[],
-    (dishRows ?? []) as DbRow[]
-  );
-
-  // Strongest guide first: the city with the most to show leads. Alphabetical
-  // tie-break keeps the order deterministic between requests.
-  return guides
-    .map((g) => ({ ...g, liveCount: liveByCity.get(g.slug) ?? 0 }))
-    .sort((a, b) => b.liveCount - a.liveCount || a.displayName.localeCompare(b.displayName));
-}
-
-/**
- * The pure heart of the guide counts: raw rows in, live-restaurant count per
- * city out.
- *
- * Separated from the queries so the invariant that actually matters can be
- * tested without a database — that this agrees, restaurant for restaurant, with
- * the `isPubliclyVisible` filter the guide page applies. If it ever disagrees,
- * /guides advertises a number the guide page then contradicts.
- *
- * `featured` must already have hidden rows removed.
- */
-export function countLiveRestaurantsByCity(
-  featured: DbRow[],
-  restaurantRows: DbRow[],
-  sectionRows: DbRow[],
-  dishRows: DbRow[]
-): Map<string, number> {
-  const sectionsByRestaurant = groupByRestaurantId(sectionRows);
-  const dishesByRestaurant = groupByRestaurantId(dishRows);
-
-  const visibleById = new Map<string, boolean>();
-  for (const row of restaurantRows) {
-    const id = row.id as string;
-    visibleById.set(
-      id,
-      isPubliclyVisible({
-        status: row.status as Restaurant['status'],
-        guideApprovedAt: (row.guide_approved_at as string | null) ?? null,
-        sections: assembleSections(sectionsByRestaurant.get(id) ?? [], dishesByRestaurant.get(id) ?? []),
-      })
-    );
-  }
-
-  const liveByCity = new Map<string, number>();
-  for (const row of featured) {
-    if (!visibleById.get(row.restaurant_id as string)) continue;
-    const city = row.city as string;
-    liveByCity.set(city, (liveByCity.get(city) ?? 0) + 1);
-  }
-  return liveByCity;
-}
-
-function groupByRestaurantId(rows: DbRow[]): Map<string, DbRow[]> {
-  const byId = new Map<string, DbRow[]>();
-  for (const row of rows) {
-    const id = row.restaurant_id as string;
-    const bucket = byId.get(id);
-    if (bucket) bucket.push(row);
-    else byId.set(id, [row]);
-  }
-  return byId;
 }
 
 /** Published guide slugs only — a light query for the sitemap, which does not

@@ -37,9 +37,9 @@ function render(props: Parameters<typeof CityGuideList>[0]): string {
 }
 
 const THREE_IRISH_CITIES: CityGuideListItem[] = [
-  guide('Dublin', 'Ireland', { liveCount: 18 }),
-  guide('Cork', 'Ireland', { liveCount: 7 }),
-  guide('Limerick', 'Ireland', { liveCount: 1 }),
+  guide('Dublin', 'Ireland', { }),
+  guide('Cork', 'Ireland', { }),
+  guide('Limerick', 'Ireland', { }),
 ];
 
 describe('CityGuideList — hub', () => {
@@ -58,18 +58,14 @@ describe('CityGuideList — hub', () => {
     }
   });
 
-  it('shows the restaurant count, singular where it should be', () => {
-    expect(html).toContain('18 restaurants');
-    expect(html).toContain('7 restaurants');
-    // "1 restaurants" on a brand-new guide reads as unfinished software.
-    expect(html).toContain('1 restaurant<');
-    expect(html).not.toContain('1 restaurants');
-  });
-
-  it('says so plainly when a published guide has nothing live yet', () => {
-    const empty = render({ guides: [guide('Galway', 'Ireland', { liveCount: 0 })], variant: 'hub' });
-    expect(empty).toContain('Nothing live yet');
-    expect(empty).not.toContain('0 restaurants');
+  it('shows no restaurant count on a card, on purpose', () => {
+    // The count was removed (founder, 2026-09-12): it is not how anyone picks a
+    // city, and the one we showed was wrong — the query behind it was silently
+    // truncated by PostgREST's 1000-row cap, so Cork read "1 restaurant" and
+    // Limerick "Nothing live yet" while both had plenty live. A number a
+    // visitor can disprove by clicking through is worse than no number.
+    expect(html).not.toMatch(/\d+ restaurants?/);
+    expect(html).not.toContain('Nothing live yet');
   });
 
   it('shows no filter box for a handful of cities', () => {
@@ -79,7 +75,7 @@ describe('CityGuideList — hub', () => {
 
   it('grows a filter box once the list is genuinely long', () => {
     const many = Array.from({ length: GUIDE_FILTER_THRESHOLD + 1 }, (_, i) =>
-      guide(`City ${i}`, 'Ireland', { liveCount: 3 })
+      guide(`City ${i}`, 'Ireland', { })
     );
     const longHtml = render({ guides: many, variant: 'hub' });
     expect(longHtml).toContain('type="search"');
@@ -87,7 +83,7 @@ describe('CityGuideList — hub', () => {
   });
 
   it('hides draft guides behind the admin flag', () => {
-    const withDraft = [...THREE_IRISH_CITIES, guide('Galway', 'Ireland', { status: 'draft', liveCount: 2 })];
+    const withDraft = [...THREE_IRISH_CITIES, guide('Galway', 'Ireland', { status: 'draft' })];
     expect(render({ guides: withDraft, variant: 'hub' })).not.toContain('only you can see');
     expect(render({ guides: withDraft, variant: 'hub', showDraftBadge: true })).toContain(
       'only you can see'

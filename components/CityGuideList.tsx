@@ -12,11 +12,7 @@ import {
 import { CITY_SWITCHER, GUIDE_INDEX } from '@/lib/site-copy';
 import type { CityGuide } from '@/types';
 
-export interface CityGuideListItem extends CityGuide {
-  /** Restaurants the guide page will actually show. Omitted where a count
-   *  would be noise (the switcher) — never guessed. */
-  liveCount?: number;
-}
+export type CityGuideListItem = CityGuide;
 
 /**
  * The one list of city guides, rendered in two places: the /guides hub and the
@@ -159,9 +155,6 @@ function HubTile({
               {guide.country}
             </span>
           )}
-          <span className="mt-3 text-sm font-semibold text-picky-700">
-            {guide.liveCount ? GUIDE_INDEX.restaurantCount(guide.liveCount) : GUIDE_INDEX.noneLive}
-          </span>
           {isDraft && showDraftBadge && (
             <span className="mt-2 self-start rounded-full bg-sun-50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-sun-800">
               {GUIDE_INDEX.draftBadge}

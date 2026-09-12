@@ -44,11 +44,6 @@ export const GUIDE_INDEX = {
   filterLabel: 'Find a city',
   filterPlaceholder: 'Start typing a city or country…',
   empty: 'No city matches that. Try a country, or vote for the city you want next.',
-  /** Restaurant count on a city tile. Singular matters — "1 restaurants" on a
-   *  brand-new guide is exactly the sort of detail that reads as unfinished. */
-  restaurantCount: (n: number) => `${n} restaurant${n === 1 ? '' : 's'}`,
-  /** A published guide whose restaurants are all still being reviewed. */
-  noneLive: 'Nothing live yet',
   /** Only ever rendered for a signed-in admin. */
   draftBadge: 'Draft — only you can see this',
   vote: {

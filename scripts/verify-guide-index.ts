@@ -1,28 +1,25 @@
-// Verify the city-guide index against live data, and explain any shortfall.
+// Explain what each city guide is showing, and why.
 //
 // READ-ONLY and FREE: no AI calls, no writes, no re-scraping — it re-reads what
 // is already in the database. Run it as often as you like.
 //
 //   npx tsx scripts/verify-guide-index.ts
 //
-// It answers two different questions.
+// It answers "why is this guide only showing N restaurants?" — a guide with 40
+// curated and 25 showing is either a content gap (only 25 were ever worth
+// publishing) or a pipeline bug (15 are being held back). Those look identical
+// from the outside and want completely different responses, so it prints the
+// total, the live count, and every held-back restaurant with its reason. A pile
+// of restaurants sharing one reason is the bug signal.
 //
-// **"Is this number right?"** — it cross-checks, guide by guide, that the count
-// on /guides equals what the guide page itself renders. Those are two code
-// paths reaching the same figure: /guides batches the bare minimum in five
-// queries, while the page loads whole restaurants and filters them. If they
-// ever disagree, /guides advertises a number the page then contradicts — the
-// same class of bug as a restaurant showing two different veggie counts. Unit
-// tests cover the logic; only this can check the QUERIES. Exits non-zero.
-//
-// **"Why is the number that size?"** — a guide showing 25 of 40 is either a
-// content gap (only 25 were ever curated in) or a pipeline bug (15 are being
-// held back). Those look identical from the outside and want completely
-// different responses, so it prints the total, the live count, and every
-// held-back restaurant with its reason. A pile of restaurants sharing one
-// reason is the bug signal.
+// It used to ALSO cross-check the count on /guides against what each page
+// renders. That check is gone because the number is gone: /guides no longer
+// advertises a restaurant count, so there is no longer a second figure to
+// disagree with the page. (The check was right to exist — the count it guarded
+// was silently truncated by PostgREST's 1000-row cap, which is exactly what it
+// would have caught had it ever been run against live data.)
 import './_preload-env';
-import { getPublishedCityGuides, getFeaturedRestaurants } from '@/lib/db';
+import { listCityGuideLinks, getFeaturedRestaurants } from '@/lib/db';
 import { heldBackReason, isPubliclyVisible } from '@/lib/review-flags';
 import { isReservedGuideSlug } from '@/lib/city-guides';
 import type { Restaurant } from '@/types';
@@ -45,7 +42,7 @@ function byReason(restaurants: Restaurant[]): Array<{ reason: string; names: str
 async function main() {
   // includeDrafts so unpublished guides are checked too — a draft you are about
   // to publish is exactly the one worth verifying.
-  const guides = await getPublishedCityGuides({ includeDrafts: true });
+  const guides = await listCityGuideLinks({ includeDrafts: true });
 
   if (!guides.length) {
     console.log('No city guides found. Nothing to verify.');
@@ -53,12 +50,16 @@ async function main() {
   }
 
   console.log(`\n${guides.length} guide${guides.length === 1 ? '' : 's'}\n`);
-  console.log('  status   slug             total   live   held   page   country');
-  console.log('  ' + '-'.repeat(66));
+  console.log('  status   slug             total   live   held   country');
+  console.log('  ' + '-'.repeat(60));
 
-  const mismatches: string[] = [];
   const reserved: string[] = [];
   const shortfalls: Array<{ slug: string; groups: ReturnType<typeof byReason> }> = [];
+  // Counted here rather than read off the guide row: the number the guide page
+  // renders is only knowable by running the page's own filter over its own
+  // restaurants, which is exactly what this loop does.
+  const liveBySlug = new Map<string, number>();
+  const emptyPublished: string[] = [];
 
   for (const guide of guides) {
     // includeHidden so `total` is everything curated into the guide, which is
@@ -69,23 +70,15 @@ async function main() {
     const live = all.filter((r) => !r.guideHidden && isPubliclyVisible(r));
     const held = all.filter((r) => r.guideHidden || !isPubliclyVisible(r));
 
-    // What the public page renders, by the same path the page uses.
-    const pageCount = (await getFeaturedRestaurants(guide.slug).catch((): Restaurant[] => []))
-      .filter(isPubliclyVisible).length;
-    const agrees = pageCount === guide.liveCount && pageCount === live.length;
-    if (!agrees) {
-      mismatches.push(
-        `${guide.slug}: /guides says ${guide.liveCount}, the page shows ${pageCount}, this script counts ${live.length}`
-      );
-    }
+    liveBySlug.set(guide.slug, live.length);
+    if (guide.status === 'published' && live.length === 0) emptyPublished.push(guide.slug);
     if (isReservedGuideSlug(guide.slug)) reserved.push(guide.slug);
     if (held.length) shortfalls.push({ slug: guide.slug, groups: byReason(held) });
 
     const status = guide.status === 'published' ? 'live ' : 'DRAFT';
     console.log(
       `  ${status}    ${guide.slug.padEnd(15)} ${String(all.length).padStart(5)}  ` +
-        `${String(live.length).padStart(5)}  ${String(held.length).padStart(5)}  ` +
-        `${String(pageCount).padStart(5)}${agrees ? '  ' : ' ✗'} ${guide.country ?? '—'}`
+        `${String(live.length).padStart(5)}  ${String(held.length).padStart(5)}   ${guide.country ?? '—'}`
     );
   }
 
@@ -107,19 +100,12 @@ async function main() {
     );
   }
 
-  if (mismatches.length) {
-    console.error(`✗ ${mismatches.length} count mismatch(es) — /guides and the guide pages disagree:`);
-    for (const line of mismatches) console.error(`    ${line}`);
-  } else {
-    console.log(`✓ 0 mismatches — every guide's index count equals what its page renders.`);
-  }
-
-  const empty = guides.filter((g) => g.status === 'published' && g.liveCount === 0);
-  if (empty.length) {
+  if (emptyPublished.length) {
     // Not a failure, but worth seeing: a published guide with nothing live is a
-    // page a visitor can reach and find empty.
+    // page a visitor can reach and find empty. Nothing on the public site says
+    // so any more, so this is the place it surfaces.
     console.warn(
-      `! ${empty.length} published guide(s) have no live restaurants: ${empty.map((g) => g.slug).join(', ')}`
+      `! ${emptyPublished.length} published guide(s) have no live restaurants: ${emptyPublished.join(', ')}`
     );
   }
 
@@ -127,8 +113,7 @@ async function main() {
   // not a content gap — say so rather than leaving it to be read off the table.
   for (const { slug, groups } of shortfalls) {
     const heldCount = groups.reduce((n, g) => n + g.names.length, 0);
-    const guide = guides.find((g) => g.slug === slug);
-    const total = heldCount + (guide?.liveCount ?? 0);
+    const total = heldCount + (liveBySlug.get(slug) ?? 0);
     if (total >= 5 && heldCount > total / 2) {
       console.warn(
         `! ${slug}: ${heldCount} of ${total} curated restaurants are not showing — ` +
@@ -137,7 +122,7 @@ async function main() {
     }
   }
 
-  if (mismatches.length || reserved.length) process.exit(1);
+  if (reserved.length) process.exit(1);
 }
 
 main().catch((err) => {

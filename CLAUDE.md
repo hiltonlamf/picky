@@ -85,12 +85,24 @@ his **experienced technical co-founder**. That means:
      come from merges, and merges run the 7-case smoke set. Run the full 20 on
      demand (`workflow_dispatch`, blank filter) when a sweep is actually
      wanted. Do not re-add a schedule without asking.
-   - **`ai_usage_log` queries are capped at 1000 rows.** PostgREST silently
-     truncates and a large `limit=` does not override it, so a naive
-     aggregate under-reports with no error. Ask for the exact count first
-     (`Prefer: count=exact` + `Range: 0-0`, read `content-range`), then
-     paginate with `offset`. Caught 2026-08-08 when a fortnight aggregate
-     returned 1000 of 1407 rows and understated total spend.
+   - **EVERY Supabase query is capped at 1000 rows, not just spend ones.**
+     PostgREST silently truncates and a large `limit=` does not override it,
+     so a naive aggregate under-reports with no error at all. Ask for the
+     exact count first (`Prefer: count=exact` + `Range: 0-0`, read
+     `content-range`), then paginate with `offset` — or use `.range()` in a
+     loop, as `aiSpendSince` does. Caught twice now:
+     - 2026-08-08, `ai_usage_log`: a fortnight aggregate returned 1000 of
+       1407 rows and understated total spend.
+     - 2026-09-12, `dishes`: `/guides` counted live restaurants from one
+       unbounded `select('*')` over every guide's dishes. Past ~1000 dishes
+       the rest vanished, so restaurants looked like they had zero dishes,
+       failed the ≥7-dish visibility test, and were counted as not live —
+       Cork read "1 restaurant" and Limerick "Nothing live yet" while both
+       had plenty. The fix was to delete the count, not paginate it.
+     **The tell is an aggregate over a child table** (dishes, sections, usage
+     rows) for MANY parents at once. A per-parent query is safe; one query
+     spanning every parent is the one that silently truncates. If you cannot
+     bound the row count by construction, don't write the query.
    - **Cost analysis must be END-TO-END: failures and retries included.**
      Learned the hard way (2026-07-03): a run "reported $1.27" while the
      Console balance dropped $3.51 — the difference was failed retry

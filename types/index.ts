@@ -172,13 +172,6 @@ export interface CityGuide {
   createdAt: string;
 }
 
-/** A city guide plus the number of restaurants its page actually shows.
- *  `liveCount` is computed with the same `isPubliclyVisible` predicate the guide
- *  page filters on, so the two surfaces can never disagree. */
-export interface CityGuideSummary extends CityGuide {
-  liveCount: number;
-}
-
 export type MenuCandidateType = 'text' | 'pdf' | 'image' | 'subpage';
 
 export interface MenuCandidate {
