@@ -39,6 +39,7 @@ cp .env.local.example .env.local
 | `DAILY_SPEND_CAP_USD` | optional | Global daily AI ceiling. Defaults to 25 |
 | `RATE_LIMIT_MAX_PER_HOUR` | optional | New-restaurant analyses per IP per hour. Defaults to 15 |
 | `NEXT_PUBLIC_POSTHOG_KEY` / `NEXT_PUBLIC_SENTRY_DSN` | optional | Analytics and error tracking |
+| `GITHUB_WORKFLOW_TOKEN` / `GITHUB_REPO` | optional | Let `/admin/guides` start the server-side guide batch. A fine-grained token scoped to this repo with **Actions: read and write**, plus `owner/repo`. Without them the batch is still runnable from the Actions tab |
 
 > If you enable Places, restrict the key to that API and set a Google Cloud
 > budget alert — it is billed per request.
@@ -121,6 +122,9 @@ lib/
   menu-extract     extraction retry ladder + multi-menu merge
   ai.ts            Claude API: tiered models, single spend choke point
   url-guard.ts     SSRF protection for every outbound fetch
+  reanalyse.ts     the one analysis path for admin re-runs and batches
+  guide-queue.ts   what a guide still needs analysed (pure, no DB)
+  guide-batch.ts   one batch pass; every paid dependency injected
   spend-guard.ts   global daily AI spend ceiling
   rate-limit.ts    per-IP budgets
   dish-role.ts     what counts as a dish a vegetarian would order
@@ -129,9 +133,25 @@ scripts/         seeding, QA, spend backup, safe wipe
 tests/           unit tests over recorded fixtures with the AI mocked
 ```
 
-**Adding a city:** create the guide in `/admin/guides` and seed restaurants
-against its slug. `app/[city]/page.tsx` renders every city — never add a
-per-city route, because a static route silently shadows the dynamic one.
+**Adding a city:** create the guide in `/admin/guides` and paste in restaurant
+websites. `app/[city]/page.tsx` renders every city — never add a per-city route,
+because a static route silently shadows the dynamic one.
+
+The analysis runs **on a GitHub Actions runner**, not in the browser
+([`analyze-queue.yml`](.github/workflows/analyze-queue.yml) →
+[`scripts/analyze-guide-queue.ts`](scripts/analyze-guide-queue.ts)), because 40
+restaurants take ~30 minutes and Vercel's Hobby plan kills any function at 60
+seconds. It used to run in the admin's browser tab, so closing the tab stranded
+every restaurant it hadn't reached. Now the tab only reports; the queue lives in
+the database (`restaurants.status`), so a run is resumable by definition and a
+restaurant abandoned mid-analysis is reclaimed on the next pass. Start it from
+the guide workspace, or by hand:
+
+```bash
+npx tsx scripts/analyze-guide-queue.ts --city=cork          # dry run, $0
+npx tsx scripts/analyze-guide-queue.ts --city=cork --yes    # ~$0.05/restaurant
+npx tsx scripts/verify-guide-index.ts                       # read-only, $0
+```
 
 **Adding a dietary filter:** add an entry to `DIETARY_FILTERS` in
 [`lib/dietary-config.ts`](lib/dietary-config.ts). No other changes needed.

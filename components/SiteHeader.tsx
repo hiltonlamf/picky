@@ -42,10 +42,10 @@ export default function SiteHeader() {
             How
           </Link>
           <Link
-            href="/dublin"
+            href="/guides"
             className="text-xs sm:text-sm px-1.5 min-[370px]:px-2.5 sm:px-4 py-2 rounded-full text-paper/85 hover:bg-azalea-500 hover:text-white transition-colors"
           >
-            Dublin Guide
+            City guides
           </Link>
         </nav>
       </div>

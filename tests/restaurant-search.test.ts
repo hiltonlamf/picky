@@ -7,7 +7,6 @@ import {
   rankPickyCandidates,
 } from '@/lib/restaurant-search-utils';
 import {
-  DUBLIN_SEARCH_RADIUS_METRES,
   GooglePlacesError,
   resolveGoogleRestaurant,
   searchGoogleRestaurants,
@@ -90,7 +89,11 @@ describe('Google Places adapter', () => {
     const [, options] = fetchMock.mock.calls[0];
     const body = JSON.parse(options.body as string);
     expect(body.includedRegionCodes).toEqual(['ie']);
-    expect(body.locationRestriction.circle.radius).toBe(DUBLIN_SEARCH_RADIUS_METRES);
+    // Search covers the Republic, not a circle around Dublin. The region code
+    // is the authoritative filter; the rectangle is the backstop.
+    expect(body.locationRestriction.circle).toBeUndefined();
+    expect(body.locationRestriction.rectangle.low.latitude).toBeLessThan(52);
+    expect(body.locationRestriction.rectangle.high.latitude).toBeGreaterThan(55);
     expect(options.headers['X-Goog-Api-Key']).toBe('server-key');
     expect(options.headers['X-Goog-FieldMask']).not.toContain('rating');
   });
@@ -108,10 +111,15 @@ describe('Google Places adapter', () => {
       websiteUrl: 'https://grano.ie',
       googleMapsUrl: 'https://maps.google.com/example',
       businessStatus: 'OPERATIONAL',
+      formattedAddress: null,
+      locality: null,
     });
     expect(fetchMock.mock.calls[0][0]).toContain('place%2Fwith%20spaces');
+    // The address fields are Essentials-SKU and websiteUri is already
+    // Enterprise, so asking for them costs nothing and is what lets a Cork
+    // restaurant be filed under Cork rather than assumed to be in Dublin.
     expect(fetchMock.mock.calls[0][1].headers['X-Goog-FieldMask'])
-      .toBe('websiteUri,googleMapsUri,businessStatus');
+      .toBe('websiteUri,googleMapsUri,businessStatus,formattedAddress,addressComponents');
   });
 
   it('keeps provider diagnostics separate from actionable user copy', async () => {
@@ -137,7 +145,7 @@ describe('Google Places adapter', () => {
 describe('restaurant search integration contracts', () => {
   it('keeps database lookup before the optional Google call and disables response caching', () => {
     const route = readFileSync('app/api/restaurant-search/route.ts', 'utf8');
-    expect(route.indexOf('searchDublinRestaurantsByName(query)'))
+    expect(route.indexOf('searchIrishRestaurantsByName(query)'))
       .toBeLessThan(route.indexOf('searchGoogleRestaurants(query'));
     expect(route).toContain("'Cache-Control': 'no-store, max-age=0'");
     expect(route).toContain('captureGooglePlacesFailure({');

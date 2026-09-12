@@ -4,19 +4,25 @@
  */
 
 export const HERO = {
+  // "Made in Dublin" is the brand story, not a city guide — it stays put even
+  // as guides open in other cities.
   badge: 'AI-assisted · Human-verified · Made in Dublin',
-  /** The headline is split so the middle part can be set in pink. */
+  /** The headline is split so the middle part can be set in pink.
+   *  Each part needs its own leading/trailing space or the three run together. */
   headline: {
     before: 'See all ',
     accent: 'veggie dishes',
-    after: " in Dublin's best restaurants, instantly.",
+    after: " in the best restaurants, instantly.",
   },
   sub: 'No more showing up in places that only offer mushroom risotto.',
   /**
    * Primary CTA. Worded differently from GUIDE.cta, which repeats lower down
    * the page — so the `placement` breakdown in PostHog means something.
+   *
+   * Takes the featured city's name because the homepage no longer hardcodes
+   * Dublin: it leads with whichever guide is the flagship.
    */
-  guideCta: 'Explore the Dublin guide →',
+  guideCta: (city: string) => `Explore the ${city} guide →`,
   /** Secondary CTA — reveals restaurant name/link search in place. */
   searchTrigger: 'Search a restaurant',
   /**
@@ -24,19 +30,32 @@ export const HERO = {
    * `subAccent`, but it sells the *secondary* action — as a full-width pink
    * line under a guide-led headline it contradicted the hierarchy.
    */
-  searchHint: "Type a Dublin restaurant name — or paste its website — and we'll find the menu.",
+  searchHint: "Type an Irish restaurant name — or paste its website — and we'll find the menu.",
   /** Collapses the panel again. Only offered while the search is idle. */
   searchCancel: 'Cancel',
   voteCta: 'Vote for our next city →',
-  voteHint: 'Not in Dublin? Put your city on the map.',
+  voteHint: "Don't see your city? Put it on the map.",
   support: "Designed for vegetarians and vegans, and their friends and family.",
 } as const;
 
+/**
+ * The featured-guide band. The homepage leads with one city's restaurants —
+ * that carousel is the proof the product works, and a first-time visitor should
+ * see a real menu with a real veggie count without clicking anything — but the
+ * city comes from the database now, so these are functions of its name.
+ */
 export const GUIDE = {
-  eyebrow: 'Dublin, already tofu-analysed for you',
-  headline: "Veggie dishes in Dublin's most popular restaurants",
-  lede: "Hundreds of Dublin restaurants are already analysed for you — so you can see every vegetarian and vegan option before you book.",
-  cta: 'View Dublin Guide →',
+  eyebrow: (city: string) => `${city}, already tofu-analysed for you`,
+  headline: (city: string) => `Veggie dishes in ${city}'s most popular restaurants`,
+  lede: (city: string) =>
+    `The most popular restaurants in ${city} are already analysed for you — so you can see every ` +
+    'vegetarian and vegan option before you book.',
+  cta: (city: string) => `View ${city} guide →`,
+  /** The row of other cities under the carousel. */
+  otherCities: 'More cities',
+  allGuides: 'All city guides →',
+  /** Used once there are more cities than the chip row shows. */
+  allGuidesCounted: (total: number) => `All ${total} city guides →`,
 } as const;
 
 export const STORY = {

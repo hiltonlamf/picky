@@ -26,6 +26,8 @@ import type {
 } from '@/types';
 import type { AIUsage } from './ai';
 import { computeReviewFlags, isPubliclyVisible, MIN_GUIDE_DISHES } from './review-flags';
+import { isReservedGuideSlug } from './city-guides';
+import type { QueueRow } from './guide-queue';
 import { guideInsights } from './menu-insights';
 import {
   verifyVegClassifications,
@@ -37,7 +39,7 @@ import {
 } from './ai';
 import { REPORT_COUNT_WARNING_THRESHOLD, FEEDBACK_RESOLUTION, type FeedbackResolveAction } from './dietary-config';
 import { scrapeRestaurant } from './scraper';
-import { areAddressesEquivalent, cleanPublishedAddress, pointInGeoJson, type LocationCandidate } from './location';
+import { areAddressesEquivalent, cleanPublishedAddress, looksLikeIrishAddress, pointInGeoJson, type LocationCandidate } from './location';
 import { dublinAreaForAddress } from './dublin-areas';
 import { extractMenuResumable, sumUsage, looksLikeHeaderItems, MIN_FOOD_ITEMS, type ExtractContext } from './menu-extract';
 import { rankPickyCandidates } from './restaurant-search-utils';
@@ -237,31 +239,112 @@ type RestaurantSearchRow = {
   }>;
 };
 
-/** Database-first restaurant-name lookup. Unassigned rows are eligible only
- * when first-party location data proves they are in Dublin. */
-export async function searchDublinRestaurantsByName(
+/** The country whose guides restaurant search covers. Search is Ireland-wide;
+ *  widening it further is a product decision, not a config tweak. */
+const SEARCHABLE_COUNTRY = 'Ireland';
+
+/** Guide slugs in SEARCHABLE_COUNTRY, cached briefly.
+ *
+ * Search runs on (debounced) keystrokes, so this must not add a query per
+ * request. The list changes only when a guide is created or renamed, so a short
+ * TTL is plenty — a new city becomes searchable within a minute of being added,
+ * with no deploy. */
+type SearchableCity = { slug: string; displayName: string };
+let irishCityCache: { cities: SearchableCity[]; at: number } | null = null;
+const IRISH_CITY_TTL_MS = 60_000;
+
+async function searchableCities(): Promise<SearchableCity[]> {
+  if (irishCityCache && Date.now() - irishCityCache.at < IRISH_CITY_TTL_MS) {
+    return irishCityCache.cities;
+  }
+  const { data } = await db()
+    .from('city_guides')
+    .select('slug, display_name, country')
+    .eq('country', SEARCHABLE_COUNTRY);
+  const cities = ((data ?? []) as DbRow[]).map((r) => ({
+    slug: r.slug as string,
+    displayName: r.display_name as string,
+  }));
+  irishCityCache = { cities, at: Date.now() };
+  return cities;
+}
+
+/**
+ * Which guide city a Google-sourced restaurant belongs to.
+ *
+ * Search used to be Dublin-only, so every Google pick was filed as 'dublin'.
+ * Now that it covers Ireland, that assumption would give a Cork restaurant a
+ * /restaurant/dublin/... URL and drop it into Dublin's own search results.
+ *
+ * Returns 'unassigned' rather than guessing when the address is not in a city
+ * we cover — an honest "we don't know" that the rest of the app already
+ * handles, and which the Irish-evidence check in search still accepts.
+ */
+export async function guideCityForPlace(place: {
+  locality: string | null;
+  formattedAddress: string | null;
+}): Promise<string> {
+  // Outside the Republic we file nothing: better unassigned than wrong.
+  if (!looksLikeIrishAddress(place.formattedAddress)) return 'unassigned';
+
+  const cities = await searchableCities().catch((): SearchableCity[] => []);
+  if (place.locality) {
+    const localitySlug = citySlug(place.locality);
+    const bySlug = cities.find((c) => c.slug === localitySlug);
+    if (bySlug) return bySlug.slug;
+  }
+  // Google's locality can be a suburb ("Ballsbridge") while the address still
+  // names the city, so fall back to matching the guide name in the address.
+  const address = place.formattedAddress ?? '';
+  const byName = cities.find((c) =>
+    new RegExp(`\\b${c.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(address)
+  );
+  return byName?.slug ?? 'unassigned';
+}
+
+/**
+ * Database-first restaurant-name lookup across every Irish guide city.
+ *
+ * Was Dublin-only. It is now driven by `city_guides`, so Cork and Limerick
+ * become searchable the moment their guide rows exist — there is no per-city
+ * code to add, which is the same property /guides has.
+ *
+ * A row with no assigned city is eligible only when its own first-party
+ * location data shows it is in Ireland. That check is evidence-based rather
+ * than optimistic on purpose: a missed match is a restaurant the visitor can
+ * still reach by pasting its link, while a false match puts a foreign
+ * restaurant in front of someone searching their own city.
+ */
+export async function searchIrishRestaurantsByName(
   rawQuery: string,
   limit = 6
 ): Promise<PickyRestaurantSearchCandidate[]> {
   const query = rawQuery.trim().replace(/[%_,]/g, ' ').replace(/\s+/g, ' ');
   if (query.length < 2) return [];
+  const citySlugs = (await searchableCities().catch((): SearchableCity[] => [])).map((c) => c.slug);
+  // 'unassigned' is where a restaurant found by search (rather than added to a
+  // guide) lands when we cannot place it in a city we cover.
+  const cityFilter = Array.from(new Set([...citySlugs, 'dublin', 'unassigned']));
   const { data, error } = await db()
     .from('restaurants')
     .select('id, name, status, city, address, area_label, restaurant_locations(address, label, area_label)')
-    .in('city', ['dublin', 'unassigned'])
+    .in('city', cityFilter)
     .in('status', ['done', 'no_menu', 'error'])
     .not('name', 'is', null)
     .ilike('name', `%${query}%`)
     .limit(Math.max(limit * 4, 20));
   if (error) throw new Error(`Failed to search restaurants: ${error.message}`);
 
+  const knownCities = new Set(cityFilter.filter((c) => c !== 'unassigned'));
   const candidates = ((data ?? []) as RestaurantSearchRow[])
     .filter((row) => {
-      if (row.city.toLowerCase() === 'dublin') return true;
+      // A restaurant already filed under a city we cover needs no further proof.
+      if (knownCities.has(row.city.toLowerCase())) return true;
+      // A Dublin Eircode area, assigned from a real address.
       if (row.area_label) return true;
-      if (/\bdublin\b/i.test(row.address ?? '')) return true;
+      if (looksLikeIrishAddress(row.address)) return true;
       return (row.restaurant_locations ?? []).some((location) =>
-        !!location.area_label || /\bdublin\b/i.test(location.address)
+        !!location.area_label || looksLikeIrishAddress(location.address)
       );
     })
     .map((row) => {
@@ -363,6 +446,26 @@ export async function getMenuCandidates(restaurantId: string): Promise<Discovery
   const payload = (data as { menu_candidates: unknown } | null)?.menu_candidates;
   if (!payload) return null;
   return payload as DiscoveryPayload;
+}
+
+/**
+ * Turns raw `menu_sections` + `dishes` rows into the section list every menu
+ * calculation reads.
+ */
+function assembleSections(rawSections: DbRow[], rawDishes: DbRow[]): MenuSection[] {
+  const sectionList: MenuSection[] = rawSections.map((s) => ({
+    id: s.id as string,
+    name: s.name as string,
+    displayOrder: s.display_order as number,
+    menuLabel: (s.menu_label as string | null) ?? null,
+    dishes: rawDishes.filter((d) => d.section_id === s.id).map(mapDish),
+  }));
+
+  const unsectionedDishes = rawDishes.filter((d) => !d.section_id).map(mapDish);
+  if (unsectionedDishes.length > 0) {
+    sectionList.push({ id: 'unsectioned', name: 'Menu', displayOrder: 999, dishes: unsectionedDishes });
+  }
+  return sectionList;
 }
 
 export async function fetchRestaurantWithDishes(
@@ -476,21 +579,7 @@ export async function fetchRestaurantWithDishes(
   if (!options?.includeDeleted) dishesQuery = dishesQuery.is('deleted_at', null);
   const { data: rawDishes } = await dishesQuery;
 
-  const sections = (rawSections ?? []) as DbRow[];
-  const dishes = (rawDishes ?? []) as DbRow[];
-
-  const sectionList: MenuSection[] = sections.map((s) => ({
-    id: s.id as string,
-    name: s.name as string,
-    displayOrder: s.display_order as number,
-    menuLabel: (s.menu_label as string | null) ?? null,
-    dishes: dishes.filter((d) => d.section_id === s.id).map(mapDish),
-  }));
-
-  const unsectionedDishes = dishes.filter((d) => !d.section_id).map(mapDish);
-  if (unsectionedDishes.length > 0) {
-    sectionList.push({ id: 'unsectioned', name: 'Menu', displayOrder: 999, dishes: unsectionedDishes });
-  }
+  const sectionList = assembleSections((rawSections ?? []) as DbRow[], (rawDishes ?? []) as DbRow[]);
 
   return {
     id: r.id,
@@ -1582,6 +1671,62 @@ export async function saveCityGuideVote(input: {
   return { duplicate: false };
 }
 
+/**
+ * The analysis queue for one city guide — a LIGHT read: id, name, url, status
+ * and the `updated_at` that tells a live run from an abandoned one.
+ *
+ * Deliberately not `getFeaturedRestaurants()`, which loads every section and
+ * dish of every restaurant to rank them for the public page. A worker deciding
+ * "what is left to analyse?" needs none of that, and a 40-restaurant guide
+ * would fetch several thousand rows to answer a question about forty.
+ *
+ * Membership comes from `featured_restaurants` (admin-curated), NOT
+ * `restaurants.city` — a restaurant found by search can sit in a city without
+ * anyone having put it in that city's guide.
+ *
+ * Two queries rather than one PostgREST embed. An embed would be tidier, but
+ * this repo's only proven embed goes parent-to-child; a child-to-parent join
+ * here could only be validated by running it against the live database, and
+ * the batch worker is not the place to discover a query syntax error. Two
+ * round trips is O(1) in the number of restaurants either way.
+ */
+export async function listGuideQueue(city: string): Promise<QueueRow[]> {
+  const { data: memberships, error: membershipError } = await db()
+    .from('featured_restaurants')
+    .select('restaurant_id, display_order')
+    .eq('city', city)
+    .order('display_order');
+
+  if (membershipError) {
+    throw new Error(`Failed to read the ${city} guide queue: ${membershipError.message}`);
+  }
+
+  const rows = (memberships ?? []) as Array<{ restaurant_id: string; display_order: number | null }>;
+  if (!rows.length) return [];
+
+  const orderById = new Map(rows.map((r) => [r.restaurant_id, r.display_order ?? 0]));
+
+  const { data: restaurants, error: restaurantError } = await db()
+    .from('restaurants')
+    .select('id, name, url, status, updated_at')
+    .in('id', Array.from(orderById.keys()));
+
+  if (restaurantError) {
+    throw new Error(`Failed to read the ${city} guide queue: ${restaurantError.message}`);
+  }
+
+  return ((restaurants ?? []) as DbRow[])
+    .map((r) => ({
+      id: r.id as string,
+      name: (r.name as string | null) ?? null,
+      url: r.url as string,
+      status: r.status as string,
+      updatedAt: (r.updated_at as string | null) ?? null,
+      displayOrder: orderById.get(r.id as string) ?? 0,
+    }))
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id));
+}
+
 export async function getFeaturedRestaurants(
   city: string,
   options?: { includeHidden?: boolean }
@@ -1647,7 +1792,7 @@ export function citySlug(name: string): string {
 /** All city guides, newest first, each with live restaurant counts (total /
  *  publicly-visible / needs-attention) for the admin list. */
 export async function getCityGuides(): Promise<
-  Array<CityGuide & { total: number; visible: number; needsAttention: number }>
+  Array<CityGuide & { total: number; visible: number; needsAttention: number; notAnalysed: number }>
 > {
   const { data } = await db().from('city_guides').select('*').order('created_at', { ascending: false });
   const guides = ((data ?? []) as DbRow[]).map(mapCityGuide);
@@ -1656,13 +1801,42 @@ export async function getCityGuides(): Promise<
     guides.map(async (g) => {
       // includeHidden so counts reflect the whole workspace, not just public rows.
       const restaurants = await getFeaturedRestaurants(g.slug, { includeHidden: true });
-      const visible = restaurants.filter((r) => !r.guideHidden && isPubliclyVisible(r)).length;
-      const needsAttention = restaurants.filter(
-        (r) => !r.guideHidden && !isPubliclyVisible(r) && (r.status === 'done' || r.status === 'error' || r.status === 'no_menu')
+      const active = restaurants.filter((r) => !r.guideHidden);
+      const visible = active.filter(isPubliclyVisible).length;
+      // Finished, but withheld — errored, no menu, thin, or review-flagged.
+      const needsAttention = active.filter(
+        (r) => !isPubliclyVisible(r) && (r.status === 'done' || r.status === 'error' || r.status === 'no_menu')
       ).length;
-      return { ...g, total: restaurants.length, visible, needsAttention };
+      // Never finished. Counting these as "needs attention" would blur two very
+      // different problems, but leaving them out of every count — which is what
+      // this did — is worse: a guide with 3 live and 37 never-analysed rendered
+      // as "3 live · 40 total" with nothing flagged at all, so 37 restaurants
+      // were invisible on the one screen meant to show the whole workspace.
+      const notAnalysed = active.filter(
+        (r) => r.status === 'pending' || r.status === 'processing'
+      ).length;
+      return { ...g, total: restaurants.length, visible, needsAttention, notAnalysed };
     })
   );
+}
+
+/**
+ * Every guide a visitor may navigate to, name and country only — ONE query.
+ *
+ * This is what the city switcher (on every guide page view) and the homepage
+ * chip row read. Neither needs restaurant counts, so neither should pay for
+ * them: this stays a single row fetch whether there are three guides or three
+ * hundred.
+ *
+ * `includeDrafts` is for a signed-in admin previewing unpublished guides. It
+ * must never be set from anything but a verified admin check — draft guides are
+ * deliberately invisible to the public.
+ */
+export async function listCityGuideLinks(options?: { includeDrafts?: boolean }): Promise<CityGuide[]> {
+  let query = db().from('city_guides').select('*').order('display_name');
+  if (!options?.includeDrafts) query = query.eq('status', 'published');
+  const { data } = await query;
+  return ((data ?? []) as DbRow[]).map(mapCityGuide);
 }
 
 /** Published guide slugs only — a light query for the sitemap, which does not
@@ -1691,6 +1865,12 @@ export async function createCityGuide(input: {
 }): Promise<CityGuide> {
   const slug = citySlug(input.displayName);
   if (!slug) throw new Error('City name must contain at least one letter or number');
+  // A static route of the same name always wins over app/[city], so a guide on
+  // one of these slugs would be created successfully and then be permanently
+  // unreachable — publishing it would just show /guides, /vote or /admin.
+  if (isReservedGuideSlug(slug)) {
+    throw new Error(`"${slug}" is reserved by another page — please use a different city name`);
+  }
 
   const existing = await getCityGuideBySlug(slug);
   if (existing) throw new Error(`A guide for "${input.displayName}" (${slug}) already exists`);

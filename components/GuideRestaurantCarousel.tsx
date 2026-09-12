@@ -5,7 +5,17 @@ import RestaurantCard from './RestaurantCard';
 import { ChevronIcon } from './icons';
 import type { Restaurant } from '@/types';
 
-export default function GuideRestaurantCarousel({ restaurants }: { restaurants: Restaurant[] }) {
+export default function GuideRestaurantCarousel({
+  restaurants,
+  city,
+  cityName,
+}: {
+  restaurants: Restaurant[];
+  /** Guide slug the cards link into — the homepage features whichever guide is
+   *  the flagship, so this is no longer always Dublin. */
+  city: string;
+  cityName: string;
+}) {
   const railRef = useRef<HTMLUListElement>(null);
   const [atStart, setAtStart] = useState(true);
   const [atEnd, setAtEnd] = useState(restaurants.length <= 1);
@@ -40,7 +50,7 @@ export default function GuideRestaurantCarousel({ restaurants }: { restaurants: 
     <div
       className="mt-8"
       role="region"
-      aria-label="Popular Dublin restaurants"
+      aria-label={`Popular ${cityName} restaurants`}
       aria-roledescription="carousel"
     >
       <div className="mb-3 flex items-center justify-between gap-4">
@@ -80,7 +90,7 @@ export default function GuideRestaurantCarousel({ restaurants }: { restaurants: 
               key={restaurant.id}
               className="flex h-auto shrink-0 basis-[86%] snap-start sm:basis-[56%] lg:basis-[42%] [&>*]:w-full"
             >
-              <RestaurantCard restaurant={restaurant} city="dublin" />
+              <RestaurantCard restaurant={restaurant} city={city} />
             </li>
           ))}
         </ul>

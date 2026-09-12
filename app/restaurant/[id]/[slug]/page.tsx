@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import RestaurantPage from '@/components/RestaurantPage';
-import { getRestaurantByPublicPath } from '@/lib/db';
+import { getCityGuideBySlug, getRestaurantByPublicPath } from '@/lib/db';
 import { withShareAttribution } from '@/lib/restaurant-url';
 
 export const dynamic = 'force-dynamic';
@@ -24,5 +24,11 @@ export default async function ReadableRestaurantPage({
     redirect(withShareAttribution(restaurant.path, searchParams));
   }
 
-  return <RestaurantPage restaurantId={restaurant.id} />;
+  // Only a PUBLISHED guide earns a "back to" link — pointing at a draft would
+  // 404 for everyone but an admin.
+  const guide = await getCityGuideBySlug(city).catch(() => null);
+  const backGuide =
+    guide?.status === 'published' ? { slug: guide.slug, displayName: guide.displayName } : null;
+
+  return <RestaurantPage restaurantId={restaurant.id} backGuide={backGuide} />;
 }

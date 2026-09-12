@@ -2,8 +2,23 @@ import type { GoogleRestaurantSearchCandidate } from '@/types';
 
 const AUTOCOMPLETE_URL = 'https://places.googleapis.com/v1/places:autocomplete';
 const DETAILS_URL = 'https://places.googleapis.com/v1/places';
-const DUBLIN_CENTRE = { latitude: 53.3498, longitude: -6.2603 };
-export const DUBLIN_SEARCH_RADIUS_METRES = 30_000;
+/**
+ * A box around the Republic of Ireland, used to bound autocomplete.
+ *
+ * `includedRegionCodes: ['ie']` below is the authoritative filter; this
+ * rectangle is belt and braces, so that if the region code is ever changed or
+ * dropped the search still cannot silently go global. It clips a little of Great
+ * Britain, which the region code then excludes.
+ *
+ * Northern Ireland is deliberately out of scope: Google files it under region
+ * `gb`, so covering Belfast would mean allowing UK-wide results and filtering
+ * back down — a filter that puts a Manchester restaurant in front of a Dublin
+ * diner the moment it is slightly wrong.
+ */
+const IRELAND_BOUNDS = {
+  low: { latitude: 51.35, longitude: -10.65 },
+  high: { latitude: 55.45, longitude: -5.9 },
+};
 
 export type GooglePlacesOperation = 'autocomplete' | 'details';
 
@@ -85,9 +100,7 @@ export async function searchGoogleRestaurants(
       languageCode: 'en',
       regionCode: 'ie',
       sessionToken,
-      locationRestriction: {
-        circle: { center: DUBLIN_CENTRE, radius: DUBLIN_SEARCH_RADIUS_METRES },
-      },
+      locationRestriction: { rectangle: IRELAND_BOUNDS },
     }),
     signal,
   });
@@ -118,6 +131,28 @@ export interface ResolvedGooglePlace {
   websiteUrl: string | null;
   googleMapsUrl: string | null;
   businessStatus: string | null;
+  /** Full postal address, e.g. "5 Oliver Plunkett St, Centre, Cork, T12 X2RH".
+   *  Used to file the restaurant under the right city instead of assuming
+   *  Dublin. Null when Google has no address for the place. */
+  formattedAddress: string | null;
+  /** The town or city Google puts the place in ("Cork"), from the address
+   *  components. Null when none is present. */
+  locality: string | null;
+}
+
+type GoogleAddressComponent = {
+  longText?: string;
+  shortText?: string;
+  types?: string[];
+};
+
+/** The town/city from Google's structured address, preferring `locality` and
+ *  falling back to the postal town, which is what rural addresses carry. */
+function localityFrom(components: GoogleAddressComponent[] | undefined): string | null {
+  if (!components?.length) return null;
+  const byType = (type: string) =>
+    components.find((c) => c.types?.includes(type))?.longText?.trim() || null;
+  return byType('locality') ?? byType('postal_town') ?? byType('administrative_area_level_2');
 }
 
 export async function resolveGoogleRestaurant(
@@ -129,7 +164,11 @@ export async function resolveGoogleRestaurant(
   const response = await fetch(`${DETAILS_URL}/${encodeURIComponent(placeId)}?${params}`, {
     headers: {
       'X-Goog-Api-Key': apiKey('details'),
-      'X-Goog-FieldMask': 'websiteUri,googleMapsUri,businessStatus',
+      // addressComponents and formattedAddress are Essentials-SKU fields and
+      // websiteUri is already Enterprise; Google bills a Place Details request
+      // at the HIGHEST tier in its field mask, so adding them costs nothing.
+      // Without them every Google-sourced restaurant had to be assumed Dublin.
+      'X-Goog-FieldMask': 'websiteUri,googleMapsUri,businessStatus,formattedAddress,addressComponents',
     },
     signal,
   });
@@ -151,10 +190,14 @@ export async function resolveGoogleRestaurant(
     websiteUri?: string;
     googleMapsUri?: string;
     businessStatus?: string;
+    formattedAddress?: string;
+    addressComponents?: GoogleAddressComponent[];
   };
   return {
     websiteUrl: payload.websiteUri ?? null,
     googleMapsUrl: payload.googleMapsUri ?? null,
     businessStatus: payload.businessStatus ?? null,
+    formattedAddress: payload.formattedAddress ?? null,
+    locality: localityFrom(payload.addressComponents),
   };
 }

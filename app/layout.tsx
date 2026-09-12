@@ -59,8 +59,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <p className="text-sm">{SITE_TAGLINE}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-                  <Link href="/dublin" className="hover:text-paper transition-colors">
-                    Dublin Guide
+                  <Link href="/guides" className="hover:text-paper transition-colors">
+                    City guides
                   </Link>
                   <Link href="/privacy" className="hover:text-paper transition-colors">
                     Privacy

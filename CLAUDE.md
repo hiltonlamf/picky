@@ -85,12 +85,24 @@ his **experienced technical co-founder**. That means:
      come from merges, and merges run the 7-case smoke set. Run the full 20 on
      demand (`workflow_dispatch`, blank filter) when a sweep is actually
      wanted. Do not re-add a schedule without asking.
-   - **`ai_usage_log` queries are capped at 1000 rows.** PostgREST silently
-     truncates and a large `limit=` does not override it, so a naive
-     aggregate under-reports with no error. Ask for the exact count first
-     (`Prefer: count=exact` + `Range: 0-0`, read `content-range`), then
-     paginate with `offset`. Caught 2026-08-08 when a fortnight aggregate
-     returned 1000 of 1407 rows and understated total spend.
+   - **EVERY Supabase query is capped at 1000 rows, not just spend ones.**
+     PostgREST silently truncates and a large `limit=` does not override it,
+     so a naive aggregate under-reports with no error at all. Ask for the
+     exact count first (`Prefer: count=exact` + `Range: 0-0`, read
+     `content-range`), then paginate with `offset` — or use `.range()` in a
+     loop, as `aiSpendSince` does. Caught twice now:
+     - 2026-08-08, `ai_usage_log`: a fortnight aggregate returned 1000 of
+       1407 rows and understated total spend.
+     - 2026-09-12, `dishes`: `/guides` counted live restaurants from one
+       unbounded `select('*')` over every guide's dishes. Past ~1000 dishes
+       the rest vanished, so restaurants looked like they had zero dishes,
+       failed the ≥7-dish visibility test, and were counted as not live —
+       Cork read "1 restaurant" and Limerick "Nothing live yet" while both
+       had plenty. The fix was to delete the count, not paginate it.
+     **The tell is an aggregate over a child table** (dishes, sections, usage
+     rows) for MANY parents at once. A per-parent query is safe; one query
+     spanning every parent is the one that silently truncates. If you cannot
+     bound the row count by construction, don't write the query.
    - **Cost analysis must be END-TO-END: failures and retries included.**
      Learned the hard way (2026-07-03): a run "reported $1.27" while the
      Console balance dropped $3.51 — the difference was failed retry
@@ -341,6 +353,105 @@ redefines itself is worse than a wrong one.
   (read-only, $0) and read the excluded list. Every rule bug so far was found
   by reading real menus, none by a unit test.
 - **Added a surface that shows a number?** It needs the methodology note too.
+
+## The guide batch runs on a server, not in a browser tab (PR #48, 2026-09-10)
+
+**Analysing a city guide is a ~30-minute job, and it must never again depend on
+a browser tab staying open.** It used to: `app/admin/guides/batchAnalyze.ts`
+looped in the admin's browser, POSTing one restaurant at a time. The founder
+added 40 Cork and 40 Limerick restaurants, closed the tab, and hours later most
+were still badged "queued" — `pending` forever, with nothing anywhere that would
+ever pick them up, plus whichever one was mid-flight stuck on `processing`.
+
+### Where it runs, and why it can't be Vercel
+
+Vercel's **Hobby plan kills any function at 60 seconds** and a single restaurant
+takes 30-60s, so a batch can never live in an API route. It runs on a GitHub
+Actions runner — `.github/workflows/analyze-queue.yml` →
+`scripts/analyze-guide-queue.ts` — the same pattern `pipeline.yml` established
+for long, paid, on-demand work. The repo is **public**, so runner minutes are
+free; the only cost is the AI the restaurants needed anyway (~$0.05 each,
+**more per failure**). **No `schedule`, ever** — same rule as the live QA suite.
+
+`/api/admin/guides/[slug]/analyze` starts a run from the admin UI via GitHub's
+workflow-dispatch API, using a **server-only** `GITHUB_WORKFLOW_TOKEN` (never
+`NEXT_PUBLIC_*`). It fails closed with a link to the Actions tab when that is
+not configured. Note GitHub deliberately ignores a `workflow_dispatch` made
+with the built-in `GITHUB_TOKEN`, so a workflow **cannot** re-dispatch itself to
+continue — that is why one pass is sized to drain a whole city rather than
+chaining runs.
+
+### The queue is `restaurants.status` — do not add a jobs table
+
+There is no job record, on purpose: a second place recording "is this being
+worked on" is another pair of numbers to disagree with each other. `pending` is
+waiting; `done`/`no_menu`/`error` are finished. The one thing status cannot say
+is whether a `processing` row is **alive**, and that matters enormously — it is
+the difference between "wait" and "run it again". `restaurants.updated_at` (it
+has a trigger) settles it, and `lib/guide-queue.ts` owns the rule:
+
+- `processing`, updated within `STALE_PROCESSING_MS` (15 min) → a run has it.
+  **Never re-run one of these** — that is the only way to bill one restaurant
+  twice.
+- `processing`, older → abandoned. Reclaimed automatically by the next pass.
+
+`guide-queue.ts` is **pure and client-safe**, so the worker, the admin badges
+(`statusBadge`) and `heldBackReason` all read freshness through the same rule.
+If you find yourself writing a second staleness threshold, you are recreating
+the two-sources-of-truth bug this codebase keeps paying for.
+
+Because the queue is derived entirely from current status, **a run is resumable
+by definition** — there is no cursor to lose. Re-dispatching after an
+interrupted pass picks up exactly what is left.
+
+### `lib/reanalyse.ts` is the single analysis path
+
+`reanalyseRestaurant(id)` backs both the one-restaurant reparse button and the
+whole-city batch. Do **not** drive a batch off `parseAndSave()` in
+`lib/init-dublin.ts`: it records every failure as `error`, discarding the
+distinction between `unavailable` (menu found but unread — transient, retryable)
+and `not_listed` (genuinely no menu — sticky, and published to diners). At batch
+scale that misreports real restaurants. Spend still flows through
+`extractAndMerge` → `callClaude()`, so `ai_usage_log` is unaffected.
+
+### The loop is testable without spending
+
+`lib/guide-batch.ts` holds the pass — the loop, the spend check, the delay, the
+abort — with `analyse`, `checkSpend`, `sleep` and `now` **injected**. It is the
+only genuinely new logic here (the analysis itself is a straight move), and it
+is where the expensive mistakes are, so it is unit-tested with the analysis
+mocked (`tests/guide-batch.test.ts`, free). `scripts/analyze-guide-queue.ts` is
+a thin CLI over it. **Don't put batch logic back in the script** — a driver that
+can only be checked by spending money is one that doesn't get checked.
+
+`report.broken` is what decides the exit code (and so whether the workflow files
+an issue): running out of the time budget is an ordinary boundary, every
+restaurant failing is not. Never infer that by matching the stop-reason string.
+
+### Cost guards the worker adds
+
+- **`--yes`-gated.** A dry run prints the plan and costs nothing.
+- **`checkDailySpend()` before each restaurant.** No script checked this before,
+  so a script-driven batch bypassed the $/day backstop entirely.
+- **Aborts after 5 consecutive failures**, exiting non-zero so the workflow
+  files an issue. A dead reader or an expired key fails all 40 at full price and
+  cannot succeed; grinding on is how a surprise bill happens.
+- **Keeps the 1.5s inter-restaurant gap** — it exists to stop a run of fast
+  failures tripping the page reader's rate limit, which once returned empty
+  menus for a whole Amsterdam batch.
+- Reports **attributed cost and the `ai_usage_log` figure side by side**; a gap
+  between them means an uncounted call path, so don't hide it behind one number.
+
+### The PR checklist
+
+- **Touched the batch, the queue or the worker?** A cluster of failures is a
+  pipeline bug until proven otherwise. The worker says so in its own summary —
+  don't report a half-failed run as "analysed".
+- **Added a surface that shows analysis progress?** It reads `updated_at`
+  through `guide-queue.ts`. `processing` on its own means nothing.
+- **Kept the in-tab fallback working?** It survives for deployments without the
+  token, and it is hidden whenever a server run is live — two batches over one
+  guide pay twice for the same restaurants.
 
 ## Instrumentation & error tracking (PR #21, 2026-07-25)
 

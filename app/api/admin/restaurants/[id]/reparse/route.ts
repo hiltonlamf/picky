@@ -1,16 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import * as Sentry from '@sentry/nextjs';
-import { scrapeRestaurant } from '@/lib/scraper';
-import { discoverMenus } from '@/lib/menu-discovery';
-import { extractAndMerge, ExtractionError, ExtractContext, sumUsage } from '@/lib/menu-extract';
-import {
-  getRestaurantMeta,
-  resetRestaurantForReparse,
-  saveClassifiedMenu,
-  markRestaurantError,
-  markRestaurantNoMenu,
-  saveRestaurantLocations,
-} from '@/lib/db';
+import { reanalyseRestaurant } from '@/lib/reanalyse';
 
 // Admin-triggered re-run of the full pipeline for one restaurant already in
 // the database (e.g. after a prompt/extraction fix, to pick up the new
@@ -21,104 +10,24 @@ import {
 // public flow's serverless time cap on heavy sites. Same 60s Vercel Hobby cap
 // still applies; this accepts the same overrun risk the public discover
 // route's degraded inline-analysis fallback already accepts.
+//
+// The work itself lives in lib/reanalyse.ts so that a WHOLE-GUIDE batch (which
+// needs ~30 minutes and therefore cannot run in a Vercel function at all — see
+// scripts/analyze-guide-queue.ts) analyses restaurants through exactly the same
+// code path as this button. Two copies would drift, and the thing they would
+// drift on is the no_menu verdict we publish about a real restaurant.
 export const maxDuration = 60;
 
 export async function POST(_request: NextRequest, { params }: { params: { id: string } }) {
-  const restaurant = await getRestaurantMeta(params.id);
-  if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
+  const result = await reanalyseRestaurant(params.id);
 
-  const url = restaurant.canonicalUrl ?? restaurant.url;
-  await resetRestaurantForReparse(restaurant.id);
+  if (result.notFound) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
+  if (result.outcome === 'error') return NextResponse.json({ error: result.message }, { status: 500 });
 
-  let scrapeResult;
-  try {
-    scrapeResult = await scrapeRestaurant(url);
-    const locations = scrapeResult.locations ?? (scrapeResult.location ? [scrapeResult.location] : []);
-    if (locations.length) await saveRestaurantLocations(restaurant.id, locations).catch(() => undefined);
-  } catch (err) {
-    const rawMsg = err instanceof Error ? err.message : 'Could not fetch this page';
-    await markRestaurantNoMenu(restaurant.id, 'unavailable', rawMsg);
-    return NextResponse.json({ outcome: 'no_menu', message: rawMsg });
-  }
-
-  const hasAnyContent =
-    (scrapeResult.menuText && scrapeResult.menuText.length >= 100) ||
-    (scrapeResult.menuPdfUrls && scrapeResult.menuPdfUrls.length > 0) ||
-    (scrapeResult.menuImages && scrapeResult.menuImages.length > 0) ||
-    !!scrapeResult.screenshotUrl;
-
-  if (!hasAnyContent) {
-    const msg = scrapeResult.warning ?? "We opened the website but couldn't find a menu on it.";
-    await markRestaurantNoMenu(restaurant.id, 'not_listed', msg);
-    return NextResponse.json({ outcome: 'no_menu', message: msg });
-  }
-
-  const discovery = await discoverMenus(scrapeResult);
-  if (discovery.candidates.length === 0) {
-    const msg = "We couldn't find a food menu on this website.";
-    await markRestaurantNoMenu(restaurant.id, 'not_listed', msg);
-    return NextResponse.json({ outcome: 'no_menu', message: msg });
-  }
-
-  const ctx: ExtractContext = {
-    title: discovery.restaurantTitle || scrapeResult.title,
-    inlineText: discovery.inlineText,
-    screenshotUrl: discovery.screenshotUrl,
-    pdfUrls: scrapeResult.menuPdfUrls,
-    imageUrls: scrapeResult.menuImages,
-    pageUrl: discovery.finalUrl,
-  };
-
-  let menu;
-  let usage;
-  try {
-    // extractAndMerge already runs the strong-model veg/vegan audit
-    // (verifyVegClassifications) internally before it returns — the same
-    // guardrail the public flow applies. Do NOT re-audit the result below, or
-    // every reparse pays for that expensive strong-model pass twice.
-    const result = await extractAndMerge(discovery.candidates, ctx);
-    menu = result.menu;
-    usage = result.usage;
-  } catch (err) {
-    Sentry.captureException(err);
-    const msg = err instanceof Error ? err.message : 'AI classification failed';
-    if (err instanceof ExtractionError && err.usage) {
-      // (spend already recorded by callClaude when the API call returned)
-    }
-    if (err instanceof ExtractionError) {
-      // Distinguish "we read the site and it genuinely has no menu" from "we
-      // FOUND a menu (links/PDFs) but couldn't READ it this time". The latter is
-      // almost always a transient read failure — most often the JS-rendering
-      // reader being rate-limited on a batch — not a menuless restaurant. Recording
-      // it as 'not_listed' (sticky "doesn't publish a menu") is a trust-breaking
-      // wrong verdict AND blocks a retry; 'unavailable' stays retryable, so a
-      // re-run (e.g. after a reader key is added) can succeed. If discovery found
-      // no candidate at all, it really is "no menu here" → 'not_listed'.
-      const foundMenuButUnread = discovery.candidates.length > 0;
-      const reason = foundMenuButUnread ? 'unavailable' : 'not_listed';
-      const userMsg = foundMenuButUnread
-        ? "We found this restaurant's menu but couldn't read all of it this time — the site may have been slow to load. Try again."
-        : msg;
-      await markRestaurantNoMenu(restaurant.id, reason, userMsg);
-      // Report the failed ladder's spend too — failures are the expensive path,
-      // so the batch analyzer's running cost must count them, not just successes.
-      return NextResponse.json({
-        outcome: 'no_menu',
-        message: userMsg,
-        costUsd: sumUsage(err.usage, discovery.usage).costUsd,
-      });
-    }
-    await markRestaurantError(restaurant.id, msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
-
-  if (!menu.restaurantName && ctx.title) menu.restaurantName = ctx.title;
-
-  // Discovery's labelling call is billed too — fold it in so the row we save
-  // and the cost the batch analyzer sums both match ai_usage_log.
-  const total = sumUsage(usage, discovery.usage);
-  await saveClassifiedMenu(restaurant.id, discovery.finalUrl, scrapeResult.menuUrl, menu, total);
-
-  const dishCount = menu.sections.reduce((n, s) => n + s.dishes.length, 0);
-  return NextResponse.json({ outcome: 'done', dishCount, costUsd: total.costUsd });
+  return NextResponse.json({
+    outcome: result.outcome,
+    ...(result.dishCount !== undefined ? { dishCount: result.dishCount } : {}),
+    ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+    ...(result.message !== undefined ? { message: result.message } : {}),
+  });
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { z } from 'zod';
-import { searchDublinRestaurantsByName } from '@/lib/db';
+import { searchIrishRestaurantsByName } from '@/lib/db';
 import { searchGoogleRestaurants } from '@/lib/google-places';
 import { captureGooglePlacesFailure, trackGooglePlacesIssue } from '@/lib/google-places-observability';
 import { captureServerException } from '@/lib/posthog-server';
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
 
   const { query, external, sessionToken } = parsed.data;
   try {
-    const picky = await searchDublinRestaurantsByName(query);
+    const picky = await searchIrishRestaurantsByName(query);
     if (external !== '1' || query.length < 3) {
       return response({ candidates: picky, googleQueried: false, attributionRequired: false, providerError: null });
     }

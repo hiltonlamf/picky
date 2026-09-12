@@ -1,11 +1,21 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { analyzeSequentially, type AnalyzeProgress } from '../batchAnalyze';
 
 const COUNTRIES = ['Netherlands', 'United Kingdom', 'Ireland'];
 
+/**
+ * Create a city guide and start analysing it.
+ *
+ * The analysis used to run in THIS component, restaurant by restaurant, which
+ * meant seeding a 40-restaurant city held the admin on this page for half an
+ * hour — and closing the tab stranded every restaurant it hadn't reached yet.
+ * Now the guide is created, a server run is started, and we go straight to the
+ * workspace, which reports progress read from the database. Same one click, no
+ * vigil.
+ */
 export default function NewGuideForm() {
   const router = useRouter();
   const [displayName, setDisplayName] = useState('');
@@ -13,15 +23,16 @@ export default function NewGuideForm() {
   const [urlsText, setUrlsText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
-  const [runningCost, setRunningCost] = useState(0);
-  const stopRef = useRef(false);
+  // Set when the guide was created but the run could not be started — the guide
+  // is real and must not be left looking like a failure.
+  const [createdSlug, setCreatedSlug] = useState<string | null>(null);
 
   const parseUrls = (text: string): string[] =>
     text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
 
   async function handleCreate() {
     setError(null);
+    setCreatedSlug(null);
     const name = displayName.trim();
     if (!name) {
       setError('Give the guide a city name.');
@@ -29,8 +40,6 @@ export default function NewGuideForm() {
     }
     const urls = parseUrls(urlsText);
     setBusy(true);
-    stopRef.current = false;
-    setRunningCost(0);
 
     try {
       // 1. Create the draft guide + rows (no AI yet).
@@ -47,25 +56,31 @@ export default function NewGuideForm() {
       }
 
       const slug: string = data.guide.slug;
-      // 2. Analyze the fresh rows one at a time, showing progress.
-      const toAnalyze: string[] = (data.added ?? [])
-        .filter((a: { needsAnalysis?: boolean; restaurantId?: string }) => a.needsAnalysis && a.restaurantId)
-        .map((a: { restaurantId: string }) => a.restaurantId);
+      const needsAnalysis: number = (data.added ?? []).filter(
+        (a: { needsAnalysis?: boolean; restaurantId?: string }) => a.needsAnalysis && a.restaurantId
+      ).length;
 
-      if (toAnalyze.length > 0) {
-        await analyzeSequentially(
-          toAnalyze,
-          (p) => {
-            setProgress(p);
-            if (p.phase === 'result' && typeof p.costUsd === 'number') {
-              setRunningCost((c) => c + (p.costUsd ?? 0));
-            }
-          },
-          () => stopRef.current
-        );
+      // 2. Hand the batch to a server, which will keep going without this tab.
+      if (needsAnalysis > 0) {
+        const started = await fetch(`/api/admin/guides/${slug}/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'queued' }),
+        });
+        if (!started.ok) {
+          const detail = await started.json().catch(() => ({}));
+          setCreatedSlug(slug);
+          setError(
+            `The ${name} guide was created, but the analysis run could not be started: ${
+              detail.error ?? `error ${started.status}`
+            }`
+          );
+          setBusy(false);
+          return;
+        }
       }
 
-      // 3. Go to the workspace to review.
+      // 3. Go to the workspace, which shows the run's progress live.
       router.push(`/admin/guides/${slug}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -116,40 +131,31 @@ export default function NewGuideForm() {
           className="w-full rounded-xl border border-mint-200 px-4 py-3 text-sm font-mono"
         />
         <p className="text-xs text-evergreen/60 mt-1">
-          Our AI reads each site one at a time — this can take a minute or two per restaurant and
-          costs a small amount in AI usage. You can review, edit and add more later.
+          Our AI reads each site one at a time, on a server — a minute or two per restaurant, and a
+          small amount in AI usage. You&rsquo;ll land on the guide workspace and can watch it happen,
+          close the tab, or come back later. You can review, edit and add more at any point.
         </p>
       </div>
 
       {error && (
-        <div className="card p-3 border border-sun-300 bg-sun-50 text-sm text-sun-800">{error}</div>
-      )}
-
-      {busy && progress && (
-        <div className="card p-4 bg-mint-50" role="status" aria-live="polite">
-          <p className="text-sm font-medium text-evergreen">
-            Analyzing restaurant {progress.index} of {progress.total}&hellip;
-          </p>
-          <p className="text-xs text-evergreen/70 mt-1">
-            {progress.total - progress.index} still queued · running AI cost so far: ${runningCost.toFixed(3)}
-          </p>
+        <div className="card p-3 border border-sun-300 bg-sun-50 text-sm text-sun-800">
+          {error}
+          {createdSlug && (
+            <>
+              {' '}
+              <Link href={`/admin/guides/${createdSlug}`} className="underline font-medium">
+                Open the guide and start it there
+              </Link>
+              .
+            </>
+          )}
         </div>
       )}
 
       <div className="flex items-center gap-3">
         <button onClick={handleCreate} disabled={busy} className="btn-primary text-sm disabled:opacity-50">
-          {busy ? 'Working…' : 'Create guide & analyze'}
+          {busy ? 'Creating & starting…' : 'Create guide & analyze'}
         </button>
-        {busy && (
-          <button
-            onClick={() => {
-              stopRef.current = true;
-            }}
-            className="btn-ghost text-sm"
-          >
-            Stop
-          </button>
-        )}
       </div>
     </div>
   );

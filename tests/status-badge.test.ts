@@ -49,6 +49,30 @@ describe('guide workspace status badge', () => {
       expect(badge.title).toContain('never finished');
     });
 
+    it('calls a freshly-updated "processing" row "Analyzing" — a server run has it', () => {
+      // Since the batch moved to a server, `processing` genuinely can mean
+      // "working on it right now". Calling that "Interrupted" would send the
+      // admin to re-run a restaurant that is being paid for as they look at it.
+      const badge = statusBadge('processing', undefined, new Date(Date.now() - 60_000).toISOString());
+      expect(badge.label).toBe('Analyzing');
+      expect(badge.active).toBe(true);
+      expect(badge.title).toContain('close this tab');
+    });
+
+    it('still calls a long-stale "processing" row "Interrupted"', () => {
+      const badge = statusBadge('processing', undefined, new Date(Date.now() - 6 * 3600_000).toISOString());
+      expect(badge.label).toBe('Interrupted');
+      expect(badge.active).toBeFalsy();
+    });
+
+    it('treats a processing row with no timestamp as interrupted, not as live', () => {
+      // The safe direction: it sends someone to re-run the row rather than
+      // telling them to keep waiting on nothing. Passing no timestamp at all is
+      // the same case — a caller that has not got one must not imply progress.
+      expect(statusBadge('processing', undefined, null).label).toBe('Interrupted');
+      expect(statusBadge('processing').label).toBe('Interrupted');
+    });
+
     it('uses plain-English labels for stored outcomes', () => {
       expect(statusBadge('done').label).toBe('Analyzed');
       expect(statusBadge('no_menu').label).toBe('No menu');
